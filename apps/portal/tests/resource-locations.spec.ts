@@ -525,6 +525,8 @@ test("Cancel discards the whole location edit and preserves the saved resource",
   await editor.getByRole("button", { name: "Change location", exact: true }).click();
   await expect(editor.getByLabel("Location URL", { exact: true })).toHaveValue("");
   await editor.getByLabel("Location URL", { exact: true }).fill(pageUrl.replace("12345", "67890"));
+  await expect(editor.getByLabel("Location coverage", { exact: true })).toHaveValue("subtree");
+  await editor.getByLabel("Location coverage", { exact: true }).selectOption("exact");
   await editor.getByLabel(/^Display name/).fill("Unsaved name");
   await expect(editor.getByRole("button", { name: "Keep saved location", exact: true })).toHaveCount(0);
   await editor.getByRole("button", { name: "Cancel", exact: true }).click();
@@ -532,14 +534,21 @@ test("Cancel discards the whole location edit and preserves the saved resource",
   expect(model.requests).toEqual([]);
   expect(model.mutations).toEqual([]);
   expect(model.api.resources).toEqual([existing()]);
-  editor = await editExisting(page);
+  const details = page.getByRole("complementary", { name: "Resource Existing", exact: true });
+  await expect(details).toBeVisible();
+  await details.getByRole("button", { name: "Edit", exact: true }).click();
+  editor = page.getByRole("complementary", { name: "Edit resource Existing", exact: true });
   await expect(editor).toContainText("Page 12345");
   await expect(editor.getByLabel(/^Display name/)).toHaveValue("Existing");
+  await expect(editor.getByLabel("Location coverage", { exact: true })).toHaveValue("exact");
   await editor.getByRole("button", { name: "Change location", exact: true }).click();
-  await prepare(editor, "https://example.atlassian.net/wiki/spaces/other/folder/88");
+  const replacementUrl = pageUrl.replace("12345", "67890");
+  await editor.getByLabel("Location URL", { exact: true }).fill(replacementUrl);
+  await expect(editor.getByLabel("Location coverage", { exact: true })).toHaveValue("subtree");
   await save(editor);
   await expect.poll(() => model.mutations.length).toBe(1);
-  expect(model.mutations[0]).toMatchObject({ expectedVersion: 7, selector: { kind: "subtree", value: "https://example.atlassian.net/wiki/content/folder/88" } });
+  expect(model.requests).toEqual([{ service: "confluence", url: replacementUrl, coverage: "subtree", csrf: "fixture" }]);
+  expect(model.mutations[0]).toMatchObject({ expectedVersion: 7, selector: { kind: "subtree", value: pageIdentity.replace("12345", "67890") } });
 });
 
 test("a catalog refetch does not advance an open draft's optimistic version", async ({ page }) => {

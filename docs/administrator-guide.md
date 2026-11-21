@@ -480,8 +480,10 @@ execution contexts, and an identifiable label. Flat resource groups may include
 and exclude entries; inspect their current members before reuse.
 
 For Confluence content, paste a page, blog or folder browser URL; service and
-kind are inferred. Choose page-only or page-and-descendants when entering a page,
-then Save normalizes and saves the entry. Whole spaces retain separate By space
+kind are inferred. New page location entries default to page-and-descendants;
+select page-only if descendants should not be included. **Change location** starts
+a new entry with the same default. Save normalizes and saves the entry, while
+Cancel discards the whole edit. Whole spaces retain separate By space
 key, From space URL and All spaces modes. A space URL shows the key to be saved;
 use By space key if its browser segment is an alias. Normalization is offline and
 reports `verification: "not_checked"`, without an administrator connection.
