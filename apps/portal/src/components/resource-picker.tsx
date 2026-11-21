@@ -182,7 +182,7 @@ export function GrantResourcePicker({
     const browserUrl = contentBrowserUrl(resource);
     const unavailable = !exclusion && executionContexts.length > 0 && !executionContexts.some((context) => resource.allowedExecutionContexts.includes(context));
     const parts = [
-      identity ? contentKind(identity.kind) : resourceTypeLabel(types, resource.resourceType),
+      identity ? `${contentKind(identity.kind)}${browserUrl ? "" : ` ${identity.id}`}` : resourceTypeLabel(types, resource.resourceType),
       identity ? resource.selector.kind === "subtree" ? "Includes nested content" : identity.kind === "blog" ? "This blog post only" : "This page only" : null,
       identity && !browserUrl ? identity.siteOrigin.slice("https://".length) : null,
       exclusion ? "Exclusion applies regardless of enabled state or execution context" : resource.allowedExecutionContexts.join(", "),
