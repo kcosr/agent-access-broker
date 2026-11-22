@@ -14,7 +14,9 @@
 //! (one per subprocess), its view and the effective selection, so a probe
 //! pairs results with the definitions that connection advertised.
 #![allow(dead_code)]
-use agent_access_core::mcp::{OutputSchemas, ProjectionMode, helper_definitions, is_helper};
+use agent_access_core::mcp::{
+    McpView, OutputSchemas, ProjectionMode, helper_definitions_for_view, is_helper,
+};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -147,7 +149,10 @@ impl AdvertisedTools {
         if let Some(tool) = self.tools.get(name) {
             return Some(tool.clone());
         }
-        let tool = helper_definitions(ProjectionMode::Stdio, self.output_schemas)
+        let view = self.view.as_ref().map_or(McpView::Aggregate, |service| {
+            McpView::Service(service.clone())
+        });
+        let tool = helper_definitions_for_view(ProjectionMode::Stdio, &view, self.output_schemas)
             .into_iter()
             .find(|tool| tool["name"] == name)?;
         let mut record = json!({
