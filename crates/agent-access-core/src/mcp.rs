@@ -31,7 +31,7 @@ pub enum OutputSchemas {
 }
 
 impl OutputSchemas {
-    /// The selection of a connection that requests none.
+    /// The built-in selection when neither an explicit override nor a TOML default is set.
     pub const CONNECTION_DEFAULT: Self = Self::Off;
 
     /// The exact `on`/`off` spelling of the HTTP `outputSchemas` query

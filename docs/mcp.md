@@ -256,10 +256,12 @@ Every HTTP request authenticates a current static principal, managed
 authenticated trusted caller. Cookies, anonymous discovery, management tokens,
 and OAuth login are not accepted. Sessions bind to the exact credential and execution
 context, so replacing a token requires a fresh initialization. Permission checks
-are repeated for tool calls. Restart and changes to MCP, identity, execution
-context, token/store, or trusted-proxy configuration invalidate sessions; refresh
+are repeated for tool calls. Restart and changes to MCP transport settings,
+identity, execution context, token/store, or trusted-proxy configuration
+invalidate sessions; refresh
 the client connection. Graceful shutdown delivers in-flight responses, then
-closes every open session. Ordinary policy and provider reloads preserve sessions and
+closes every open session. MCP presentation-default changes, ordinary policy
+changes and provider reloads preserve sessions and
 recheck current authority on each call. Missing or disallowed `Origin` values are
 handled as described in configuration; the public Host must match `public_url`.
 
@@ -486,7 +488,7 @@ each list or call request. An environment variable is inherited when the
 subprocess starts; changing the parent's environment requires restarting it.
 
 Add `"--output-schemas", "on"` after `"serve"` to advertise
-[output schemas](#output-schemas); they are omitted by default.
+[output schemas](#output-schemas), overriding client `[mcp].output_schemas` (built-in `"off"`).
 
 Other MCP clients should configure the same executable and arguments using their
 stdio server configuration. The process must run on a machine that can access
@@ -884,10 +886,23 @@ agent-access mcp serve --include-text-copy=false
 agent-access mcp serve --service jira --include-text-copy=false
 ```
 
-Both controls default to `true` and accept only literal lowercase `true` or
-`false`. HTTP applies the setting independently to every request; it is not
-remembered by the session. Stdio keeps the startup setting for the process.
-The control is not an MCP tool argument, a TOML setting or an environment setting.
+Both overrides accept only literal lowercase `true` or `false`. HTTP resolves
+query parameter → Broker `[mcp].include_text_copy` → built-in `true`, separately
+on each request without session state. Stdio resolves command-line option →
+client `[mcp].include_text_copy` → built-in `true` at startup and keeps that
+selection until restart, including for local errors after a config change.
+The control is not an MCP tool argument and has no environment setting.
+
+Use this in the Broker TOML for HTTP MCP, or in the separate client TOML for
+stdio. The two configurations are independent; stdio does not fetch Broker defaults:
+
+```toml
+[mcp]
+include_text_copy = false
+```
+
+Reloading the Broker changes subsequent HTTP requests, including requests on
+existing sessions. An admitted operation retains its original selection.
 
 With `false`, every tool result has `content: []` and retains the complete
 `structuredContent`, `isError` and `_meta`. This includes helpers, denials,
@@ -975,13 +990,20 @@ receipts are identical either way, as are the caller catalog's
 [`resultSchemas`](http-api.md#result-schemas-and-typed-responses), typed OpenAPI
 responses and the non-MCP CLI `actions describe` output.
 
-| Transport | Advertise output schemas | Omit them (default) |
+| Transport | Advertise output schemas | Omit them explicitly |
 | --- | --- | --- |
-| HTTP | `https://broker.example.com/mcp?outputSchemas=on`, likewise `/mcp/<service>?outputSchemas=on` | No query, or `outputSchemas=off` |
-| Stdio | `agent-access mcp serve --output-schemas on` | No option, or `--output-schemas off` |
+| HTTP | `https://broker.example.com/mcp?outputSchemas=on`, likewise `/mcp/<service>?outputSchemas=on` | `outputSchemas=off` |
+| Stdio | `agent-access mcp serve --output-schemas on` | `--output-schemas off` |
 
-HTTP evaluates the parameter on every request and keeps no session state, so
-configure it in the client's endpoint URL, which repeats it on every request.
+When the override is absent, HTTP uses Broker `[mcp].output_schemas` and
+stdio uses client `[mcp].output_schemas`; both default to `"off"`. Set `"on"`
+in the respective TOML to advertise schemas without an explicit override.
+Stdio does not inherit the Broker setting. There is no environment override.
+
+HTTP evaluates the parameter against the admitted configuration on every request
+and keeps no session state. Configure an explicit override in the client's
+endpoint URL to repeat it on every request. Reloading the Broker default takes
+effect on the next request without expiring the session.
 The `outputSchemas` value must be exactly `on` or `off`. It can be combined
 with `preferredOutputContentFormat=markdown|text|adf|storage` and
 `includeTextCopy=true|false`, each key at most once in any order. Malformed
@@ -1005,7 +1027,9 @@ agent-access mcp serve --output-schemas on --preferred-output-content-format tex
 Proxies must forward the query unchanged; a relay that caches tool definitions
 or pools upstream sessions must keep the schema and content-preference
 selections apart. Tool-list cursors bind both,
-so changing either selection requires restarting listing without a cursor.
+so changing either effective selection requires restarting listing without a
+cursor. This includes a changed Broker default when the request omits the
+schema override; an explicit unchanged override retains its cursor.
 Text-copy selection does not affect cursors. HTTP pages are byte-bounded, so
 their boundaries can differ between selections. The stdio option requires an
 explicit value and is fixed for the process lifetime,

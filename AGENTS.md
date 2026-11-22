@@ -124,12 +124,14 @@ actions and exposes typed wrappers for supported services.
   current `outputContentFormats` still constrains exact requests. Import adapters supply
   wrapper schemas with open upstream leaves.
 - MCP output-schema advertisement is a per-connection registry dimension
-  (`mcp::OutputSchemas`) beside transport mode and view, off by default with no
-  Broker setting: HTTP `outputSchemas=on|off` evaluated per request by the one
+  (`mcp::OutputSchemas`) beside transport mode and view. HTTP resolves
+  `outputSchemas=on|off` over Broker `[mcp].output_schemas` (built-in off)
+  per admitted request through the one
   strict endpoint query parser alongside content preference and text-copy
   controls (no session state; cursors bind schema selection and content preference,
-  not text-copy selection), stdio `mcp serve --output-schemas on|off`.
-  Off composes no schema and omits
+  not text-copy selection). Stdio resolves `mcp serve --output-schemas on|off`
+  over client `[mcp].output_schemas` (built-in off) at startup, fixed until
+  restart. No server-default lookup or environment override. Off composes no schema and omits
   `outputSchema`, `mcpTool.outputSchema` and `resultSchemas` from MCP
   projections; results, the caller catalog, OpenAPI and non-MCP CLI details
   never depend on it. Both describe paths share `ToolRegistry::describe_action`.
@@ -254,7 +256,11 @@ results without allocating an omitted copy and count actual emitted wire bytes;
 preserve provider/body and resource-access caps. Never remove nested imported
 `result.upstreamMcp.content` or add client-detection fallback. HTTP owns this
 setting per admitted request, independently of session identity and discovery
-cursors; stdio owns `--include-text-copy` for the process. Keep strict composable
+cursors, with query over Broker `[mcp].include_text_copy`; stdio resolves
+`--include-text-copy` over client `[mcp].include_text_copy` at startup and pins
+it for the process. Both built-in values are true. Presentation-default reloads
+preserve HTTP sessions and admitted operations; effective schema changes still
+invalidate listing cursors. Keep strict composable
 HTTP query parsing and trusted-username admission audits. This is transport
 presentation, separate from output-content selection and tool arguments.
 

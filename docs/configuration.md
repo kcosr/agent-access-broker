@@ -258,6 +258,8 @@ forms with identical identity, context, Host and Origin protections.
 ```toml
 [mcp]
 enabled = false
+output_schemas = "off"       # on | off; HTTP query overrides this default
+include_text_copy = true      # HTTP query overrides this default
 public_url = "https://broker.example.com/mcp"
 allowed_origins = []
 max_request_bytes = 16777216
@@ -279,7 +281,11 @@ fragment. Clients append optional
 [`outputSchemas`](mcp.md#output-schemas),
 [`preferredOutputContentFormat`](mcp.md#output-content-formats) and
 [`includeTextCopy`](mcp.md#tool-result-text-copies) query parameters to their own
-endpoint URLs. Output schemas default to `off`; text copies default to `true`.
+endpoint URLs. An explicit `outputSchemas` or `includeTextCopy` wins over the
+corresponding `[mcp].output_schemas` or `[mcp].include_text_copy` default.
+Without configuration, schemas are `off` and text copies are `true`. Values
+are validated even when HTTP MCP is disabled. These Broker defaults apply only
+to HTTP MCP; local stdio uses its own [client defaults](#cli-client-config-and-config-validate).
 Loopback HTTP is permitted only in development/test deployments.
 Enable an `Authorization` identity source with canonical `scheme = "Bearer"` and
 type `static_principals` or `broker_tokens`, or a named trusted caller with
@@ -324,11 +330,14 @@ rate waiting, preparation, execution and verification; admission does not restar
 it. It does not change REST/stdio's own deadlines. `protocol_timeout_ms` bounds
 protocol/identity phases, discovery and completed-response
 delivery; keepalives do not extend these deadlines. Session storage is ephemeral.
-Restart or changes to `[mcp]`, `[identity]`,
+Restart or changes to `[mcp]` (except the two presentation defaults), `[identity]`,
 `[execution_context]`, `[broker_tokens]`, `[managed_store]`, or trusted-proxy
 configuration invalidate sessions. Other reloads preserve sessions while each
-request uses current authentication and policy. No result retention/replay is
-provided.
+request uses current authentication and policy. Presentation-default changes
+apply on the next request; admitted operations retain their selection. A schema
+default change invalidates a discovery cursor only when its effective schema
+selection changes. Text-copy changes do not affect cursors. No result
+retention/replay is provided.
 Memory planning must account for concurrent work, not only a single wire cap.
 At most `max_control_requests` incoming bodies and control operations can be
 admitted globally, with separate native response leases capped by
@@ -342,10 +351,10 @@ completed SDK response caches are discarded; there is no result retention.
 
 Clients may append `includeTextCopy=false` to `/mcp` or `/mcp/<service>` to omit
 the top-level text copy while retaining the complete structured result. This
-per-request URL option defaults to `true` and composes with
+per-request URL option overrides `[mcp].include_text_copy` and composes with
 `preferredOutputContentFormat`; keep `public_url` query-free. Local stdio uses
-`mcp serve --include-text-copy=false` for the process. There is no TOML or
-environment setting for this control. See [MCP text copies](mcp.md#tool-result-text-copies)
+`mcp serve --include-text-copy=false` over its own client `[mcp].include_text_copy`.
+Both built-in defaults are `true`; neither toggle has an environment setting. See [MCP text copies](mcp.md#tool-result-text-copies)
 and [MCP client setup](mcp.md#http-endpoint).
 
 ## `[identity]`
@@ -2678,7 +2687,21 @@ disabled = false                           # default
 
 [defaults]
 # preferred_output_content_format = "markdown" # optional; markdown | text | adf | storage
+
+[mcp]
+output_schemas = "off"       # on | off; local stdio only
+include_text_copy = true      # local stdio only
 ```
+
+For local stdio, `mcp serve --output-schemas on|off` and
+`--include-text-copy=true|false` override the corresponding client `[mcp]`
+values. Both selections are resolved at startup and remain fixed until the
+process restarts, including during config or token rotation. Broker `[mcp]`
+defaults do not affect stdio; no defaults lookup is performed. These settings
+have no environment overrides. Ordinary CLI commands ignore them.
+
+Older binaries reject these new keys. When rolling back, remove them from the
+respective configuration before starting the older Broker or CLI.
 
 Provider invocation requires authenticated runtime catalog access. Configure a
 token source or authenticated ingress; anonymous direct HTTP permission does not

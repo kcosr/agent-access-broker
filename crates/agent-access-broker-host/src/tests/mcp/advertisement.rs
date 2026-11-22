@@ -622,3 +622,81 @@ async fn pagination_completes_in_each_selection_and_cursors_never_cross_modes() 
         .await;
     assert_eq!(rejected["error"]["code"], -32602);
 }
+
+#[tokio::test]
+async fn schema_default_reload_invalidates_only_cursors_whose_effective_selection_changes() {
+    let fixture = Fixture::new(|config| {
+        use agent_access_provider::BackendConfig;
+        let backend = PagedBackend {};
+        config.mcp.max_response_bytes = 64 * 1024;
+        config.policy.grants[0].actions = backend
+            .descriptor()
+            .actions
+            .into_iter()
+            .map(|action| action.action)
+            .collect();
+        config.providers = agent_access_core::ProvidersConfig::new(Arc::new(
+            crate::test_composition::backend_registry_replacing(&PAGED_BACKEND),
+        ))
+        .with(backend);
+    })
+    .await;
+    let path = "/mcp";
+    let session = fixture.initialize_at(path, None, TOKEN_A, VERSION).await;
+    let omitted = fixture
+        .rpc_at(path, None, &session, 1, "tools/list", json!({}))
+        .await;
+    let explicit = fixture
+        .rpc_at(
+            path,
+            Some(OutputSchemas::Off),
+            &session,
+            2,
+            "tools/list",
+            json!({}),
+        )
+        .await;
+    let omitted_cursor = omitted["result"]["nextCursor"].as_str().unwrap();
+    let explicit_cursor = explicit["result"]["nextCursor"].as_str().unwrap();
+    publish_reload(&fixture, |config| {
+        config.mcp.include_text_copy = false;
+    })
+    .await;
+    let copy_only = fixture
+        .rpc_at(
+            path,
+            None,
+            &session,
+            3,
+            "tools/list",
+            json!({"cursor":omitted_cursor}),
+        )
+        .await;
+    assert!(copy_only.get("error").is_none(), "{copy_only}");
+    publish_reload(&fixture, |config| {
+        config.mcp.output_schemas = OutputSchemas::On;
+    })
+    .await;
+    let stale = fixture
+        .rpc_at(
+            path,
+            None,
+            &session,
+            4,
+            "tools/list",
+            json!({"cursor":omitted_cursor}),
+        )
+        .await;
+    assert_eq!(stale["error"]["code"], -32602);
+    let retained = fixture
+        .rpc_at(
+            path,
+            Some(OutputSchemas::Off),
+            &session,
+            5,
+            "tools/list",
+            json!({"cursor":explicit_cursor}),
+        )
+        .await;
+    assert!(retained.get("error").is_none(), "{retained}");
+}

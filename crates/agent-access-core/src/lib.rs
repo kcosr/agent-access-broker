@@ -1460,6 +1460,8 @@ pub struct CliConfig {
     pub identity: CliIdentityConfig,
     #[serde(default)]
     pub defaults: CliDefaultsConfig,
+    #[serde(default)]
+    pub mcp: CliMcpConfig,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
@@ -1467,6 +1469,23 @@ pub struct CliConfig {
 pub struct CliDefaultsConfig {
     #[serde(default)]
     pub preferred_output_content_format: Option<OutputContentFormat>,
+}
+
+/// Local stdio presentation defaults, selected once when the process starts.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct CliMcpConfig {
+    pub output_schemas: mcp::OutputSchemas,
+    pub include_text_copy: bool,
+}
+
+impl Default for CliMcpConfig {
+    fn default() -> Self {
+        Self {
+            output_schemas: mcp::OutputSchemas::CONNECTION_DEFAULT,
+            include_text_copy: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]

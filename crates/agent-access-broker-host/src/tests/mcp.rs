@@ -6,6 +6,7 @@ use axum::http::HeaderValue;
 
 pub(super) mod advertisement;
 mod content_formats;
+mod defaults;
 pub(super) mod names;
 pub(super) mod output_schemas;
 mod rate_wait;
@@ -241,11 +242,17 @@ impl Fixture {
         body
     }
 
-    fn capture_connection<'a>(uri: &'a str, session: &'a str) -> output_schemas::Connection<'a> {
+    fn capture_connection<'a>(
+        &self,
+        uri: &'a str,
+        session: &'a str,
+    ) -> output_schemas::Connection<'a> {
         use agent_access_provider::presentation::OutputContentFormat;
         let (path, query) = uri.split_once('?').unwrap_or((uri, ""));
-        let mut output_schemas = OutputSchemas::CONNECTION_DEFAULT;
-        let mut include_text_copy = true;
+        let snapshot = self.state.current();
+        let defaults = &snapshot.runtime.config().mcp;
+        let mut output_schemas = defaults.output_schemas;
+        let mut include_text_copy = defaults.include_text_copy;
         let mut preference = None;
         for (key, value) in query.split('&').filter_map(|field| field.split_once('=')) {
             match key {
@@ -278,7 +285,7 @@ impl Fixture {
         if method != "tools/call" {
             return;
         }
-        let connection = Self::capture_connection(uri, session);
+        let connection = self.capture_connection(uri, session);
         let key = ToolListingKey {
             session: session.to_owned(),
             path: connection.path.to_owned(),
@@ -303,7 +310,7 @@ impl Fixture {
         params: &Value,
         body: &Value,
     ) {
-        let connection = Self::capture_connection(uri, session);
+        let connection = self.capture_connection(uri, session);
         let path = connection.path;
         let output_schemas = connection.output_schemas;
         let preference = connection.preferred_output_content_format;

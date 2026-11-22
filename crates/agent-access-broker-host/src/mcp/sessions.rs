@@ -52,10 +52,15 @@ fn security_profile(config: &agent_access_core::BrokerConfig) -> String {
     // These internal configuration values are never returned or logged. A hash
     // of their deterministic representation separates transport/identity/context
     // changes from ordinary provider, policy, credential, and audit reloads.
+    // Presentation defaults are resolved for each admitted request. They do
+    // not change session authority; only schema-selection cursors can expire.
+    let mut transport = config.mcp.clone();
+    transport.output_schemas = agent_access_core::mcp::OutputSchemas::CONNECTION_DEFAULT;
+    transport.include_text_copy = true;
     let material = format!(
         "{:?}",
         (
-            &config.mcp,
+            &transport,
             &config.identity,
             &config.execution_context,
             &config.broker_tokens,

@@ -74,7 +74,11 @@ async fn stdio_selection_is_per_process_off_by_default_and_never_changes_results
         .secret_file("principal-two.token", "mcp-principal-two-token")
         .unwrap();
     let broker = application
-        .config_document(fake_document(&directory, &first_token, &second_token))
+        // Broker HTTP MCP defaults must never affect this local stdio process.
+        .config_document(format!(
+            "{}\n[mcp]\noutput_schemas=\"on\"\ninclude_text_copy=false\n",
+            fake_document(&directory, &first_token, &second_token)
+        ))
         .start()
         .await
         .unwrap();

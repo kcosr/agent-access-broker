@@ -30,6 +30,14 @@ node_id = "broker-1"
 [network]
 trusted_proxies = ["127.0.0.1/32"]
 
+# Optional HTTP MCP defaults; configure public_url and enable it before use.
+# Per-request URL parameters override these; stdio uses its own client TOML.
+# [mcp]
+# enabled = true
+# public_url = "https://broker.example.com/mcp"
+# output_schemas = "off" # on | off
+# include_text_copy = true
+
 [identity]
 mode = "required"
 authority = "managed"

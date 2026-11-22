@@ -728,6 +728,8 @@ fn portal_value(portal: &PortalConfig) -> Value {
 fn mcp_value(mcp: &McpConfig) -> Value {
     let McpConfig {
         enabled,
+        output_schemas,
+        include_text_copy,
         public_url,
         allowed_origins,
         max_request_bytes,
@@ -744,6 +746,8 @@ fn mcp_value(mcp: &McpConfig) -> Value {
     } = mcp;
     Fields::default()
         .put("enabled", *enabled)
+        .put("output_schemas", output_schemas.as_str())
+        .put("include_text_copy", *include_text_copy)
         .opt("public_url", public_url.clone())
         .put("allowed_origins", strings(allowed_origins))
         .int("max_request_bytes", *max_request_bytes)

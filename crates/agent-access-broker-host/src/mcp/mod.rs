@@ -450,9 +450,9 @@ fn security_headers(
 // Match literal query keys and values without percent/form decoding. The three
 // independent controls may appear in any order, exactly once each.
 struct QueryOptions {
-    output_schemas: OutputSchemas,
+    output_schemas: Option<OutputSchemas>,
     preferred_output_content_format: Option<OutputContentFormat>,
-    include_text_copy: bool,
+    include_text_copy: Option<bool>,
 }
 fn query_options(query: Option<&str>) -> Result<QueryOptions, ()> {
     let mut output_schemas = None;
@@ -486,9 +486,9 @@ fn query_options(query: Option<&str>) -> Result<QueryOptions, ()> {
         }
     }
     Ok(QueryOptions {
-        output_schemas: output_schemas.unwrap_or(OutputSchemas::CONNECTION_DEFAULT),
+        output_schemas,
         preferred_output_content_format: preference,
-        include_text_copy: include_text_copy.unwrap_or(true),
+        include_text_copy,
     })
 }
 
@@ -1028,9 +1028,11 @@ pub(crate) async fn handle(
     );
     let mut admitted = Admitted {
         view,
-        output_schemas: options.output_schemas,
+        output_schemas: options.output_schemas.unwrap_or(config.output_schemas),
         preferred_output_content_format: options.preferred_output_content_format,
-        include_text_copy: options.include_text_copy,
+        include_text_copy: options
+            .include_text_copy
+            .unwrap_or(config.include_text_copy),
         snapshot: snapshot.clone(),
         http_span: tracing::Span::current(),
         cancellation: Arc::new(ExplicitCancellation::default()),
@@ -1489,24 +1491,21 @@ mod tests {
 
     #[test]
     fn endpoint_query_composes_each_literal_option_once() {
-        assert_eq!(
-            query_options(None).unwrap().output_schemas,
-            OutputSchemas::Off
-        );
+        assert_eq!(query_options(None).unwrap().output_schemas, None);
         assert_eq!(
             query_options(Some("outputSchemas=on"))
                 .unwrap()
                 .output_schemas,
-            OutputSchemas::On
+            Some(OutputSchemas::On)
         );
         assert_eq!(
             query_options(Some("outputSchemas=off"))
                 .unwrap()
                 .output_schemas,
-            OutputSchemas::Off
+            Some(OutputSchemas::Off)
         );
         let defaults = query_options(None).unwrap();
-        assert!(defaults.include_text_copy);
+        assert_eq!(defaults.include_text_copy, None);
         assert_eq!(defaults.preferred_output_content_format, None);
         for query in [
             "outputSchemas=on&includeTextCopy=false&preferredOutputContentFormat=text",
@@ -1517,8 +1516,8 @@ mod tests {
             "includeTextCopy=false&outputSchemas=on&preferredOutputContentFormat=text",
         ] {
             let options = query_options(Some(query)).unwrap();
-            assert_eq!(options.output_schemas, OutputSchemas::On);
-            assert!(!options.include_text_copy);
+            assert_eq!(options.output_schemas, Some(OutputSchemas::On));
+            assert_eq!(options.include_text_copy, Some(false));
             assert_eq!(
                 options.preferred_output_content_format,
                 Some(OutputContentFormat::Text)

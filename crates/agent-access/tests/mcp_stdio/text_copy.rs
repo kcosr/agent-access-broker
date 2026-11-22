@@ -66,101 +66,115 @@ async fn startup_copy_mode_preserves_results_errors_files_and_discovery_in_each_
         "[service]\nurl={:?}\n[identity]\ndisabled=true\n",
         broker.uri()
     );
-    std::fs::write(&config, &config_text).unwrap();
-    for service in [None, Some("example")] {
-        for selection in [None, Some(OutputSchemas::Off), Some(OutputSchemas::On)] {
-            let mut baseline_tools = None;
-            for setting in [None, Some(true), Some(false)] {
-                let include_text_copy = setting.unwrap_or(true);
-                let mut process = McpProcess::start_options(&config, service, selection, setting);
-                process.initialize().await;
-                let tools = process.request("tools/list", json!({})).await;
-                assert!(tools.get("error").is_none(), "{tools}");
-                if let Some(baseline) = &baseline_tools {
-                    assert_eq!(&tools["result"], baseline);
-                } else {
-                    baseline_tools = Some(tools["result"].clone());
-                }
-                let name = if service.is_some() {
-                    "read"
-                } else {
-                    "example_read"
-                };
-                for (outcome, expected, is_error) in
-                    [("success", &success, false), ("failure", &failure, true)]
-                {
-                    let response = process
-                        .request(
-                            "tools/call",
-                            json!({"name":name,"arguments":{"inputs":{"outcome":outcome}}}),
-                        )
-                        .await;
-                    assert!(response.get("error").is_none(), "{response}");
-                    let result = &response["result"];
-                    assert_copy(result, include_text_copy);
-                    assert_eq!(&result["structuredContent"], expected);
-                    assert_eq!(result["isError"], is_error);
+    for configured in [false, true] {
+        let config_text = if configured {
+            format!("{config_text}[mcp]\noutput_schemas=\"on\"\ninclude_text_copy=false\n")
+        } else {
+            config_text.clone()
+        };
+        std::fs::write(&config, &config_text).unwrap();
+        for service in [None, Some("example")] {
+            for selection in [None, Some(OutputSchemas::Off), Some(OutputSchemas::On)] {
+                let mut baseline_tools = None;
+                for setting in [None, Some(true), Some(false)] {
+                    let include_text_copy = setting.unwrap_or(!configured);
+                    let mut process =
+                        McpProcess::start_options(&config, service, selection, setting);
+                    process.initialize().await;
+                    let tools = process.request("tools/list", json!({})).await;
+                    assert!(tools.get("error").is_none(), "{tools}");
+                    if let Some(baseline) = &baseline_tools {
+                        assert_eq!(&tools["result"], baseline);
+                    } else {
+                        baseline_tools = Some(tools["result"].clone());
+                    }
+                    // Changing only the local defaults must not change the running
+                    // process's schema selection or text-copy mode.
+                    std::fs::write(&config, format!("[service]\nurl={:?}\n[identity]\ndisabled=true\n[mcp]\noutput_schemas=\"off\"\ninclude_text_copy=true\n", broker.uri())).unwrap();
+                    let after_reload = process.request("tools/list", json!({})).await;
+                    assert_eq!(after_reload["result"], tools["result"]);
+                    let name = if service.is_some() {
+                        "read"
+                    } else {
+                        "example_read"
+                    };
+                    for (outcome, expected, is_error) in
+                        [("success", &success, false), ("failure", &failure, true)]
+                    {
+                        let response = process
+                            .request(
+                                "tools/call",
+                                json!({"name":name,"arguments":{"inputs":{"outcome":outcome}}}),
+                            )
+                            .await;
+                        assert!(response.get("error").is_none(), "{response}");
+                        let result = &response["result"];
+                        assert_copy(result, include_text_copy);
+                        assert_eq!(&result["structuredContent"], expected);
+                        assert_eq!(result["isError"], is_error);
+                        assert_eq!(
+                            result["_meta"],
+                            json!({"agent-access/sensitive-output-pointers":["/result"]})
+                        );
+                    }
+                    if service.is_none() {
+                        let helper = process
+                            .request("tools/call", json!({"name":"services_list","arguments":{}}))
+                            .await;
+                        assert_copy(&helper["result"], include_text_copy);
+                        assert_eq!(
+                            helper["result"]["structuredContent"],
+                            json!({"services":[]})
+                        );
+                    }
+                    let destination = directory.path().join("saved.json");
+                    let saved = process.request("tools/call", json!({"name":name,"arguments":{"inputs":{"outcome":"success"},"outputPath":destination}})).await;
+                    assert_copy(&saved["result"], include_text_copy);
+                    assert_eq!(saved["result"]["isError"], false, "{saved}");
                     assert_eq!(
-                        result["_meta"],
-                        json!({"agent-access/sensitive-output-pointers":["/result"]})
+                        saved["result"]["structuredContent"]["brokerRequestId"],
+                        "success"
                     );
-                }
-                if service.is_none() {
-                    let helper = process
-                        .request("tools/call", json!({"name":"services_list","arguments":{}}))
-                        .await;
-                    assert_copy(&helper["result"], include_text_copy);
                     assert_eq!(
-                        helper["result"]["structuredContent"],
-                        json!({"services":[]})
+                        saved["result"]["structuredContent"]["output"]["sensitive"],
+                        true
                     );
+                    assert!(saved["result"]["structuredContent"].get("result").is_none());
+                    assert!(saved["result"].get("_meta").is_none());
+                    assert_eq!(
+                        serde_json::from_slice::<Value>(&std::fs::read(&destination).unwrap())
+                            .unwrap(),
+                        success
+                    );
+                    let invalid = process
+                        .request("tools/call", json!({"name":name,"arguments":{"inputs":[]}}))
+                        .await;
+                    assert_copy(&invalid["result"], include_text_copy);
+                    assert_eq!(invalid["result"]["isError"], true);
+                    assert_eq!(
+                        invalid["result"]["structuredContent"]["error"]["message"],
+                        "action inputs must be a JSON object"
+                    );
+                    let unknown = process
+                        .request("tools/call", json!({"name":"missing","arguments":{}}))
+                        .await;
+                    assert_eq!(unknown["error"]["code"], -32602);
+                    assert!(unknown.get("result").is_none());
+                    std::fs::write(&config, "invalid = [").unwrap();
+                    let invalid_config = process
+                        .request("tools/call", json!({"name":name,"arguments":{"inputs":{}}}))
+                        .await;
+                    assert_copy(&invalid_config["result"], include_text_copy);
+                    assert_eq!(invalid_config["result"]["isError"], true);
+                    assert!(
+                        invalid_config["result"]["structuredContent"]["error"]["message"]
+                            .as_str()
+                            .unwrap()
+                            .starts_with("Cannot resolve broker configuration")
+                    );
+                    std::fs::write(&config, &config_text).unwrap();
+                    process.finish().await;
                 }
-                let destination = directory.path().join("saved.json");
-                let saved = process.request("tools/call", json!({"name":name,"arguments":{"inputs":{"outcome":"success"},"outputPath":destination}})).await;
-                assert_copy(&saved["result"], include_text_copy);
-                assert_eq!(saved["result"]["isError"], false, "{saved}");
-                assert_eq!(
-                    saved["result"]["structuredContent"]["brokerRequestId"],
-                    "success"
-                );
-                assert_eq!(
-                    saved["result"]["structuredContent"]["output"]["sensitive"],
-                    true
-                );
-                assert!(saved["result"]["structuredContent"].get("result").is_none());
-                assert!(saved["result"].get("_meta").is_none());
-                assert_eq!(
-                    serde_json::from_slice::<Value>(&std::fs::read(&destination).unwrap()).unwrap(),
-                    success
-                );
-                let invalid = process
-                    .request("tools/call", json!({"name":name,"arguments":{"inputs":[]}}))
-                    .await;
-                assert_copy(&invalid["result"], include_text_copy);
-                assert_eq!(invalid["result"]["isError"], true);
-                assert_eq!(
-                    invalid["result"]["structuredContent"]["error"]["message"],
-                    "action inputs must be a JSON object"
-                );
-                let unknown = process
-                    .request("tools/call", json!({"name":"missing","arguments":{}}))
-                    .await;
-                assert_eq!(unknown["error"]["code"], -32602);
-                assert!(unknown.get("result").is_none());
-                std::fs::write(&config, "invalid = [").unwrap();
-                let invalid_config = process
-                    .request("tools/call", json!({"name":name,"arguments":{"inputs":{}}}))
-                    .await;
-                assert_copy(&invalid_config["result"], include_text_copy);
-                assert_eq!(invalid_config["result"]["isError"], true);
-                assert!(
-                    invalid_config["result"]["structuredContent"]["error"]["message"]
-                        .as_str()
-                        .unwrap()
-                        .starts_with("Cannot resolve broker configuration")
-                );
-                std::fs::write(&config, &config_text).unwrap();
-                process.finish().await;
             }
         }
     }

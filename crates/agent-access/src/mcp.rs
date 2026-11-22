@@ -34,18 +34,42 @@ struct BrokerMcp {
     include_text_copy: bool,
 }
 
+fn config_error(error: anyhow::Error) -> anyhow::Error {
+    anyhow::anyhow!(
+        error
+            .downcast_ref::<agent_access_core::ConfigError>()
+            .and_then(crate::retired_cli_default_message)
+            .unwrap_or(CONFIG_ERROR)
+    )
+}
+
 impl BrokerMcp {
+    fn new(
+        cli: crate::Cli,
+        config: PathBuf,
+        view: McpView,
+        output_schemas: Option<OutputSchemas>,
+        include_text_copy: Option<bool>,
+    ) -> Result<Self> {
+        let defaults = crate::load_config_or_default(&config, cli.config.is_some())
+            .map_err(config_error)?
+            .mcp;
+        let server = Self {
+            cli,
+            config,
+            view,
+            output_schemas: output_schemas.unwrap_or(defaults.output_schemas),
+            include_text_copy: include_text_copy.unwrap_or(defaults.include_text_copy),
+        };
+        server.settings()?;
+        Ok(server)
+    }
+
     fn settings(&self) -> Result<crate::ResolvedCliSettings> {
         // Resolve for every request: token files and config may rotate while the
         // client keeps this subprocess alive. Never cache an identity or grants.
-        let settings = crate::resolve_cli_settings(&self.cli, &self.config).map_err(|error| {
-            anyhow::anyhow!(
-                error
-                    .downcast_ref::<agent_access_core::ConfigError>()
-                    .and_then(crate::retired_cli_default_message)
-                    .unwrap_or(CONFIG_ERROR)
-            )
-        })?;
+        let settings =
+            crate::resolve_cli_settings(&self.cli, &self.config).map_err(config_error)?;
         validate_broker_transport(&settings)?;
         Ok(settings)
     }
@@ -205,17 +229,16 @@ pub async fn serve(
     cli: crate::Cli,
     config: PathBuf,
     view: McpView,
-    output_schemas: OutputSchemas,
-    include_text_copy: bool,
+    output_schemas: Option<OutputSchemas>,
+    include_text_copy: Option<bool>,
 ) -> Result<()> {
-    let server = BrokerMcp {
+    let server = crate::require_cli_input(BrokerMcp::new(
         cli,
         config,
         view,
         output_schemas,
         include_text_copy,
-    };
-    crate::require_cli_input(server.settings());
+    ));
     // No CLI rendering or stdout logging is allowed here: stdout is exclusively
     // newline-delimited MCP JSON-RPC, including during authentication failures.
     let (input, oversized) = transport::BoundedStdioRead::new(tokio::io::stdin());
@@ -245,9 +268,9 @@ mod tests {
     #[test]
     fn include_text_copy_is_an_explicit_strict_startup_boolean() {
         for (extra, expected) in [
-            (vec![], true),
-            (vec!["--include-text-copy=true"], true),
-            (vec!["--include-text-copy=false"], false),
+            (vec![], None),
+            (vec!["--include-text-copy=true"], Some(true)),
+            (vec!["--include-text-copy=false"], Some(false)),
             (
                 vec![
                     "--include-text-copy",
@@ -257,7 +280,7 @@ mod tests {
                     "--output-schemas",
                     "on",
                 ],
-                false,
+                Some(false),
             ),
         ] {
             let mut args = vec!["agent-access", "mcp", "serve"];
@@ -527,18 +550,18 @@ mod tests {
                 Err(_) => None,
             }
         };
-        assert_eq!(selected(&[]), Some(OutputSchemas::Off));
+        assert_eq!(selected(&[]), Some(None));
         assert_eq!(
             selected(&["--output-schemas", "on"]),
-            Some(OutputSchemas::On)
+            Some(Some(OutputSchemas::On))
         );
         assert_eq!(
             selected(&["--output-schemas=off"]),
-            Some(OutputSchemas::Off)
+            Some(Some(OutputSchemas::Off))
         );
         assert_eq!(
             selected(&["--service", "fake", "--output-schemas", "on"]),
-            Some(OutputSchemas::On)
+            Some(Some(OutputSchemas::On))
         );
         for invalid in [
             &["--output-schemas"][..],
@@ -554,7 +577,7 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(help.contains("--output-schemas <MODE>"), "{help}");
-        assert!(help.contains("[default: off]"), "{help}");
+        assert!(help.contains("client [mcp].output_schemas"), "{help}");
         assert!(help.contains("[possible values: on, off]"), "{help}");
     }
 
@@ -633,6 +656,59 @@ mod tests {
         assert!(!message.contains("private-token-marker"));
         assert!(!message.contains("broker.example.test"));
     }
+    #[test]
+    fn mcp_defaults_resolve_flags_over_toml_and_pin_until_restart() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("client.toml");
+        for configured in [
+            None,
+            Some((OutputSchemas::Off, true)),
+            Some((OutputSchemas::On, false)),
+        ] {
+            let source = match configured {
+                None => "[identity]\ndisabled=true\n".to_string(),
+                Some((schemas, copy)) => format!(
+                    "[identity]\ndisabled=true\n[mcp]\noutput_schemas={:?}\ninclude_text_copy={copy}\n",
+                    schemas.as_str()
+                ),
+            };
+            for schema_flag in [None, Some(OutputSchemas::Off), Some(OutputSchemas::On)] {
+                for copy_flag in [None, Some(true), Some(false)] {
+                    std::fs::write(&path, &source).unwrap();
+                    let cli = crate::Cli::try_parse_from([
+                        "agent-access",
+                        "--config",
+                        path.to_str().unwrap(),
+                        "mcp",
+                        "serve",
+                    ])
+                    .unwrap();
+                    let server = BrokerMcp::new(
+                        cli,
+                        path.clone(),
+                        McpView::Aggregate,
+                        schema_flag,
+                        copy_flag,
+                    )
+                    .unwrap();
+                    let (schemas, copy) = configured.unwrap_or((OutputSchemas::Off, true));
+                    let expected = (schema_flag.unwrap_or(schemas), copy_flag.unwrap_or(copy));
+                    assert_eq!((server.output_schemas, server.include_text_copy), expected);
+                    std::fs::write(&path, "[identity]\ndisabled=true\n[mcp]\noutput_schemas=\"on\"\ninclude_text_copy=false\n").unwrap();
+                    server.settings().unwrap();
+                    assert_eq!((server.output_schemas, server.include_text_copy), expected);
+                    std::fs::write(
+                        &path,
+                        "[mcp]\ninclude_text_copy=\"private-invalid-value\"\n",
+                    )
+                    .unwrap();
+                    assert_eq!(server.settings().unwrap_err().to_string(), CONFIG_ERROR);
+                    assert_eq!((server.output_schemas, server.include_text_copy), expected);
+                }
+            }
+        }
+    }
+
     #[test]
     fn content_preferences_reload_and_process_override_stays_authoritative() {
         let directory = tempfile::tempdir().unwrap();

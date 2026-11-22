@@ -893,6 +893,17 @@ proves that the matching gateway host receives the fixed `agent-access` username
 and fake token while a different host receives no credentials from the helper.
 That integration test requires a local `git` executable on `PATH`.
 
+### MCP presentation defaults
+
+The deterministic HTTP MCP tests cover Broker `[mcp]` defaults, explicit query
+overrides in both views, schema-bound cursors across reload, and in-flight
+text-copy selection. The stdio subprocess suite covers separate client TOML
+defaults, explicit flags, discovery, success/error/file results and local
+configuration errors. Rewriting the client defaults leaves the running process's
+selection fixed; Broker defaults do not change it. Config tests reject malformed
+values, including when HTTP MCP is disabled. Existing content-format and
+identity/security-reload tests remain part of the full suite.
+
 ### Result schema conformance
 
 Tests check result payloads strictly against the declared

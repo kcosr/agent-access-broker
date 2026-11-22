@@ -224,7 +224,11 @@ All notable changes to this project are documented in this file.
 - **Action output schemas make result fields discoverable.** Catalog actions
   expose provider `resultSchemas`; OpenAPI types their response envelopes, and
   MCP clients can opt into `outputSchema` with HTTP `outputSchemas=on` or stdio
-  `--output-schemas on` (default `off`). Schemas describe selected rich-text
+  `--output-schemas on` (built-in `off`). Configure `[mcp].output_schemas`
+  in Broker TOML for HTTP or client TOML for stdio; explicit options win.
+  HTTP defaults reload per request; stdio defaults stay fixed until restart.
+  Older binaries require removing the new TOML keys before rollback.
+  Schemas describe selected rich-text
   bodies, failures and file receipts without changing invocation results, and
   combine with content preferences and optional text copies. Readiness and
   import publication budgets include output schemas regardless of connection
@@ -239,14 +243,17 @@ All notable changes to this project are documented in this file.
 
 - **MCP clients can omit the duplicate text copy** with HTTP
   `includeTextCopy=false` or stdio `mcp serve --include-text-copy=false`.
-  Both default to `true`. Tool results retain complete `structuredContent`,
+  Configure `[mcp].include_text_copy` separately in Broker or client TOML;
+  explicit URL/CLI options win over those defaults (built-in `true`). Tool
+  results retain complete `structuredContent`,
   error flags and metadata, including helpers, failures and file receipts.
   Stdio local tool errors now also report their message at
   `structuredContent.error.message` in both modes.
   HTTP combines the option with `preferredOutputContentFormat` per request;
   response limits count only the content emitted. See
   [MCP text copies](docs/mcp.md#tool-result-text-copies).
-  ([#124](https://github.com/kcosr/agent-access-broker/pull/124))
+  ([#119](https://github.com/kcosr/agent-access-broker/pull/119),
+  [#124](https://github.com/kcosr/agent-access-broker/pull/124))
 
 - **Output-content preferences** can be set per native service, client or MCP
   connection. The first applicable preference selects a supported concrete

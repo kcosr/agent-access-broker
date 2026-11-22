@@ -81,6 +81,10 @@ impl McpProcess {
         selection: Option<OutputSchemas>,
         include_text_copy: Option<bool>,
     ) -> Self {
+        let defaults: agent_access_core::CliConfig =
+            toml::from_str(&std::fs::read_to_string(config).unwrap()).unwrap();
+        let effective_schemas = selection.unwrap_or(defaults.mcp.output_schemas);
+        let effective_copy = include_text_copy.unwrap_or(defaults.mcp.include_text_copy);
         let mut command = Command::new(env!("CARGO_BIN_EXE_agent-access"));
         // A developer's ambient broker/token configuration must never change
         // the broker or identity exercised by this subprocess test.
@@ -129,8 +133,8 @@ impl McpProcess {
             stderr,
             next_id: 1,
             service: service.map(str::to_owned),
-            tools: mcp_output::AdvertisedTools::new(selection, service)
-                .with_text_copy(include_text_copy.unwrap_or(true)),
+            tools: mcp_output::AdvertisedTools::new(Some(effective_schemas), service)
+                .with_text_copy(effective_copy),
         }
     }
 

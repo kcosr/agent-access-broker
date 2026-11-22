@@ -28,8 +28,9 @@ configured ingress supplies an authenticated identity.
 Add `--service monitoring` to expose only that canonical service ID, using raw
 provider names. Add `--output-schemas on` to advertise
 [MCP output schemas](mcp.md#output-schemas); the option requires `on` or `off`
-and defaults to `off`, which omits MCP output-schema metadata. Both selections
-are immutable for the subprocess, including after configuration/token rotation. One service is accepted; repeated values, wildcards,
+and overrides client `[mcp].output_schemas` (built-in `"off"`), which omits
+MCP output-schema metadata. The resolved selection is immutable for the
+subprocess, including after configuration/token rotation. One service is accepted; repeated values, wildcards,
 comma-separated lists and display names are rejected. Initialization does not
 probe the broker; listing and calls require current visibility and readiness.
 The full caller catalog must fit the existing 16 MiB decode limit, even for a
@@ -38,8 +39,10 @@ small selected service; the complete tool projection is bounded at 64 MiB.
 Add `--include-text-copy=false` for clients that read `structuredContent`:
 all tool results then return `content: []` with the complete structured result,
 error flag and metadata. The startup option accepts literal `true` or `false`,
-defaults to `true`, and stays fixed for the process. It has no TOML or environment
-setting and is independent of `--preferred-output-content-format`.
+overrides client `[mcp].include_text_copy` (built-in `true`), and stays fixed
+for the process. Neither MCP toggle has an environment override or inherits a
+Broker setting. Both are independent of `--preferred-output-content-format`,
+whose existing client preference and server resolution are unchanged.
 
 Running the HTTP broker service is the job of the separate
 `agent-access-broker` binary. See [local MCP](mcp.md) for client configuration,

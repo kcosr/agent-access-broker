@@ -84,7 +84,7 @@ fn at(path: &str, mut request: Request<Body>) -> Request<Body> {
     request
 }
 
-async fn rpc(
+pub(super) async fn rpc(
     fixture: &Fixture,
     path: &str,
     session: &str,

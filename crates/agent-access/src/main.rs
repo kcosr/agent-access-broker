@@ -4902,15 +4902,18 @@ enum McpCommand {
         service: Option<String>,
         /// Advertise MCP output schemas: each tool's outputSchema and the
         /// output schemas in action details. Off omits them; results are
-        /// identical either way. Fixed for this process.
-        #[arg(long, value_name = "MODE", default_value = "off", value_parser = mcp::output_schemas_parser())]
-        output_schemas: agent_access_core::mcp::OutputSchemas,
+        /// identical either way. Overrides client [mcp].output_schemas
+        /// (built-in: off). Fixed for this process.
+        #[arg(long, value_name = "MODE", value_parser = mcp::output_schemas_parser())]
+        output_schemas: Option<agent_access_core::mcp::OutputSchemas>,
         /// Soft preference for returned rich-text fields.
         #[arg(long, value_enum)]
         preferred_output_content_format: Option<OutputContentFormatArg>,
         /// Include a readable text copy beside each structured tool result.
-        #[arg(long, action = clap::ArgAction::Set, default_value_t = true)]
-        include_text_copy: bool,
+        /// Overrides client [mcp].include_text_copy (built-in: true).
+        /// Fixed for this process.
+        #[arg(long, action = clap::ArgAction::Set)]
+        include_text_copy: Option<bool>,
     },
 }
 
@@ -17258,6 +17261,7 @@ fn resolve_cli_settings(cli: &Cli, config_path: &PathBuf) -> Result<ResolvedCliS
         defaults: agent_access_core::CliDefaultsConfig {
             preferred_output_content_format: resolved.preferred_output_content_format,
         },
+        mcp: config.mcp,
     })?;
     Ok(resolved)
 }
