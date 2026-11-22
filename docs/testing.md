@@ -921,14 +921,14 @@ every emitted field must be declared. The advertised schemas stay open.
   binary on the ignored, guarded `conformance_abort_child`, which does nothing
   unless the parent selects a stage. Never run the child directly or include
   ignored tests broadly.
-- MCP delivery checks validate every `structuredContent` against the called
-  tool's advertised `outputSchema`, as advertised rather than strictly: the host's
+- MCP delivery checks validate `structuredContent` from listed or projected
+  tools against their advertised `outputSchema`, as advertised rather than strictly: the host's
   HTTP MCP fixture (`tests::mcp`) and the stdio subprocess harnesses of the
   `mcp_stdio` test and the Jira, Confluence, GitLab and CloudBees CI smokes.
   They select output schemas explicitly (`?outputSchemas=on`,
   `--output-schemas on`), since connections omit them by default. Each check
   states its connection's selection: with `on` every helper must advertise a
-  schema and a result for a tool the connection never listed or projected fails,
+  schema and an ordinary result for a tool never listed or projected fails,
   and with `off` no tool may advertise one; neither skips validation silently or
   substitutes another selection's schema. Independently of the selection, the
   HTTP MCP fixture checks a successful discovery helper result strictly against
@@ -963,7 +963,12 @@ and `runtime_projection` an HTTP runtime projection pinned before dispatch
 without an extra request. Response checks use that pinned or actually listed
 definition. Projected definitions do not prove the client listed that tool. Result records include `contentCount`
 and `resultWireBytes`, the serialized tool result size, not the full JSON-RPC
-frame. Unset, nothing is captured.
+frame. If an unavailable scoped service fails discovery before any definition
+exists, the explicit error check records `kind: "unadvertised_error"`,
+`unadvertisedReason: "discovery_unavailable"` and the failed `discoveryError`.
+It checks the structured local error and text-copy shape separately from
+advertised-schema conformance; ordinary missing definitions still fail.
+Unset, nothing is captured.
 
 ### Guide code blocks
 

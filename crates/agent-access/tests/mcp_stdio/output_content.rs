@@ -51,7 +51,7 @@ async fn invalid_selected_content_returns_structured_completion_receipt_without_
         Mock::given(method("POST"))
             .and(path("/v1/invoke/jira/issue.view"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "agentRequestId":"agent","brokerRequestId":"broker","decision":"allow","service":"jira","action":"issue.view",
+                "agentRequestId":"agent","brokerRequestId":"broker","decision":"allow","service":"jira","action":"issue.view","resourceScopes":{},
                 "result":{"description":{"format":"markdown","value":42},"mutationStatus":"applied","retrySafe":false,"safeLocators":{"issueId":"42"},"private":"PRIVATE BODY"}
             })))
             .expect(1)
@@ -110,7 +110,7 @@ async fn live_client_preference_reload_survives_retired_key_and_accepts_new_nati
             .and(path("/v1/invoke/jira/issue.view"))
             .and(body_json(json!({"inputs":{},"preferredOutputContentFormat":preferred})))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "agentRequestId":"agent","brokerRequestId":"broker","decision":"allow","service":"jira","action":"issue.view",
+                "agentRequestId":"agent","brokerRequestId":"broker","decision":"allow","service":"jira","action":"issue.view","resourceScopes":{},
                 "result":{"description":{"format":"adf","value":{"type":"doc","version":1,"content":[]}}}
             })))
             .expect(1)
@@ -158,7 +158,7 @@ async fn compact_allow_outcomes_keep_original_status_and_reason_without_success_
             .respond_with(ResponseTemplate::new(200).set_body_json(required_body))
             .mount(&broker)
             .await;
-        let receipt = json!({"agentRequestId":"agent","brokerRequestId":"broker","decision":"allow","reasonCode":"verification_mismatch","reason":"Original provider outcome","result":{"mutationStatus":mutation,"retrySafe":retry_safe}});
+        let receipt = json!({"agentRequestId":"agent","brokerRequestId":"broker","decision":"allow","service":"jira","action":"issue.view","resourceScopes":{},"reasonCode":"verification_mismatch","reason":"Original provider outcome","result":{"mutationStatus":mutation,"retrySafe":retry_safe}});
         Mock::given(method("POST"))
             .and(path("/v1/invoke/jira/issue.view"))
             .respond_with(ResponseTemplate::new(200).set_body_json(receipt.clone()))

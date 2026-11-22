@@ -161,6 +161,16 @@ impl McpProcess {
         response
     }
 
+    /// Test the local error returned when discovery cannot advertise a tool.
+    /// The failed listing is retained as explicit evidence for the capture.
+    async fn request_unadvertised_error(&mut self, params: Value, failed_listing: &Value) -> Value {
+        let name = params["name"].as_str().unwrap().to_owned();
+        let response = self.send_request("tools/call", params).await;
+        self.tools
+            .check_unadvertised_error(&name, &response, failed_listing);
+        response
+    }
+
     async fn list_advertised_tools(&mut self) {
         let mut params = json!({});
         loop {

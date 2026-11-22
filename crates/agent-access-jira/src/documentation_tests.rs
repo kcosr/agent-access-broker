@@ -218,7 +218,9 @@ fn every_published_action_declares_bundled_result_schemas() {
     }
     // Comment writes appear only with ADF comment bodies; the bundle covers
     // every configuration's actions and declares no other.
-    assert_eq!(published.len(), 25);
+    assert_eq!(published.len(), 27);
+    assert!(published.contains("issue.transition.list"));
+    assert!(published.contains("issue.transition.apply"));
     assert_eq!(
         RESULT_SCHEMAS.actions(),
         published.iter().map(String::as_str).collect::<Vec<_>>()

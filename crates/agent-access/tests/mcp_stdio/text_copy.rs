@@ -44,11 +44,11 @@ async fn startup_copy_mode_preserves_results_errors_files_and_discovery_in_each_
         .mount(&broker)
         .await;
     let success = json!({
-        "agentRequestId":"agent","decision":"allow","service":"example","action":"read","brokerRequestId":"success",
+        "agentRequestId":"agent","decision":"allow","service":"example","action":"read","brokerRequestId":"success","resourceScopes":{},
         "result":{"upstreamMcp":{"content":[{"type":"text","text":"nested text must remain"}],"structuredContent":{"answer":42}},"description":{"format":"markdown","value":"**complete body**"}}
     });
     let failure = json!({
-        "agentRequestId":"agent","decision":"error","service":"example","action":"read","brokerRequestId":"failure",
+        "agentRequestId":"agent","decision":"error","service":"example","action":"read","brokerRequestId":"failure","resourceScopes":{},
         "reasonCode":"upstream_rate_limited","reason":"Retry after 12s.","error":{"message":"Retry after 12s."},
         "result":{"retryAfterSeconds":12,"mutationStatus":"not_applied","retrySafe":true}
     });
@@ -222,7 +222,7 @@ async fn save_failure_without_text_copy_preserves_completed_mutation_receipt_wit
                 std::fs::create_dir(&race_destination).unwrap();
                 ResponseTemplate::new(200).set_body_json(json!({
                     "agentRequestId":"agent","brokerRequestId":"broker","decision":"allow",
-                    "service":"example","action":"read","reasonCode":"mutation_complete",
+                    "service":"example","action":"read","resourceScopes":{},"reasonCode":"mutation_complete",
                     "result":{"mutationStatus":mutation_status,"retrySafe":false,
                         "verificationStage":"mutation_response","safeLocators":{"item":"42"},
                         "secret":"PRIVATE COMPLETED BODY"}

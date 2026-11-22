@@ -163,6 +163,46 @@ impl AdvertisedTools {
         Some(tool)
     }
 
+    /// A scoped registry can be unavailable before it advertises any tool.
+    /// Check that explicit local-error path separately, with failed-discovery
+    /// evidence; never assign it another connection's advertised schema.
+    pub fn check_unadvertised_error(&self, name: &str, response: &Value, failed_listing: &Value) {
+        assert!(
+            !self.knows(name),
+            "{name} already has a definition on this connection"
+        );
+        assert!(failed_listing.get("result").is_none(), "{failed_listing}");
+        let discovery_error = &failed_listing["error"];
+        assert!(discovery_error["code"].is_i64(), "{failed_listing}");
+        assert!(discovery_error["message"].is_string(), "{failed_listing}");
+        assert!(response.get("error").is_none(), "{response}");
+        let result = &response["result"];
+        assert_eq!(result["isError"], true, "{response}");
+        let structured = &result["structuredContent"];
+        let message = structured["error"]["message"]
+            .as_str()
+            .expect("structured local error message");
+        assert!(!message.is_empty());
+        assert_eq!(*structured, json!({"error":{"message":message}}));
+        let content = result["content"]
+            .as_array()
+            .expect("tool result content array");
+        assert_eq!(
+            result["content"],
+            if self.include_text_copy {
+                json!([{"type":"text","text":message}])
+            } else {
+                json!([])
+            }
+        );
+        self.capture(json!({
+            "kind":"unadvertised_error", "name":name, "isError":true,
+            "structuredContent":structured, "contentCount":content.len(),
+            "resultWireBytes":serde_json::to_vec(result).unwrap().len(),
+            "unadvertisedReason":"discovery_unavailable", "discoveryError":discovery_error,
+        }));
+    }
+
     /// Captures one `tools/call` response and checks its structured content
     /// against the tool's advertised output schema.
     pub fn check_call(&self, name: &str, response: &Value) {

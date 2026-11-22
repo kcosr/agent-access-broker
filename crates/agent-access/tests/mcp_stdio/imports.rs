@@ -1119,9 +1119,9 @@ async fn exercise_import(openapi: bool) {
             "{gate}"
         );
         let call = blocked
-            .request(
-                "tools/call",
+            .request_unadvertised_error(
                 json!({"name":raw_read,"arguments":{"inputs":inputs(json!({"message":"read"}))}}),
+                &listing,
             )
             .await;
         assert_eq!(call["result"]["isError"], true, "{gate}: {call}");

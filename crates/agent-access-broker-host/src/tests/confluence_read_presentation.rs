@@ -774,10 +774,20 @@ impl Provider for ReloadPresentationProvider {
         use agent_access_provider::presentation::OutputContentFormat;
         self.invocations.fetch_add(1, Ordering::SeqCst);
         assert!(request.inputs().get("bodyFormat").is_none());
-        let mut result = json!({"id":"1007","version":7});
+        let mut result = json!({
+            "id":"1007", "title":"Reload page", "space":"ENG", "version":7,
+            "spaceUrl":"https://example.atlassian.net/wiki/spaces/ENG",
+            "webUrl":"https://example.atlassian.net/wiki/spaces/ENG/pages/1007",
+            "createdAt":null, "updatedAt":null, "createdBy":null, "updatedBy":null
+        });
         let mut body = serde_json::Map::new();
         if request.action() == "page.footer_comment.view" {
-            result = json!({"comment":{"commentId":"5001","version":3}});
+            result = json!({"comment":{
+                "commentId":"5001", "kind":"footer", "containerType":"page",
+                "space":"ENG", "pageId":"1007", "status":"current",
+                "resolutionStatus":null, "version":3, "author":null,
+                "createdAt":null, "updatedAt":null, "parentCommentId":null
+            }});
             if self.comments_enabled {
                 result["comment"]["body"] = json!({
                     "storage":{"representation":"storage","value":"<p>Reload comment</p>"}

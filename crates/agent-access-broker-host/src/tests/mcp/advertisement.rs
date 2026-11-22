@@ -84,6 +84,20 @@ async fn endpoint_query_accepts_one_exact_selection_and_rejects_everything_else_
                 ))
                 .await;
             assert_eq!(response.status(), StatusCode::OK, "{path}{query}");
+            let created = response.headers()["mcp-session-id"]
+                .to_str()
+                .unwrap()
+                .to_owned();
+            rpc_body(response).await;
+            // Query acceptance creates a real session; release it so this
+            // parser matrix does not accidentally exercise the session quota.
+            let deleted = fixture
+                .send(at_uri(
+                    &format!("{path}{query}"),
+                    request(Method::DELETE, Some(TOKEN_A), Some(&created), None),
+                ))
+                .await;
+            assert_eq!(deleted.status(), StatusCode::ACCEPTED);
         }
         let session = fixture
             .initialize_at(path, Some(OutputSchemas::On), TOKEN_A, VERSION)
