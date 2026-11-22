@@ -10,6 +10,26 @@ async fn http_defaults_and_explicit_overrides_apply_in_both_views() {
                 config.mcp.include_text_copy = default_copy;
             })
             .await;
+            let spec = fixture
+                .send(at_uri(
+                    "/v1/spec/openapi.json",
+                    request(Method::GET, Some(TOKEN_A), None, None),
+                ))
+                .await;
+            assert_eq!(spec.status(), StatusCode::OK);
+            let spec = response_json(spec).await;
+            for path in ["/mcp", "/mcp/{service}"] {
+                let parameters = spec["paths"][path]["parameters"].as_array().unwrap();
+                for (name, expected) in [
+                    ("outputSchemas", json!(default_schemas)),
+                    ("includeTextCopy", json!(default_copy)),
+                ] {
+                    assert_eq!(
+                        parameters.iter().find(|p| p["name"] == name).unwrap()["schema"]["default"],
+                        expected
+                    );
+                }
+            }
             for (base, name) in [("/mcp", "fake_echo"), ("/mcp/fake", "echo")] {
                 let session = scoped::initialize(&fixture, base, TOKEN_A).await;
                 for schemas in [None, Some(OutputSchemas::Off), Some(OutputSchemas::On)] {

@@ -484,7 +484,9 @@ The existing [CLI configuration precedence](cli.md#config-env-and-default-preced
 applies; an existing config file can override environment settings. Custom TLS
 trust, token files, named token environment variables, and connection flags use
 the same resolver as CLI commands. Config and token files are read again for
-each list or call request. An environment variable is inherited when the
+each list or call request to refresh connection, identity and content preferences.
+The client `[mcp]` presentation defaults are resolved only at startup and stay
+fixed until restart. An environment variable is inherited when the
 subprocess starts; changing the parent's environment requires restarting it.
 
 Add `"--output-schemas", "on"` after `"serve"` to advertise

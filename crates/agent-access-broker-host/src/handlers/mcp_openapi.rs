@@ -1,8 +1,13 @@
 //! MCP is a protocol endpoint, not a CLI send route or a REST envelope action.
-use agent_access_core::RenderAuthMode;
+use agent_access_core::{McpConfig, RenderAuthMode};
 use serde_json::{Value, json};
 
-pub(super) fn add(document: &mut Value, public_url: &str, auth: RenderAuthMode) {
+pub(super) fn add(
+    document: &mut Value,
+    public_url: &str,
+    auth: RenderAuthMode,
+    defaults: &McpConfig,
+) {
     let Ok(url) = url::Url::parse(public_url) else {
         return;
     };
@@ -13,8 +18,8 @@ pub(super) fn add(document: &mut Value, public_url: &str, auth: RenderAuthMode) 
     let query_contract = "Only the literal query keys outputSchemas, preferredOutputContentFormat and includeTextCopy are accepted, each at most once in any order. Keys and values are matched without percent or form decoding; unknown keys, invalid or empty values, repeated keys and empty query segments are rejected with HTTP 400 before dispatch. Trusted-username ingress returns the audited identity_assertion_invalid envelope for malformed queries.";
     let output_schemas = json!({
         "in":"query", "name":"outputSchemas", "required":false,
-        "description":format!("MCP output-schema advertisement for this request. on adds each tool's outputSchema and output-schema metadata in action details; off or omitted omits that metadata. Evaluated independently on every request and bound to catalog cursors, never stored in session identity. It never changes identity, context, grants, credentials, tool names, inputs or results. {query_contract}"),
-        "schema":{"type":"string","enum":["on","off"],"default":"off"}
+        "description":format!("MCP output-schema advertisement for this request. on adds each tool's outputSchema and output-schema metadata in action details; off omits that metadata. Omission uses Broker [mcp].output_schemas (built-in off). Evaluated independently on every request and bound to catalog cursors, never stored in session identity. It never changes identity, context, grants, credentials, tool names, inputs or results. {query_contract}"),
+        "schema":{"type":"string","enum":["on","off"],"default":defaults.output_schemas.as_str()}
     });
     let preferred_output_content_format = json!({
         "in":"query", "name":"preferredOutputContentFormat", "required":false,
@@ -23,8 +28,8 @@ pub(super) fn add(document: &mut Value, public_url: &str, auth: RenderAuthMode) 
     });
     let include_text_copy = json!({
         "in":"query", "name":"includeTextCopy", "required":false,
-        "description":"Include a readable text copy beside each structured tool result. false emits top-level content: [] while retaining complete structuredContent, isError and metadata, including tool errors. Evaluated per request; does not affect session identity or discovery cursors. Only the literal values true and false are accepted.",
-        "schema":{"type":"boolean","enum":[true,false],"default":true}
+        "description":"Include a readable text copy beside each structured tool result. false emits top-level content: [] while retaining complete structuredContent, isError and metadata, including tool errors. Omission uses Broker [mcp].include_text_copy (built-in true). Evaluated per request; does not affect session identity or discovery cursors. Only the literal values true and false are accepted.",
+        "schema":{"type":"boolean","enum":[true,false],"default":defaults.include_text_copy}
     });
     let error = json!({"type":"object","required":["jsonrpc","error"],"properties":{"jsonrpc":{"const":"2.0"},"id":{"type":["string","integer","null"]},"error":{"type":"object","required":["code","message"],"properties":{"code":{"type":"integer"},"message":{"type":"string"},"data":{}}}}});
     let result = json!({"oneOf":[{"type":"object","required":["jsonrpc","id","result"],"properties":{"jsonrpc":{"const":"2.0"},"id":{"type":["string","integer"]},"result":{}}},error]});
@@ -115,6 +120,7 @@ mod tests {
             &mut document,
             "https://broker.example.com/mcp",
             RenderAuthMode::Include,
+            &McpConfig::default(),
         );
         assert_eq!(
             document["paths"]["/mcp"]["servers"][0]["url"],
@@ -247,12 +253,55 @@ mod tests {
         );
     }
     #[test]
+    fn documents_the_configured_defaults_in_both_views_and_auth_modes() {
+        use agent_access_core::mcp::OutputSchemas;
+        for output_schemas in [OutputSchemas::On, OutputSchemas::Off] {
+            for include_text_copy in [false, true] {
+                for auth in [RenderAuthMode::Include, RenderAuthMode::Omit] {
+                    let defaults = McpConfig {
+                        output_schemas,
+                        include_text_copy,
+                        ..McpConfig::default()
+                    };
+                    let mut document = json!({"paths":{},"components":{}});
+                    add(
+                        &mut document,
+                        "https://broker.example.com/mcp",
+                        auth,
+                        &defaults,
+                    );
+                    for path in ["/mcp", "/mcp/{service}"] {
+                        let parameters = document["paths"][path]["parameters"].as_array().unwrap();
+                        for (name, expected, key) in [
+                            (
+                                "outputSchemas",
+                                json!(output_schemas),
+                                "[mcp].output_schemas",
+                            ),
+                            (
+                                "includeTextCopy",
+                                json!(include_text_copy),
+                                "[mcp].include_text_copy",
+                            ),
+                        ] {
+                            let parameter = parameters.iter().find(|p| p["name"] == name).unwrap();
+                            assert_eq!(parameter["schema"]["default"], expected);
+                            assert!(parameter["description"].as_str().unwrap().contains(key));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn auth_omit_also_omits_mcp_bearer_requirement() {
         let mut document = json!({"paths":{},"components":{}});
         add(
             &mut document,
             "https://broker.example.com/mcp",
             RenderAuthMode::Omit,
+            &McpConfig::default(),
         );
         assert!(document["paths"]["/mcp"]["post"].get("security").is_none());
         assert!(

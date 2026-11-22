@@ -90,7 +90,7 @@ async fn startup_copy_mode_preserves_results_errors_files_and_discovery_in_each_
                     }
                     // Changing only the local defaults must not change the running
                     // process's schema selection or text-copy mode.
-                    std::fs::write(&config, format!("[service]\nurl={:?}\n[identity]\ndisabled=true\n[mcp]\noutput_schemas=\"off\"\ninclude_text_copy=true\n", broker.uri())).unwrap();
+                    std::fs::write(&config, format!("[service]\nurl={:?}\n[identity]\ndisabled=true\n[mcp]\noutput_schemas={:?}\ninclude_text_copy={configured}\n", broker.uri(), if configured { "off" } else { "on" })).unwrap();
                     let after_reload = process.request("tools/list", json!({})).await;
                     assert_eq!(after_reload["result"], tools["result"]);
                     let name = if service.is_some() {

@@ -1323,11 +1323,15 @@ explicitly configured default still occupies the config tier.
 | Insecure HTTP override | `--allow-insecure-broker-http` | (none) | `AGENT_ACCESS_ALLOW_INSECURE_BROKER_HTTP` (case-insensitive `true`) | off |
 | HTTPS certificate verification | (none) | `service.tls.verify_certificates` | (none) | `true` |
 | Additional HTTPS CA files | (none) | `service.tls.additional_ca_cert_files` | (none) | `[]` |
+| MCP output schemas | stdio `--output-schemas` | `mcp.output_schemas` | (none) | `"off"` |
+| MCP text copy | stdio `--include-text-copy` | `mcp.include_text_copy` | (none) | `true` |
 | Output content preference | stdio `--preferred-output-content-format` | `defaults.preferred_output_content_format` | `AGENT_ACCESS_PREFERRED_OUTPUT_CONTENT_FORMAT` | absent; Broker uses service preference, then Markdown |
 
 The optional client preference accepts `markdown`, `text`, `adf`, or `storage`.
 Config overrides environment. The stdio process flag overrides both and otherwise
-stdio reloads client settings per call. Typed/generic `--output-content-format`
+stdio reloads the content preference and connection/identity settings per call.
+The two client `[mcp]` defaults are resolved only at startup and remain fixed
+until the stdio process restarts. Typed/generic `--output-content-format`
 is a strict per-invocation selector, not another preference tier. A JSON send
 request's `preferredOutputContentFormat` overrides the ambient client preference.
 The client passes preferences to the Broker for authoritative selection and

@@ -50,8 +50,11 @@ adapter naming hooks derive imported names from accepted metadata. Readiness is
 computed before caller filtering and published with the immutable runtime,
 without a name table, extra discovery or credential lookup. HTTP routes share
 one endpoint and bind sessions to the view. Output-schema advertisement is a
-third, per-connection projection dimension, off by default (HTTP `outputSchemas`
-query evaluated per request, stdio `--output-schemas`): when selected, a tool
+third, per-connection projection dimension. HTTP resolves the `outputSchemas`
+query over Broker `[mcp].output_schemas` for each admitted request; stdio resolves
+`--output-schemas` over client `[mcp].output_schemas` once at startup. Both
+built-in defaults are off. Presentation-default reloads preserve HTTP sessions
+and admitted selections; stdio retains its selection until restart. When selected, a tool
 whose action declares result schemas advertises an `outputSchema` that core
 composes from the catalog entry for its transport and helpers carry core-owned
 schemas; otherwise none is composed. Readiness and publication budgets measure

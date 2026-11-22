@@ -109,12 +109,16 @@ segments are rejected without redirects. Supported query parameters are literal
 `includeTextCopy=true|false` and `outputSchemas=on|off`, each at most once in any
 order. Empty values or segments, malformed values, encoded aliases, repeated
 keys and unknown keys return HTTP 400. Trusted-username ingress retains its
-audited `identity_assertion_invalid` admission envelope. `includeTextCopy` defaults to `true`; `false` returns tool results
+audited `identity_assertion_invalid` admission envelope. An omitted
+`includeTextCopy` uses Broker `[mcp].include_text_copy` (built-in `true`);
+`false` returns tool results
 with `content: []` and complete `structuredContent`, preserving `isError` and
 `_meta`. All three settings apply per request, independently of the session.
-`outputSchemas` defaults to `off`; `on` advertises
+An omitted `outputSchemas` uses Broker `[mcp].output_schemas` (built-in `"off"`);
+`on` advertises
 [MCP output schemas](mcp.md#output-schemas). See
-[MCP text copies](mcp.md#tool-result-text-copies). Unknown, hidden,
+[MCP text copies](mcp.md#tool-result-text-copies). OpenAPI advertises the
+configured defaults from its admitted snapshot. Unknown, hidden,
 disabled, unready and gateway targets receive the same unavailable diagnostic
 after authentication. Session bindings include the selected view; cross-view
 POST/cancellation/DELETE cannot use or close the original session. Existing
