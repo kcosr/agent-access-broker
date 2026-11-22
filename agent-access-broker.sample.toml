@@ -52,6 +52,9 @@ environment = "development"
 # and service connections, including overlapping sessions after a restart.
 # [mcp]
 # enabled = true
+# output_schemas = "off" # on | off; per-request outputSchemas overrides this
+# include_text_copy = true # per-request includeTextCopy overrides this
+# These defaults affect HTTP MCP only, not the local stdio adapter.
 # public_url = "https://broker.example.com/mcp"
 # allowed_origins = [] # Native clients omit Origin; reject every present Origin.
 # operation_timeout_ms = 120000

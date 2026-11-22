@@ -11,7 +11,8 @@ use crate::{
 };
 use agent_access_core::{
     AttestedIdentityProof, BrokerTokenClass, ExecutionContext, IdentityContext, IdentityFailure,
-    IngressAdmission, InvocationControl, mcp::McpView,
+    IngressAdmission, InvocationControl,
+    mcp::{McpView, OutputSchemas},
 };
 use agent_access_provider::presentation::OutputContentFormat;
 use axum::{
@@ -120,6 +121,8 @@ struct EndpointState {
 #[derive(Clone)]
 struct Admitted {
     view: McpView,
+    /// This request's own selection: never session state, never authority.
+    output_schemas: OutputSchemas,
     preferred_output_content_format: Option<OutputContentFormat>,
     include_text_copy: bool,
     snapshot: Arc<RuntimeSnapshot>,
@@ -444,19 +447,24 @@ fn security_headers(
     Ok(Some(token.to_owned()))
 }
 
-// Match literal query keys and values without percent/form decoding. The two
-// independent controls may appear in either order, exactly once each.
+// Match literal query keys and values without percent/form decoding. The three
+// independent controls may appear in any order, exactly once each.
 struct QueryOptions {
+    output_schemas: Option<OutputSchemas>,
     preferred_output_content_format: Option<OutputContentFormat>,
-    include_text_copy: bool,
+    include_text_copy: Option<bool>,
 }
 fn query_options(query: Option<&str>) -> Result<QueryOptions, ()> {
+    let mut output_schemas = None;
     let mut preference = None;
     let mut include_text_copy = None;
     if let Some(query) = query {
         for field in query.split('&') {
             let (key, value) = field.split_once('=').ok_or(())?;
             match key {
+                "outputSchemas" if output_schemas.is_none() => {
+                    output_schemas = Some(OutputSchemas::parse(value).ok_or(())?);
+                }
                 "preferredOutputContentFormat" if preference.is_none() => {
                     preference = Some(match value {
                         "markdown" => OutputContentFormat::Markdown,
@@ -478,8 +486,9 @@ fn query_options(query: Option<&str>) -> Result<QueryOptions, ()> {
         }
     }
     Ok(QueryOptions {
+        output_schemas,
         preferred_output_content_format: preference,
-        include_text_copy: include_text_copy.unwrap_or(true),
+        include_text_copy,
     })
 }
 
@@ -1019,8 +1028,11 @@ pub(crate) async fn handle(
     );
     let mut admitted = Admitted {
         view,
+        output_schemas: options.output_schemas.unwrap_or(config.output_schemas),
         preferred_output_content_format: options.preferred_output_content_format,
-        include_text_copy: options.include_text_copy,
+        include_text_copy: options
+            .include_text_copy
+            .unwrap_or(config.include_text_copy),
         snapshot: snapshot.clone(),
         http_span: tracing::Span::current(),
         cancellation: Arc::new(ExplicitCancellation::default()),
@@ -1471,4 +1483,64 @@ fn failure_response(error: agent_access_core::IdentityFailure) -> Response {
         StatusCode::from_u16(error.reason_code().http_status()).unwrap(),
         error.message(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn endpoint_query_composes_each_literal_option_once() {
+        assert_eq!(query_options(None).unwrap().output_schemas, None);
+        assert_eq!(
+            query_options(Some("outputSchemas=on"))
+                .unwrap()
+                .output_schemas,
+            Some(OutputSchemas::On)
+        );
+        assert_eq!(
+            query_options(Some("outputSchemas=off"))
+                .unwrap()
+                .output_schemas,
+            Some(OutputSchemas::Off)
+        );
+        let defaults = query_options(None).unwrap();
+        assert_eq!(defaults.include_text_copy, None);
+        assert_eq!(defaults.preferred_output_content_format, None);
+        for query in [
+            "outputSchemas=on&includeTextCopy=false&preferredOutputContentFormat=text",
+            "includeTextCopy=false&preferredOutputContentFormat=text&outputSchemas=on",
+            "preferredOutputContentFormat=text&outputSchemas=on&includeTextCopy=false",
+            "outputSchemas=on&preferredOutputContentFormat=text&includeTextCopy=false",
+            "preferredOutputContentFormat=text&includeTextCopy=false&outputSchemas=on",
+            "includeTextCopy=false&outputSchemas=on&preferredOutputContentFormat=text",
+        ] {
+            let options = query_options(Some(query)).unwrap();
+            assert_eq!(options.output_schemas, Some(OutputSchemas::On));
+            assert_eq!(options.include_text_copy, Some(false));
+            assert_eq!(
+                options.preferred_output_content_format,
+                Some(OutputContentFormat::Text)
+            );
+        }
+        for rejected in [
+            "",
+            "outputSchemas",
+            "outputSchemas=",
+            "outputSchemas=ON",
+            "outputSchemas=o%6E",
+            "outputSchemas=on&outputSchemas=on",
+            "outputSchemas=off&outputSchemas=on",
+            "outputSchemas=on&",
+            "&outputSchemas=on",
+            "outputSchemas=on;other=1",
+            "outputSchemas=on&other=1",
+            "other=1",
+            "outputschemas=on",
+            " outputSchemas=on",
+            "outputSchemas=on ",
+        ] {
+            assert!(query_options(Some(rejected)).is_err(), "{rejected:?}");
+        }
+    }
 }

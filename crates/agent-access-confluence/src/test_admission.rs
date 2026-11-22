@@ -129,6 +129,6 @@ impl ConfluenceProvider {
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
         let request = self.admit_fixture(request).await?;
-        self.invoke(request).await
+        self.invoke_checked(request).await
     }
 }

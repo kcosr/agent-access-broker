@@ -1,0 +1,526 @@
+{
+  "definitions": {
+    "buildSelector": {
+      "type": "string",
+      "enum": ["lastBuild", "lastCompletedBuild", "lastFailedBuild", "lastSuccessfulBuild", "lastStableBuild", "lastUnstableBuild", "lastUnsuccessfulBuild"],
+      "description": "Present when a permalink selected the build"
+    },
+    "missingSelector": {
+      "type": "string",
+      "enum": ["lastBuild", "lastCompletedBuild", "lastFailedBuild", "lastSuccessfulBuild", "lastStableBuild", "lastUnstableBuild", "lastUnsuccessfulBuild"],
+      "description": "resource_not_found: the job has no build for this permalink"
+    },
+    "webUrl": {"type": "string", "description": "Present only when verified against the controller"},
+    "jenkinsString": {"description": "Jenkins value, usually a string or null"},
+    "jenkinsBoolean": {"description": "Jenkins value, usually a boolean or null"},
+    "jenkinsInteger": {"description": "Jenkins value, usually an integer or null"},
+    "jenkinsEpochMillis": {"description": "Jenkins value, usually epoch milliseconds"},
+    "jenkinsMillis": {"description": "Jenkins value, usually milliseconds"},
+    "jenkinsSeconds": {"description": "Jenkins value, usually seconds"},
+    "jenkinsResult": {"description": "Jenkins value, usually a string; null while building"},
+    "scalarString": {"type": ["string", "number", "boolean", "null"], "description": "Usually a string"},
+    "scalarInteger": {"type": ["string", "number", "boolean", "null"], "description": "Usually an integer"},
+    "scalarEpochMillis": {"type": ["string", "number", "boolean", "null"], "description": "Usually epoch milliseconds"},
+    "scalarMillis": {"type": ["string", "number", "boolean", "null"], "description": "Usually milliseconds"},
+    "scalarSeconds": {"type": ["string", "number", "boolean", "null"], "description": "Usually seconds"},
+    "downloadSize": {"type": ["integer", "null"], "description": "Content-Length; null when the controller sent none"},
+    "nodeError": {
+      "type": "object",
+      "properties": {"message": {"$ref": "#/definitions/scalarString"}, "type": {"$ref": "#/definitions/scalarString"}}
+    },
+    "nodeIds": {"type": "array", "items": {"type": "string"}},
+    "pipelineNode": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "string"},
+        "name": {"type": "string"},
+        "status": {"type": "string"},
+        "startTimeMillis": {"$ref": "#/definitions/scalarEpochMillis"},
+        "durationMillis": {"$ref": "#/definitions/scalarMillis"},
+        "pauseDurationMillis": {"$ref": "#/definitions/scalarMillis"},
+        "error": {"$ref": "#/definitions/nodeError"},
+        "parentNodes": {"$ref": "#/definitions/nodeIds"}
+      },
+      "required": ["id", "name", "status"]
+    },
+    "testCase": {
+      "type": "object",
+      "properties": {
+        "name": {"type": "string"},
+        "suite": {"type": "string"},
+        "className": {"$ref": "#/definitions/scalarString"},
+        "status": {"$ref": "#/definitions/scalarString"},
+        "duration": {"$ref": "#/definitions/scalarSeconds"},
+        "age": {"$ref": "#/definitions/scalarInteger"},
+        "failedSince": {"$ref": "#/definitions/scalarInteger"},
+        "errorDetails": {"$ref": "#/definitions/scalarString"},
+        "errorStackTrace": {"$ref": "#/definitions/scalarString"},
+        "skippedMessage": {"$ref": "#/definitions/scalarString"},
+        "stdout": {"$ref": "#/definitions/scalarString"},
+        "stderr": {"$ref": "#/definitions/scalarString"}
+      },
+      "required": ["name", "suite"]
+    },
+    "inputCategory": {
+      "type": "string",
+      "enum": ["unknown_field", "locator_missing", "locator_conflict", "controller_not_configured", "controller_not_alias", "job_is_url", "job_invalid", "url_invalid", "url_not_configured", "url_ambiguous", "url_no_job", "url_blue_ocean", "url_queue_item", "build_missing", "build_conflict", "field_missing", "value_invalid", "option_conflict", "job_is_container"],
+      "description": "input_invalid: what is wrong with the inputs"
+    },
+    "inputField": {"type": "string", "description": "input_invalid: the input concerned, when known"},
+    "containerKind": {"type": "string", "description": "job_is_container: the Jenkins class"},
+    "jobError": {
+      "type": "object",
+      "properties": {
+        "inputCategory": {"$ref": "#/definitions/inputCategory"},
+        "field": {"$ref": "#/definitions/inputField"},
+        "kind": {"$ref": "#/definitions/containerKind"}
+      },
+      "required": ["inputCategory"]
+    },
+    "buildError": {
+      "type": "object",
+      "properties": {
+        "inputCategory": {"$ref": "#/definitions/inputCategory"},
+        "field": {"$ref": "#/definitions/inputField"},
+        "kind": {"$ref": "#/definitions/containerKind"},
+        "buildSelector": {"$ref": "#/definitions/missingSelector"}
+      }
+    }
+  },
+  "actions": {
+    "job.view": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "controller": {"type": "string"},
+          "job": {"type": "string"},
+          "kind": {"description": "Jenkins value, usually the class name"},
+          "displayName": {"$ref": "#/definitions/jenkinsString"},
+          "description": {"$ref": "#/definitions/jenkinsString"},
+          "buildable": {"$ref": "#/definitions/jenkinsBoolean"},
+          "inQueue": {"$ref": "#/definitions/jenkinsBoolean"},
+          "lastBuild": {"description": "Jenkins value, usually the last build number; null when none"},
+          "parameters": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {"name": {"$ref": "#/definitions/jenkinsString"}, "type": {"$ref": "#/definitions/jenkinsString"}},
+              "required": ["name", "type"]
+            }
+          },
+          "url": {"$ref": "#/definitions/webUrl"}
+        },
+        "required": ["controller", "job", "kind", "displayName", "description", "buildable", "inQueue", "lastBuild", "parameters"]
+      },
+      "error": {"$ref": "#/definitions/jobError"}
+    },
+    "job.list": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "controller": {"type": "string"},
+                "job": {"type": "string"},
+                "resource": {"type": "string"},
+                "name": {"type": "string"},
+                "displayName": {"type": "string"},
+                "kind": {"type": "string", "enum": ["job", "container"]},
+                "previewTruncated": {"const": true, "description": "Present when displayName was cut to 4096 bytes"},
+                "webUrl": {"$ref": "#/definitions/webUrl"}
+              },
+              "required": ["controller", "job", "resource", "name", "displayName", "kind"]
+            }
+          },
+          "count": {"type": "integer", "description": "Items released on this page"},
+          "maxResults": {"type": "integer"},
+          "scanStatus": {
+            "type": "string",
+            "enum": ["more", "scan_budget", "exhausted", "upstream_window"],
+            "description": "more/scan_budget: continue with nextPageToken; exhausted: done; upstream_window: incomplete, cannot continue"
+          },
+          "nextPageToken": {"type": "string", "description": "Present for more/scan_budget; pass as pageToken with unchanged inputs"}
+        },
+        "required": ["items", "count", "maxResults", "scanStatus"]
+      },
+      "error": {
+        "type": "object",
+        "properties": {"inputCategory": {"const": "value_invalid", "description": "Only when file parts were supplied; other input errors carry no result"}},
+        "required": ["inputCategory"]
+      }
+    },
+    "build.list": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "controller": {"type": "string"},
+          "job": {"type": "string"},
+          "builds": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "number": {"$ref": "#/definitions/jenkinsInteger"},
+                "result": {"$ref": "#/definitions/jenkinsResult"},
+                "building": {"$ref": "#/definitions/jenkinsBoolean"},
+                "timestamp": {"$ref": "#/definitions/jenkinsEpochMillis"},
+                "duration": {"$ref": "#/definitions/jenkinsMillis"},
+                "url": {"$ref": "#/definitions/webUrl"}
+              },
+              "required": ["number", "result", "building", "timestamp", "duration"]
+            }
+          }
+        },
+        "required": ["controller", "job", "builds"]
+      },
+      "error": {"$ref": "#/definitions/jobError"}
+    },
+    "build.view": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "controller": {"type": "string"},
+          "job": {"type": "string"},
+          "number": {"type": "integer"},
+          "buildNumber": {"type": "integer"},
+          "buildSelector": {"$ref": "#/definitions/buildSelector"},
+          "displayName": {"$ref": "#/definitions/jenkinsString"},
+          "result": {"$ref": "#/definitions/jenkinsResult"},
+          "building": {"$ref": "#/definitions/jenkinsBoolean"},
+          "timestamp": {"$ref": "#/definitions/jenkinsEpochMillis"},
+          "duration": {"$ref": "#/definitions/jenkinsMillis"},
+          "estimatedDuration": {"$ref": "#/definitions/jenkinsMillis"},
+          "url": {"$ref": "#/definitions/webUrl"}
+        },
+        "required": ["controller", "job", "number", "buildNumber", "displayName", "result", "building", "timestamp", "duration", "estimatedDuration"]
+      },
+      "error": {"$ref": "#/definitions/buildError"}
+    },
+    "build.log.read": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "controller": {"type": "string"},
+          "job": {"type": "string"},
+          "buildNumber": {"type": "integer"},
+          "buildSelector": {"$ref": "#/definitions/buildSelector"},
+          "mode": {"type": "string", "enum": ["head", "tail", "search"]},
+          "text": {"type": "string", "description": "head and tail modes"},
+          "leadingTextOmitted": {"type": "boolean", "description": "head and tail modes: text starts after the log start"},
+          "matches": {
+            "type": "array",
+            "description": "search mode",
+            "items": {
+              "type": "object",
+              "properties": {
+                "text": {"type": "string"},
+                "sourceStart": {"type": "integer"},
+                "sourceEnd": {"type": "integer"},
+                "matchStart": {"type": "integer"},
+                "matchEnd": {"type": "integer"},
+                "contextBeforeClipped": {"type": "boolean"},
+                "contextAfterClipped": {"type": "boolean"}
+              },
+              "required": ["text", "sourceStart", "sourceEnd", "matchStart", "matchEnd", "contextBeforeClipped", "contextAfterClipped"]
+            }
+          },
+          "sourceStart": {"type": "integer", "description": "Byte offset in the plain console response"},
+          "sourceEnd": {"type": "integer"},
+          "scannedBytes": {"type": "integer"},
+          "reachedEnd": {"type": "boolean"},
+          "stopReason": {"type": "string", "enum": ["eof", "pending_text", "scan_limit", "output_limit", "match_limit"]},
+          "nextCursor": {"type": ["string", "null"], "description": "head/search: pass as cursor with unchanged inputs; null when there is no continuation"},
+          "pendingUtf8Bytes": {"type": "integer"},
+          "maxLogScanBytes": {"type": "integer"}
+        },
+        "required": ["controller", "job", "buildNumber", "mode", "sourceStart", "sourceEnd", "scannedBytes", "reachedEnd", "stopReason", "nextCursor", "pendingUtf8Bytes", "maxLogScanBytes"]
+      },
+      "error": {
+        "type": "object",
+        "properties": {
+          "inputCategory": {"$ref": "#/definitions/inputCategory"},
+          "field": {"$ref": "#/definitions/inputField"},
+          "kind": {"$ref": "#/definitions/containerKind"},
+          "buildSelector": {"$ref": "#/definitions/missingSelector"},
+          "stopReason": {"const": "scan_limit", "description": "cloudbees_ci_log_scan_exceeded: a tail read hit the scan ceiling before the log end"},
+          "scannedBytes": {"type": "integer"},
+          "maxLogScanBytes": {"type": "integer"},
+          "reachedEnd": {"const": false}
+        }
+      }
+    },
+    "build.log.download": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "controller": {"type": "string"},
+          "job": {"type": "string"},
+          "buildNumber": {"type": "integer"},
+          "buildSelector": {"$ref": "#/definitions/buildSelector"},
+          "fileName": {"type": "string"},
+          "contentType": {"const": "text/plain"},
+          "size": {"$ref": "#/definitions/downloadSize"}
+        },
+        "required": ["controller", "job", "buildNumber", "fileName", "contentType", "size"]
+      },
+      "error": {"$ref": "#/definitions/buildError"}
+    },
+    "build.artifact.list": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "controller": {"type": "string"},
+          "job": {"type": "string"},
+          "buildNumber": {"type": "integer"},
+          "buildSelector": {"$ref": "#/definitions/buildSelector"},
+          "artifacts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {"artifactPath": {"type": "string"}, "fileName": {"type": "string"}},
+              "required": ["artifactPath", "fileName"]
+            }
+          }
+        },
+        "required": ["controller", "job", "buildNumber", "artifacts"]
+      },
+      "error": {"$ref": "#/definitions/buildError"}
+    },
+    "build.artifact.download": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "controller": {"type": "string"},
+          "job": {"type": "string"},
+          "buildNumber": {"type": "integer"},
+          "buildSelector": {"$ref": "#/definitions/buildSelector"},
+          "artifactPath": {"type": "string"},
+          "fileName": {"type": "string"},
+          "contentType": {"type": "string"},
+          "size": {"$ref": "#/definitions/downloadSize"}
+        },
+        "required": ["controller", "job", "buildNumber", "artifactPath", "fileName", "contentType", "size"]
+      },
+      "error": {"$ref": "#/definitions/buildError"}
+    },
+    "build.tests.view": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "controller": {"type": "string"},
+          "job": {"type": "string"},
+          "buildNumber": {"type": "integer"},
+          "buildSelector": {"$ref": "#/definitions/buildSelector"},
+          "reportAvailable": {"type": "boolean", "description": "false: the build has no test report; the counts are present only when true, null when the report omits one"},
+          "totalCount": {"$ref": "#/definitions/jenkinsInteger"},
+          "failCount": {"$ref": "#/definitions/jenkinsInteger"},
+          "skipCount": {"$ref": "#/definitions/jenkinsInteger"},
+          "passCount": {"$ref": "#/definitions/jenkinsInteger"},
+          "duration": {"$ref": "#/definitions/jenkinsSeconds"}
+        },
+        "required": ["controller", "job", "buildNumber", "reportAvailable"]
+      },
+      "error": {"$ref": "#/definitions/buildError"}
+    },
+    "build.tests.details": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "controller": {"type": "string"},
+          "job": {"type": "string"},
+          "buildNumber": {"type": "integer"},
+          "buildSelector": {"$ref": "#/definitions/buildSelector"},
+          "report": {
+            "type": "object",
+            "properties": {
+              "totalCount": {"$ref": "#/definitions/scalarInteger"},
+              "failCount": {"$ref": "#/definitions/scalarInteger"},
+              "skipCount": {"$ref": "#/definitions/scalarInteger"},
+              "passCount": {"$ref": "#/definitions/scalarInteger"},
+              "duration": {"$ref": "#/definitions/scalarSeconds"},
+              "truncated": {"type": "boolean", "description": "Cases were omitted beyond maxResults"},
+              "returnedCount": {"type": "integer"},
+              "returnedFailedCount": {"type": "integer"},
+              "cases": {"type": "array", "description": "FAILED and REGRESSION cases first, then report order", "items": {"$ref": "#/definitions/testCase"}}
+            },
+            "required": ["truncated", "returnedCount", "returnedFailedCount", "cases"]
+          }
+        },
+        "required": ["controller", "job", "buildNumber", "report"]
+      },
+      "error": {
+        "type": "object",
+        "properties": {
+          "inputCategory": {"$ref": "#/definitions/inputCategory"},
+          "field": {"$ref": "#/definitions/inputField"},
+          "kind": {"$ref": "#/definitions/containerKind"},
+          "buildSelector": {"$ref": "#/definitions/missingSelector"},
+          "downloadAction": {"const": "build.tests.download", "description": "attachment_size_denied: the report is too large to preview; download it instead"}
+        }
+      }
+    },
+    "build.tests.download": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "controller": {"type": "string"},
+          "job": {"type": "string"},
+          "buildNumber": {"type": "integer"},
+          "buildSelector": {"$ref": "#/definitions/buildSelector"},
+          "fileName": {"type": "string"},
+          "contentType": {"const": "application/json"},
+          "size": {"$ref": "#/definitions/downloadSize"}
+        },
+        "required": ["controller", "job", "buildNumber", "fileName", "contentType", "size"]
+      },
+      "error": {"$ref": "#/definitions/buildError"}
+    },
+    "build.pipeline.view": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "controller": {"type": "string"},
+          "job": {"type": "string"},
+          "buildNumber": {"type": "integer"},
+          "buildSelector": {"$ref": "#/definitions/buildSelector"},
+          "pipeline": {
+            "type": "object",
+            "properties": {
+              "id": {"type": "string", "description": "Run ID; not necessarily the build number"},
+              "name": {"$ref": "#/definitions/scalarString"},
+              "status": {"type": "string"},
+              "startTimeMillis": {"$ref": "#/definitions/scalarEpochMillis"},
+              "endTimeMillis": {"$ref": "#/definitions/scalarEpochMillis"},
+              "durationMillis": {"$ref": "#/definitions/scalarMillis"},
+              "pauseDurationMillis": {"$ref": "#/definitions/scalarMillis"},
+              "stages": {"type": "array", "items": {"$ref": "#/definitions/pipelineNode"}}
+            },
+            "required": ["id", "status", "stages"]
+          }
+        },
+        "required": ["controller", "job", "buildNumber", "pipeline"]
+      },
+      "error": {"$ref": "#/definitions/buildError"}
+    },
+    "build.pipeline.node.view": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "controller": {"type": "string"},
+          "job": {"type": "string"},
+          "buildNumber": {"type": "integer"},
+          "buildSelector": {"$ref": "#/definitions/buildSelector"},
+          "node": {
+            "type": "object",
+            "properties": {
+              "id": {"type": "string"},
+              "name": {"type": "string"},
+              "status": {"type": "string"},
+              "startTimeMillis": {"$ref": "#/definitions/scalarEpochMillis"},
+              "durationMillis": {"$ref": "#/definitions/scalarMillis"},
+              "pauseDurationMillis": {"$ref": "#/definitions/scalarMillis"},
+              "error": {"$ref": "#/definitions/nodeError"},
+              "parentNodes": {"$ref": "#/definitions/nodeIds"},
+              "stageFlowNodes": {"type": "array", "items": {"$ref": "#/definitions/pipelineNode"}}
+            },
+            "required": ["id", "name", "status"]
+          }
+        },
+        "required": ["controller", "job", "buildNumber", "node"]
+      },
+      "error": {"$ref": "#/definitions/buildError"}
+    },
+    "build.pipeline.node.log.read": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "controller": {"type": "string"},
+          "job": {"type": "string"},
+          "buildNumber": {"type": "integer"},
+          "buildSelector": {"$ref": "#/definitions/buildSelector"},
+          "log": {
+            "type": "object",
+            "properties": {
+              "nodeId": {"type": "string"},
+              "nodeStatus": {"type": "string"},
+              "length": {"type": "integer"},
+              "hasMore": {"type": "boolean"},
+              "text": {"type": "string"}
+            },
+            "required": ["nodeId", "nodeStatus", "length", "hasMore", "text"]
+          }
+        },
+        "required": ["controller", "job", "buildNumber", "log"]
+      },
+      "error": {"$ref": "#/definitions/buildError"}
+    },
+    "build.pending-inputs.list": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "controller": {"type": "string"},
+          "job": {"type": "string"},
+          "buildNumber": {"type": "integer"},
+          "buildSelector": {"$ref": "#/definitions/buildSelector"},
+          "inputs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {"id": {"type": "string"}, "message": {"type": "string"}},
+              "required": ["id", "message"]
+            }
+          }
+        },
+        "required": ["controller", "job", "buildNumber", "inputs"]
+      },
+      "error": {"$ref": "#/definitions/buildError"}
+    },
+    "queue.view": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "controller": {"type": "string"},
+          "job": {"type": "string"},
+          "queueId": {"type": "integer"},
+          "blocked": {"$ref": "#/definitions/jenkinsBoolean"},
+          "buildable": {"$ref": "#/definitions/jenkinsBoolean"},
+          "cancelled": {"$ref": "#/definitions/jenkinsBoolean"},
+          "stuck": {"$ref": "#/definitions/jenkinsBoolean"},
+          "why": {"$ref": "#/definitions/jenkinsString"},
+          "buildNumber": {"description": "Jenkins value, usually the started build number; null until it starts"}
+        },
+        "required": ["controller", "job", "queueId", "blocked", "buildable", "cancelled", "stuck", "why", "buildNumber"]
+      },
+      "error": {"$ref": "#/definitions/jobError"}
+    },
+    "build.trigger": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "controller": {"type": "string"},
+          "job": {"type": "string"},
+          "queueId": {"type": "integer", "description": "Present when applied; may name an already queued item"},
+          "queueUrl": {"type": "string", "description": "Present when applied"},
+          "mutationStatus": {
+            "type": "string",
+            "enum": ["applied", "applied_unverified"],
+            "description": "applied_unverified: no usable queue Location; check job.view or build.list before triggering again"
+          },
+          "retrySafe": {"const": false},
+          "verificationStage": {"const": "mutation_response", "description": "Present when applied_unverified"},
+          "safeLocators": {
+            "type": "object",
+            "description": "Present when applied_unverified",
+            "properties": {"controller": {"type": "string"}, "job": {"type": "string"}},
+            "required": ["controller", "job"]
+          }
+        },
+        "required": ["controller", "job", "mutationStatus", "retrySafe"]
+      },
+      "error": {"$ref": "#/definitions/jobError"}
+    }
+  }
+}

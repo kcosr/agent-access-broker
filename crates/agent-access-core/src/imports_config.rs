@@ -448,6 +448,12 @@ mod tests {
         fn scoped_mcp_name(&self, _: &ImportedActionDefinition) -> Result<String, String> {
             unreachable!("configuration validation never names actions")
         }
+        fn result_schemas(
+            &self,
+            _: &ImportedActionDefinition,
+        ) -> Result<agent_access_provider::ActionResultSchemas, String> {
+            unreachable!("configuration validation never describes results")
+        }
         fn build(
             &self,
             _: &ImportedServiceDefinition,

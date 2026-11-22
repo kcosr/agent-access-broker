@@ -26,8 +26,11 @@ configured ingress supplies an authenticated identity.
 
 `mcp serve` runs a local stdio MCP adapter using this client's broker settings.
 Add `--service monitoring` to expose only that canonical service ID, using raw
-provider names. The selection is immutable for the subprocess, including after
-configuration/token rotation. One service is accepted; repeated values, wildcards,
+provider names. Add `--output-schemas on` to advertise
+[MCP output schemas](mcp.md#output-schemas); the option requires `on` or `off`
+and overrides client `[mcp].output_schemas` (built-in `"off"`), which omits
+MCP output-schema metadata. The resolved selection is immutable for the
+subprocess, including after configuration/token rotation. One service is accepted; repeated values, wildcards,
 comma-separated lists and display names are rejected. Initialization does not
 probe the broker; listing and calls require current visibility and readiness.
 The full caller catalog must fit the existing 16 MiB decode limit, even for a
@@ -36,8 +39,10 @@ small selected service; the complete tool projection is bounded at 64 MiB.
 Add `--include-text-copy=false` for clients that read `structuredContent`:
 all tool results then return `content: []` with the complete structured result,
 error flag and metadata. The startup option accepts literal `true` or `false`,
-defaults to `true`, and stays fixed for the process. It has no TOML or environment
-setting and is independent of `--preferred-output-content-format`.
+overrides client `[mcp].include_text_copy` (built-in `true`), and stays fixed
+for the process. Neither MCP toggle has an environment override or inherits a
+Broker setting. Both are independent of `--preferred-output-content-format`,
+whose existing client preference and server resolution are unchanged.
 
 Running the HTTP broker service is the job of the separate
 `agent-access-broker` binary. See [local MCP](mcp.md) for client configuration,
@@ -402,7 +407,9 @@ keeps their intersection. A second-fetch failure fails the command.
 with `service` added. A fresh caller-visible runtime catalog
 supplies IO, presentation, and sensitive-field metadata. Actions with an available
 aggregate MCP name also include `mcpTool` containing the exact name and argument
-schema. The top-level `inputSchema` describes
+schema, plus the stdio [`outputSchema`](mcp.md#output-schemas) in place of the
+catalog's `resultSchemas` when the action declares result schemas, independently
+of any MCP connection's output-schema selection. The top-level `inputSchema` describes
 raw broker inputs; `mcpTool.inputSchema` describes the local MCP wrapper.
 Invoke actions with an unavailable aggregate name omit `mcpTool` and include
 `mcpToolUnavailable`: `name_conflict`, `name_too_long`, or `reserved_name`.
@@ -1316,11 +1323,15 @@ explicitly configured default still occupies the config tier.
 | Insecure HTTP override | `--allow-insecure-broker-http` | (none) | `AGENT_ACCESS_ALLOW_INSECURE_BROKER_HTTP` (case-insensitive `true`) | off |
 | HTTPS certificate verification | (none) | `service.tls.verify_certificates` | (none) | `true` |
 | Additional HTTPS CA files | (none) | `service.tls.additional_ca_cert_files` | (none) | `[]` |
+| MCP output schemas | stdio `--output-schemas` | `mcp.output_schemas` | (none) | `"off"` |
+| MCP text copy | stdio `--include-text-copy` | `mcp.include_text_copy` | (none) | `true` |
 | Output content preference | stdio `--preferred-output-content-format` | `defaults.preferred_output_content_format` | `AGENT_ACCESS_PREFERRED_OUTPUT_CONTENT_FORMAT` | absent; Broker uses service preference, then Markdown |
 
 The optional client preference accepts `markdown`, `text`, `adf`, or `storage`.
 Config overrides environment. The stdio process flag overrides both and otherwise
-stdio reloads client settings per call. Typed/generic `--output-content-format`
+stdio reloads the content preference and connection/identity settings per call.
+The two client `[mcp]` defaults are resolved only at startup and remain fixed
+until the stdio process restarts. Typed/generic `--output-content-format`
 is a strict per-invocation selector, not another preference tier. A JSON send
 request's `preferredOutputContentFormat` overrides the ambient client preference.
 The client passes preferences to the Broker for authoritative selection and

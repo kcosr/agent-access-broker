@@ -24,6 +24,7 @@ mod download;
 mod manifest;
 mod mapping;
 mod response;
+mod result_schema;
 mod scopes;
 
 use agent_access_core::CommandImportConfig;
@@ -37,9 +38,9 @@ use agent_access_core::imports::{
 };
 use agent_access_core::imports::{ImportedCredentialContract, ImportedCredentialRequirement};
 use agent_access_provider::{
-    AuditInput, BuildContext, ExecutionCredential, MutationReceipt, Provider, ProviderBuildError,
-    ProviderCredentialVerification, ProviderError, ProviderInvocation, ProviderResult, ReasonCode,
-    ScopeRequest, ScopeResolution,
+    ActionResultSchemas, AuditInput, BuildContext, ExecutionCredential, MutationReceipt, Provider,
+    ProviderBuildError, ProviderCredentialVerification, ProviderError, ProviderInvocation,
+    ProviderResult, ReasonCode, ScopeRequest, ScopeResolution,
 };
 use async_trait::async_trait;
 use mapping::CompiledAction;
@@ -160,6 +161,14 @@ impl ImportedAdapter for CommandAdapter {
     }
     fn scoped_mcp_name(&self, action: &ImportedActionDefinition) -> Result<String, String> {
         mapping::source_name(action).map(str::to_owned)
+    }
+    /// One wrapper for every JSON action and one for every download,
+    /// whatever output schema the manifest declares.
+    fn result_schemas(
+        &self,
+        action: &ImportedActionDefinition,
+    ) -> Result<ActionResultSchemas, String> {
+        Ok(result_schema::result_schemas(action.download))
     }
     fn build(
         &self,

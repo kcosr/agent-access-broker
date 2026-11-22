@@ -66,7 +66,7 @@ async fn every_body_mutation_success_has_a_completed_presentation_recovery_recei
         let provider =
             JiraProvider::with_backend(jira_config(), ProviderLimits::default(), upstream.clone());
         let response = provider
-            .invoke(per_user_invocation(action, inputs(action), vec![]))
+            .invoke_checked(per_user_invocation(action, inputs(action), vec![]))
             .await
             .unwrap_or_else(|error| panic!("{action}: {error:?}"));
         assert_eq!(
@@ -104,6 +104,11 @@ async fn every_body_mutation_success_has_a_completed_presentation_recovery_recei
                 format.as_str(),
                 "{action}"
             );
+            crate::result_conformance::assert_selected_conforms(
+                descriptor.action(action).unwrap(),
+                format,
+                &result,
+            );
         }
         // A later presentation failure must not consume the independent receipt.
         let resolved = resolve_response_options(
@@ -132,7 +137,7 @@ async fn body_read_successes_do_not_claim_mutation_completion() {
         let provider =
             JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend());
         let response = provider
-            .invoke(per_user_invocation(action, inputs, vec![]))
+            .invoke_checked(per_user_invocation(action, inputs, vec![]))
             .await
             .unwrap();
         assert!(response.presentation_recovery_receipt.is_none(), "{action}");

@@ -76,10 +76,10 @@ async fn issue_type_list_rejects_bad_inputs_and_scope_before_dispatch() {
             provider.local_scopes("issue_type.list", &inputs).is_err(),
             "{inputs}"
         );
-        assert!(provider.invoke(invocation(inputs)).await.is_err());
+        assert!(provider.invoke_checked(invocation(inputs)).await.is_err());
     }
     let error = provider
-        .invoke(invocation(json!({"project":"OTHER"})))
+        .invoke_checked(invocation(json!({"project":"OTHER"})))
         .await
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
@@ -105,7 +105,7 @@ async fn issue_type_list_uses_execution_credential_and_preserves_copyable_ids_wi
         request = InvocationBuilder::from(request)
             .execution(ExecutionAccess::Static(credential.clone()))
             .build();
-        let response = provider.invoke(request).await.unwrap();
+        let response = provider.invoke_checked(request).await.unwrap();
         assert_eq!(
             response.result,
             json!({
@@ -163,7 +163,7 @@ async fn issue_type_list_reports_last_and_empty_pages_explicitly() {
         }
         *backend.issue_type_page.lock().unwrap() = Some(page);
         let response = provider
-            .invoke(invocation(
+            .invoke_checked(invocation(
                 json!({"project":"PROJ","startAt":start_at,"maxResults":1}),
             ))
             .await
@@ -184,7 +184,7 @@ async fn issue_type_list_validates_backend_page_and_result_budget() {
     malformed.issue_types[0].id = "bad-id-sentinel".to_string();
     *backend.issue_type_page.lock().unwrap() = Some(malformed);
     let error = provider
-        .invoke(invocation(json!({"project":"PROJ"})))
+        .invoke_checked(invocation(json!({"project":"PROJ"})))
         .await
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
@@ -197,7 +197,7 @@ async fn issue_type_list_validates_backend_page_and_result_budget() {
         backend,
     );
     let error = provider
-        .invoke(invocation(json!({"project":"PROJ"})))
+        .invoke_checked(invocation(json!({"project":"PROJ"})))
         .await
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);

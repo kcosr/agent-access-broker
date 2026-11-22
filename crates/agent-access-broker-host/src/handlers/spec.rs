@@ -217,7 +217,7 @@ async fn spec_document_response(
                 && (access.can_agent_invoke || access.visibility_all)
                 && let Some(url) = mcp.public_url.as_deref()
             {
-                super::mcp_openapi::add(&mut document, url, auth);
+                super::mcp_openapi::add(&mut document, url, auth, mcp);
             }
             document
         }

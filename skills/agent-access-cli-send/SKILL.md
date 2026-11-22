@@ -162,6 +162,11 @@ whether dispatch occurred. File output changes no grants, bounds or pagination.
 
 ## Results, errors and retries
 
+Use `spec openapi` response schemas to locate delivered action fields, including
+selected `{format,value}` bodies. Catalog `resultSchemas` describe the raw
+provider payload before presentation; a declared field may be absent for a
+given request, and undeclared fields can appear.
+
 Invoke results keep the Broker envelope with `decision`, `reasonCode`, `result`,
 `error` and request IDs when present; HTTP routes have their documented shapes.
 Imported payloads may sit under `result.upstreamMcp`, `result.upstreamHttp` or

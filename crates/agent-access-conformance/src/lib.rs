@@ -17,16 +17,16 @@ use agent_access_provider::presentation::{
     RenderBudget, RenderError, SelectedContent,
 };
 use agent_access_provider::{
-    ActionDescriptor, AdmittedRequest, BackendConfig, BackendRegistration, BodyAdmission,
-    BodyReadError, BoundedDownload, BrokerBodyPart, BrokerBodyPartSpec, BuildContext,
-    ClientProfile, CredentialDescriptor, CredentialProfile, EgressDeclaration, EgressProxyConfig,
-    MutationReceipt, NamespaceSelectorDescriptor, NativeSearchEnforcement, Provider,
-    ProviderBuildError, ProviderError, ProviderInvocation, ProviderResult, ProviderResultStream,
-    ProviderState, ReasonCode, ResourceAttributeDescriptor, ResourceAttributes,
-    ResourceScopeCapabilities, ResourceScopes, ResourceSelector, ResourceType,
-    ResourceTypeDescriptor, ScopeRequest, ScopeResolution, ServiceDescriptor, StateDisposition,
-    StaticCredentialKind, UpstreamAuthority, UpstreamAuthorization, UpstreamCall, UpstreamClient,
-    UpstreamClientSpec, UpstreamError, ValidationContext, attachment_upload_plan,
+    ActionDescriptor, ActionResultSchemas, AdmittedRequest, BackendConfig, BackendRegistration,
+    BodyAdmission, BodyReadError, BoundedDownload, BrokerBodyPart, BrokerBodyPartSpec,
+    BuildContext, ClientProfile, CredentialDescriptor, CredentialProfile, EgressDeclaration,
+    EgressProxyConfig, MutationReceipt, NamespaceSelectorDescriptor, NativeSearchEnforcement,
+    Provider, ProviderBuildError, ProviderError, ProviderInvocation, ProviderResult,
+    ProviderResultStream, ProviderState, ReasonCode, ResourceAttributeDescriptor,
+    ResourceAttributes, ResourceScopeCapabilities, ResourceScopes, ResourceSelector, ResourceType,
+    ResourceTypeDescriptor, ResultSchemaBundle, ScopeRequest, ScopeResolution, ServiceDescriptor,
+    StateDisposition, StaticCredentialKind, UpstreamAuthority, UpstreamAuthorization, UpstreamCall,
+    UpstreamClient, UpstreamClientSpec, UpstreamError, ValidationContext, attachment_upload_plan,
     complete_upstream_trace, file_upload_body, parse_backend_config, read_bounded_body,
     take_upstream_trace, validate_egress_proxy_config, validate_upstream_allowlist,
     validate_upstream_base_url,
@@ -269,11 +269,13 @@ pub fn conformance_descriptor(config: &ConformanceConfig) -> ServiceDescriptor {
             .reports_universal_reach()
             .companion_read("item.note.view")
             .presentation(Some(ITEM_PRESENTATION))
-            .audit_input("item", "Item"),
+            .audit_input("item", "Item")
+            .result_schemas(result_schemas("item.view")),
         action("item.download", "Download an item's content", &locator)
             .read_only()
             .raw_download()
-            .audit_input("item", "Item"),
+            .audit_input("item", "Item")
+            .result_schemas(result_schemas("item.download")),
         // A write the upstream accepts only with a token, never with
         // delegated access.
         action(
@@ -283,7 +285,8 @@ pub fn conformance_descriptor(config: &ConformanceConfig) -> ServiceDescriptor {
         )
         .multipart_upload(attachment_upload_plan(&["item"], Some(1)))
         .token_only()
-        .audit_input("item", "Item"),
+        .audit_input("item", "Item")
+        .result_schemas(result_schemas("item.upload")),
         action(
             "item.list",
             "List live items within effective item grants",
@@ -291,11 +294,13 @@ pub fn conformance_descriptor(config: &ConformanceConfig) -> ServiceDescriptor {
         )
         .read_only()
         .native_search(NativeSearchEnforcement::ResultFiltered)
-        .listing_of(CONFORMANCE_ITEM_RESOURCE.id().clone()),
+        .listing_of(CONFORMANCE_ITEM_RESOURCE.id().clone())
+        .result_schemas(result_schemas("item.list")),
         action("item.note.view", "Read an item's note", &locator)
             .read_only()
             .presentation(Some(NOTE_PRESENTATION))
-            .audit_input("item", "Item"),
+            .audit_input("item", "Item")
+            .result_schemas(result_schemas("item.note.view")),
     ];
     if config.endpoints {
         resource_scopes.insert(
@@ -322,7 +327,8 @@ pub fn conformance_descriptor(config: &ConformanceConfig) -> ServiceDescriptor {
             .credential_modes(["service"])
             .resource_attributes()
             // The ping message is content, which audit never records.
-            .audit_input("endpoint", "Endpoint"),
+            .audit_input("endpoint", "Endpoint")
+            .result_schemas(result_schemas("endpoint.ping")),
         );
     }
     let descriptor = ServiceDescriptor::new(SERVICE, "Conformance")
@@ -347,6 +353,54 @@ pub fn conformance_descriptor(config: &ConformanceConfig) -> ServiceDescriptor {
         Ok(authority) => descriptor.with_upstream_authority(authority),
         Err(_) => descriptor,
     }
+}
+
+/// Each action's provider payload, the way a native provider would bundle
+/// them: one definition shared by several actions, inlined on load.
+static RESULT_SCHEMAS: ResultSchemaBundle = ResultSchemaBundle::new(&[r##"{
+    "definitions": {
+        "item": {"type": "string", "description": "Item path."},
+        "note": {"type": "object", "properties": {"body": {"type": "string"}}, "required": ["body"]}
+    },
+    "actions": {
+        "item.view": {"success": {"type": "object", "properties": {
+            "item": {"type": "object", "properties": {
+                "path": {"$ref": "#/definitions/item"},
+                "title": {"type": "string"},
+                "body": {"type": "string"},
+                "relatedTitle": {"type": "string", "description": "Present only with universal reach."}
+            }, "required": ["path", "title", "body"]},
+            "note": {"$ref": "#/definitions/note", "description": "Present when includeNote is true."}
+        }, "required": ["item"]}},
+        "item.download": {"success": {"type": "object", "description": "Download metadata.", "properties": {
+            "item": {"$ref": "#/definitions/item"},
+            "contentType": {"type": "string"},
+            "size": {"type": ["integer", "null"], "description": "Null when the upstream sent no Content-Length."}
+        }, "required": ["item", "contentType", "size"]}},
+        "item.upload": {"success": {"type": "object", "properties": {
+            "item": {"$ref": "#/definitions/item"},
+            "filename": {"type": "string"},
+            "size": {"type": "integer"},
+            "sha256": {"type": "string"},
+            "revision": {"description": "The upstream's revision value, passed through; null when absent."}
+        }, "required": ["item", "filename", "size", "sha256", "revision"]}},
+        "item.list": {"success": {"type": "object", "properties": {
+            "items": {"type": "array", "items": {"type": "object", "properties": {
+                "path": {"$ref": "#/definitions/item"}
+            }, "required": ["path"]}}
+        }, "required": ["items"]}},
+        "item.note.view": {"success": {"type": "object", "properties": {
+            "note": {"$ref": "#/definitions/note"}
+        }, "required": ["note"]}},
+        "endpoint.ping": {"success": {"type": "object", "properties": {
+            "endpoint": {"type": "string"},
+            "receipt": {"type": "string"}
+        }, "required": ["endpoint", "receipt"]}}
+    }
+}"##]);
+
+fn result_schemas(action: &str) -> ActionResultSchemas {
+    RESULT_SCHEMAS.action(action)
 }
 
 const BODY_FORMATS: &[OutputContentFormat] =
@@ -1162,9 +1216,13 @@ fn endpoint_key(request: reqwest::RequestBuilder, key: &str) -> reqwest::Request
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_access_provider::presentation::response_capabilities;
+    use agent_access_provider::presentation::{
+        ResponseOptions, inject_selected_content_schema, present_result, resolve_response_options,
+        response_capabilities,
+    };
     use agent_access_provider::test_support::{
-        InvocationBuilder, TestHost, bearer_credential, install_trace_capture,
+        InvocationBuilder, TestHost, assert_result_conforms, bearer_credential,
+        check_strict_conformance, install_trace_capture,
     };
     use agent_access_provider::{
         ActionIo, CorrelationContext, ProviderLimits, SearchAuthorization,
@@ -1173,6 +1231,30 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    /// Every provider invocation in these tests is checked strictly
+    /// against the action's declared result schemas.
+    trait CheckedInvoke {
+        async fn checked_invoke(
+            &self,
+            request: ProviderInvocation,
+        ) -> Result<ProviderResult, ProviderError>;
+    }
+
+    impl CheckedInvoke for ConformanceProvider {
+        async fn checked_invoke(
+            &self,
+            request: ProviderInvocation,
+        ) -> Result<ProviderResult, ProviderError> {
+            let action = conformance_descriptor(&config("https://conformance.example.test"))
+                .action(request.action())
+                .cloned()
+                .expect("a declared conformance action");
+            let outcome = Provider::invoke(self, request).await;
+            assert_result_conforms(&action, &outcome);
+            outcome
+        }
+    }
 
     fn config(base_url: &str) -> ConformanceConfig {
         ConformanceConfig {
@@ -1284,7 +1366,7 @@ mod tests {
             .mount(&server)
             .await;
         let result = provider(&server.uri(), ProviderLimits::default())
-            .invoke(ping(Some(KEY)))
+            .checked_invoke(ping(Some(KEY)))
             .await
             .unwrap();
         assert_eq!(
@@ -1308,9 +1390,9 @@ mod tests {
             .mount(&server)
             .await;
         let provider = provider(&server.uri(), ProviderLimits::default());
-        let failed = provider.invoke(ping(Some(KEY))).await.unwrap_err();
+        let failed = provider.checked_invoke(ping(Some(KEY))).await.unwrap_err();
         assert_eq!(failed.reason_code(), ReasonCode::UpstreamFailed);
-        let unconfigured = provider.invoke(ping(None)).await.unwrap_err();
+        let unconfigured = provider.checked_invoke(ping(None)).await.unwrap_err();
         assert_eq!(unconfigured.reason_code(), ReasonCode::ScopeUnresolved);
         assert!(!format!("{failed:?}").contains(KEY));
     }
@@ -1437,13 +1519,81 @@ mod tests {
             CorrelationContext::for_tests(),
             SERVICE.into(),
             "item.view".into(),
-            provider.invoke(invocation(
+            provider.checked_invoke(invocation(
                 "item.view",
                 json!({"item": "shelf/item"}),
                 Vec::new(),
             )),
         )
         .await
+    }
+
+    #[tokio::test]
+    async fn selected_content_schemas_cover_optional_companion_and_related_metadata() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/items/shelf/item"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "title": "Item", "body": "*item*", "relatedTitle": "Related item"
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/items/shelf/item/note"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"body": "*note*"})))
+            .mount(&server)
+            .await;
+        let provider = provider(&server.uri(), ProviderLimits::default());
+        let descriptor = conformance_descriptor(&config(&server.uri()));
+        let action = descriptor.action("item.view").unwrap();
+        let presentation = action.presentation.as_ref().unwrap();
+        let raw_schema = action.result_schemas.as_ref().unwrap().success();
+        let mut selected_schema = raw_schema.clone();
+        for field in presentation.body_fields() {
+            inject_selected_content_schema(
+                &mut selected_schema,
+                &field,
+                presentation.output_content_formats(),
+            )
+            .unwrap();
+        }
+        for include_note in [false, true] {
+            for universal_reach in [false, true] {
+                let source = provider
+                    .checked_invoke(
+                        InvocationBuilder::from(invocation(
+                            "item.view",
+                            json!({"item": "shelf/item", "includeNote": include_note}),
+                            Vec::new(),
+                        ))
+                        .companion_reads_authorized(include_note)
+                        .universal_reach(universal_reach)
+                        .build(),
+                    )
+                    .await
+                    .unwrap()
+                    .result;
+                assert_eq!(source.get("note").is_some(), include_note);
+                assert_eq!(
+                    source["item"].get("relatedTitle").is_some(),
+                    universal_reach
+                );
+                for format in BODY_FORMATS {
+                    let options = resolve_response_options(
+                        action.presentation,
+                        None,
+                        ResponseOptions::new(Some(*format), None),
+                    )
+                    .unwrap();
+                    let mut selected = source.clone();
+                    present_result(&options, &mut selected, 4096, 65536).unwrap();
+                    check_strict_conformance(&selected_schema, &selected).unwrap();
+                    assert!(check_strict_conformance(raw_schema, &selected).is_err());
+                    selected["item"]["body"]["value"] = json!(17);
+                    assert!(check_strict_conformance(&selected_schema, &selected).is_err());
+                }
+            }
+        }
     }
 
     #[tokio::test]
@@ -1497,7 +1647,7 @@ mod tests {
                 ))
                 .credential(bearer_credential("token"))
                 .build();
-            let result = provider.invoke(request).await;
+            let result = provider.checked_invoke(request).await;
             if succeeds {
                 assert_eq!(
                     result.unwrap().result,
@@ -1595,7 +1745,7 @@ mod tests {
         }]});
         let outcome = tokio::time::timeout(
             Duration::from_secs(5),
-            provider.invoke(invocation("item.upload", inputs, vec![part])),
+            provider.checked_invoke(invocation("item.upload", inputs, vec![part])),
         )
         .await
         .expect("the idle timeout bounds the response body");
@@ -1631,6 +1781,16 @@ mod tests {
         config.endpoints = true;
         let descriptor = conformance_descriptor(&config);
         descriptor.validate().unwrap();
+        // Every action declares its payload schemas, from a bundle that
+        // declares no other action.
+        let mut names = descriptor
+            .actions
+            .iter()
+            .inspect(|action| assert!(action.result_schemas.is_some(), "{}", action.action))
+            .map(|action| action.action.as_str())
+            .collect::<Vec<_>>();
+        names.sort_unstable();
+        assert_eq!(RESULT_SCHEMAS.actions(), names);
         let ping = descriptor.action("endpoint.ping").unwrap();
         assert!(ping.requires_resource_attributes && !ping.read_only);
         let action = |name: &str| descriptor.action(name).unwrap();

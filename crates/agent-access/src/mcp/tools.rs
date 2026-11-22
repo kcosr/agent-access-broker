@@ -1,6 +1,6 @@
 //! Caller-filtered action discovery and local-file adaptation. Authorization stays at the broker.
 use agent_access_core::mcp::{
-    McpView, ProjectionMode, STDIO_MAX_CATALOG_BYTES, ToolRegistry, ToolTarget,
+    McpView, OutputSchemas, ProjectionMode, STDIO_MAX_CATALOG_BYTES, ToolRegistry, ToolTarget,
 };
 use agent_access_core::{ApiActionSpec, ApiCatalog, InvokeRequest};
 use agent_access_provider::{ActionIo, presentation::ResponseOptions};
@@ -26,19 +26,26 @@ pub(super) struct ToolListing {
 pub(super) async fn list_tools(
     settings: &crate::ResolvedCliSettings,
     view: &McpView,
+    output_schemas: OutputSchemas,
 ) -> Result<ToolListing> {
     let catalog = fetch_catalog(settings).await?;
     Ok(ToolListing {
-        tools: project_catalog(&catalog, view)?,
-        binding: json!({"view":view,"identity":catalog.identity,"executionContext":catalog.execution_context,"preferredOutputContentFormat":settings.preferred_output_content_format}),
+        tools: project_catalog(&catalog, view, output_schemas)?,
+        // Cursors bind schema selection and content preference; text copies do not affect discovery.
+        binding: json!({"view":view,"outputSchemas":output_schemas,"identity":catalog.identity,"executionContext":catalog.execution_context,"preferredOutputContentFormat":settings.preferred_output_content_format}),
     })
 }
 
-fn project_catalog(catalog: &ApiCatalog, view: &McpView) -> Result<Vec<Tool>> {
+fn project_catalog(
+    catalog: &ApiCatalog,
+    view: &McpView,
+    output_schemas: OutputSchemas,
+) -> Result<Vec<Tool>> {
     ToolRegistry::build(
         catalog,
         view,
         ProjectionMode::Stdio,
+        output_schemas,
         STDIO_MAX_CATALOG_BYTES,
     )?
     .definitions()
@@ -84,6 +91,7 @@ impl std::error::Error for UnknownToolError {}
 pub(super) async fn call_tool(
     settings: &crate::ResolvedCliSettings,
     view: &McpView,
+    output_schemas: OutputSchemas,
     name: &str,
     arguments: Map<String, Value>,
     include_text_copy: bool,
@@ -92,7 +100,15 @@ pub(super) async fn call_tool(
     // and authenticated limits projection let this helper retain scoped-view
     // checks without an execution-capacity-dependent catalog round trip.
     if matches!(view, McpView::Service(_)) && name == "services_describe" {
-        return super::discovery::call(settings, view, name, arguments, include_text_copy).await;
+        return super::discovery::call(
+            settings,
+            view,
+            output_schemas,
+            name,
+            arguments,
+            include_text_copy,
+        )
+        .await;
     }
     // Aggregate discovery keeps its ordinary broker authorization, including
     // permitted anonymous reads. Fixed helper names are reserved, so resolve
@@ -103,12 +119,14 @@ pub(super) async fn call_tool(
             &agent_access_core::empty_catalog(json!({})),
             view,
             ProjectionMode::Stdio,
+            output_schemas,
             STDIO_MAX_CATALOG_BYTES,
         )?;
         if let Some(ToolTarget::Helper(helper)) = helpers.resolve(name) {
             return super::discovery::call(
                 settings,
                 view,
+                output_schemas,
                 helper.as_str(),
                 arguments,
                 include_text_copy,
@@ -117,10 +135,12 @@ pub(super) async fn call_tool(
         }
     }
     let catalog = fetch_catalog(settings).await?;
+    // Dispatch resolves through the same projection the connection lists.
     let registry = ToolRegistry::build(
         &catalog,
         view,
         ProjectionMode::Stdio,
+        output_schemas,
         STDIO_MAX_CATALOG_BYTES,
     )?;
     let (selected_service, selected_action) =
@@ -129,6 +149,7 @@ pub(super) async fn call_tool(
                 return super::discovery::call(
                     settings,
                     view,
+                    output_schemas,
                     helper.as_str(),
                     arguments,
                     include_text_copy,
@@ -749,6 +770,7 @@ mod tests {
             let error = call_tool(
                 &settings,
                 &McpView::Aggregate,
+                OutputSchemas::On,
                 &tool_name("jira-team", "issue.view"),
                 arguments.as_object().unwrap().clone(),
                 true,
@@ -835,6 +857,7 @@ mod tests {
                 call_tool(
                     &settings(&server),
                     &view,
+                    OutputSchemas::On,
                     "services_describe",
                     json!({"service":"jira-team"}).as_object().unwrap().clone(),
                     true,
@@ -905,6 +928,7 @@ mod tests {
             let error = call_tool(
                 &settings(&server),
                 &McpView::Service("jira-team".into()),
+                OutputSchemas::On,
                 "services_describe",
                 json!({"service":"jira-team","outputPath":output})
                     .as_object()
@@ -925,6 +949,7 @@ mod tests {
         let error = call_tool(
             &settings(&server),
             &McpView::Service("jira-team".into()),
+            OutputSchemas::On,
             "services_describe",
             json!({"service":"second","outputPath":output})
                 .as_object()
@@ -943,6 +968,7 @@ mod tests {
         let result = call_tool(
             &settings(&server),
             &McpView::Service("jira-team".into()),
+            OutputSchemas::On,
             "services_describe",
             json!({"service":"jira-team"}).as_object().unwrap().clone(),
             true,
@@ -1082,7 +1108,7 @@ mod tests {
         let mut hidden = catalog.services[0].clone();
         hidden.surface = "gateway".into();
         catalog.services.push(hidden);
-        let tools = project_catalog(&catalog, &McpView::Aggregate).unwrap();
+        let tools = project_catalog(&catalog, &McpView::Aggregate, OutputSchemas::On).unwrap();
         assert_eq!(tools.len(), 6);
         let tool = serde_json::to_value(
             tools
@@ -1111,7 +1137,7 @@ mod tests {
                 .is_some()
         );
         catalog.services.push(catalog.services[0].clone());
-        assert!(project_catalog(&catalog, &McpView::Aggregate).is_err());
+        assert!(project_catalog(&catalog, &McpView::Aggregate, OutputSchemas::On).is_err());
     }
 
     #[test]
@@ -1292,6 +1318,7 @@ mod tests {
         let error = call_tool(
             &settings(&server),
             &McpView::Aggregate,
+            OutputSchemas::On,
             &tool_name("jira-team", "issue.view"),
             json!({"requestFile": directory.path().join("does-not-exist"), "outputPath":output})
                 .as_object()
@@ -1331,6 +1358,7 @@ mod tests {
         let result = call_tool(
             &anonymous,
             &McpView::Aggregate,
+            OutputSchemas::On,
             "services_list",
             Map::new(),
             true,
@@ -1356,9 +1384,16 @@ mod tests {
             .mount(&server)
             .await;
         for name in ["unknown".to_owned(), tool_name("jira-team", "issue.view")] {
-            let error = call_tool(&anonymous, &McpView::Aggregate, &name, Map::new(), true)
-                .await
-                .unwrap_err();
+            let error = call_tool(
+                &anonymous,
+                &McpView::Aggregate,
+                OutputSchemas::On,
+                &name,
+                Map::new(),
+                true,
+            )
+            .await
+            .unwrap_err();
             assert_eq!(
                 error.to_string(),
                 "broker catalog request rejected (HTTP 401)"
@@ -1398,6 +1433,7 @@ mod tests {
             let result = call_tool(
                 &settings(&server),
                 &McpView::Service(service.into()),
+                OutputSchemas::On,
                 "OriginalRead",
                 json!({"inputs":{"issue":"ABC-1"}})
                     .as_object()
@@ -1423,6 +1459,7 @@ mod tests {
             let error = call_tool(
                 &settings(&server),
                 &McpView::Service("jira-team".into()),
+                OutputSchemas::On,
                 &name,
                 json!({"requestFile":directory.path().join("missing"),"outputPath":output})
                     .as_object()
@@ -1456,6 +1493,7 @@ mod tests {
         let result = call_tool(
             &settings(&server),
             &McpView::Aggregate,
+            OutputSchemas::On,
             "resource_access_describe",
             json!({"service":"confluence"}).as_object().unwrap().clone(),
             true,
@@ -1490,6 +1528,7 @@ mod tests {
         let result = call_tool(
             &settings(&server),
             &McpView::Aggregate,
+            OutputSchemas::On,
             "resource_access_describe",
             json!({"service":"confluence"}).as_object().unwrap().clone(),
             true,
@@ -1513,6 +1552,7 @@ mod tests {
         let without_copy = call_tool(
             &settings(&server),
             &McpView::Aggregate,
+            OutputSchemas::On,
             "resource_access_describe",
             json!({"service":"confluence"}).as_object().unwrap().clone(),
             false,
@@ -1578,6 +1618,7 @@ mod tests {
         let result = call_tool(
             &settings(&server),
             &view,
+            OutputSchemas::On,
             "services_list",
             json!({"outputPath":output}).as_object().unwrap().clone(),
             true,
@@ -1592,6 +1633,7 @@ mod tests {
         let error = call_tool(
             &settings(&server),
             &view,
+            OutputSchemas::On,
             "resource_access_describe",
             json!({"service":"second","outputPath":output})
                 .as_object()
@@ -1608,6 +1650,7 @@ mod tests {
             let error = call_tool(
                 &settings(&server),
                 &unavailable,
+                OutputSchemas::On,
                 "services_list",
                 json!({"outputPath":output}).as_object().unwrap().clone(),
                 true,
@@ -1656,6 +1699,7 @@ mod tests {
         let result = call_tool(
             &settings(&server),
             &McpView::Service("jira-team".into()),
+            OutputSchemas::On,
             "actions_describe",
             json!({"service":"jira-team","action":"issue.view"})
                 .as_object()
@@ -1697,9 +1741,13 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(value))
             .mount(&server)
             .await;
-        let error = list_tools(&settings(&server), &McpView::Service("jira-team".into()))
-            .await
-            .unwrap_err();
+        let error = list_tools(
+            &settings(&server),
+            &McpView::Service("jira-team".into()),
+            OutputSchemas::On,
+        )
+        .await
+        .unwrap_err();
         assert_eq!(
             error.to_string(),
             "broker JSON response exceeds 16 MiB limit"
@@ -1723,6 +1771,7 @@ mod tests {
         let result = call_tool(
             &settings(&server),
             &McpView::Aggregate,
+            OutputSchemas::On,
             &tool_name("jira-team", "issue.view"),
             json!({"inputs":{"issue":"ABC-1"}})
                 .as_object()
@@ -1738,6 +1787,7 @@ mod tests {
         let missing = call_tool(
             &settings(&server),
             &McpView::Aggregate,
+            OutputSchemas::On,
             "unknown",
             Map::new(),
             true,
@@ -1767,6 +1817,7 @@ mod tests {
         let result = call_tool(
             &settings(&server),
             &McpView::Aggregate,
+            OutputSchemas::On,
             &tool_name("jira-team", "issue.view"),
             json!({"inputs":{"issue":"ABC-1"},"outputPath":destination})
                 .as_object()
@@ -1822,6 +1873,7 @@ mod tests {
         let error = call_tool(
             &settings(&server),
             &McpView::Aggregate,
+            OutputSchemas::On,
             &tool_name("jira-team", "issue.view"),
             json!({"inputs":{"issue":"ABC-1"},"outputPath":destination})
                 .as_object()
@@ -1861,6 +1913,7 @@ mod tests {
             let result = call_tool(
                 &settings(&server),
                 &McpView::Aggregate,
+                OutputSchemas::On,
                 &tool_name("jira-team", "issue.view"),
                 json!({"inputs":{"issue":"ABC-1"},"outputPath":destination})
                     .as_object()
@@ -1919,6 +1972,7 @@ mod tests {
                 let error = call_tool(
                     &settings(&server),
                     &McpView::Aggregate,
+                    OutputSchemas::On,
                     &tool_name("jira-team", "issue.view"),
                     json!({"inputs":{"issue":"ABC-1"},"outputPath":destination})
                         .as_object()
@@ -1956,6 +2010,7 @@ mod tests {
             let result = call_tool(
                 &settings(&server),
                 &McpView::Aggregate,
+                OutputSchemas::On,
                 &tool_name("jira-team", "issue.view"),
                 json!({"inputs":{"issue":"ABC-1"},"outputPath":destination})
                     .as_object()
@@ -2002,7 +2057,7 @@ mod tests {
             let temp = tempfile::tempdir().unwrap();
             let destination = temp.path().join("formatted.json");
             std::fs::write(&destination, "original").unwrap();
-            let result = call_tool(&settings(&server), &McpView::Aggregate, &tool_name("jira-team", "issue.view"),
+            let result = call_tool(&settings(&server), &McpView::Aggregate, OutputSchemas::On, &tool_name("jira-team", "issue.view"),
                 json!({"inputs":{"issue":"ABC-1"},"outputContentFormat":"markdown","outputPath":destination}).as_object().unwrap().clone(), true).await;
             if formatted["value"].is_string() {
                 let result = serde_json::to_value(result.unwrap()).unwrap();
@@ -2037,6 +2092,7 @@ mod tests {
                 call_tool(
                     &settings(&server),
                     &McpView::Aggregate,
+                    OutputSchemas::On,
                     &tool_name("jira-team", "issue.view"),
                     json!({"inputs":{"issue":"ABC-1"},"outputPath":output})
                         .as_object()
@@ -2084,6 +2140,7 @@ mod tests {
             let error = call_tool(
                 &settings(&server),
                 &McpView::Aggregate,
+                OutputSchemas::On,
                 &tool_name("jira-team", "issue.view"),
                 arguments.as_object().unwrap().clone(),
                 true,
@@ -2099,6 +2156,7 @@ mod tests {
         let error = call_tool(
             &settings(&server),
             &McpView::Aggregate,
+            OutputSchemas::On,
             &tool_name("jira-team", "issue.view"),
             json!({"outputPath":output}).as_object().unwrap().clone(),
             true,
@@ -2176,6 +2234,7 @@ mod tests {
                 let result = call_tool(
                     &settings(&server),
                     &McpView::Aggregate,
+                    OutputSchemas::On,
                     &tool_name("jira-team", "issue.view"),
                     arguments.as_object().unwrap().clone(),
                     include_text_copy,
@@ -2226,6 +2285,7 @@ mod tests {
             let result = call_tool(
                 &settings(&server),
                 &McpView::Aggregate,
+                OutputSchemas::On,
                 "services_list",
                 json!({"outputPath":destination})
                     .as_object()
@@ -2265,7 +2325,7 @@ mod tests {
             .mount(&broker)
             .await;
         assert!(
-            list_tools(&settings(&broker), &McpView::Aggregate)
+            list_tools(&settings(&broker), &McpView::Aggregate, OutputSchemas::On)
                 .await
                 .unwrap_err()
                 .to_string()
@@ -2284,6 +2344,7 @@ mod tests {
         let error = call_tool(
             &settings(&broker),
             &McpView::Aggregate,
+            OutputSchemas::On,
             &tool_name("jira-team", "issue.view"),
             json!({"inputs":{}}).as_object().unwrap().clone(),
             true,
@@ -2292,7 +2353,7 @@ mod tests {
         .unwrap_err();
         assert_eq!(error.to_string(), "broker response is not valid JSON");
         assert_eq!(
-            list_tools(&settings(&broker), &McpView::Aggregate)
+            list_tools(&settings(&broker), &McpView::Aggregate, OutputSchemas::On)
                 .await
                 .unwrap()
                 .tools
@@ -2331,6 +2392,7 @@ mod tests {
         let result = call_tool(
             &settings(&server),
             &McpView::Aggregate,
+            OutputSchemas::On,
             &tool_name("jira-team", "issue.view"),
             json!({"inputs":{},"outputPath":destination})
                 .as_object()
@@ -2373,6 +2435,7 @@ mod tests {
         let result = call_tool(
             &settings(&server),
             &McpView::Aggregate,
+            OutputSchemas::On,
             &tool_name("jira-team", "issue.view"),
             json!({"inputs":{},"outputPath":destination})
                 .as_object()
@@ -2431,6 +2494,7 @@ mod tests {
         let error = call_tool(
             &settings(&server),
             &McpView::Aggregate,
+            OutputSchemas::On,
             &tool_name("jira-team", "issue.view"),
             json!({"inputs":{}, "outputPath":destination})
                 .as_object()
@@ -2475,7 +2539,7 @@ mod tests {
 
         let mut catalog = catalog(action.clone());
         catalog.services[0].service = "cloudbees_ci".into();
-        let tools = project_catalog(&catalog, &McpView::Aggregate).unwrap();
+        let tools = project_catalog(&catalog, &McpView::Aggregate, OutputSchemas::On).unwrap();
         assert!(
             tools
                 .iter()
@@ -2527,6 +2591,7 @@ mod tests {
         std::fs::write(&file, "file contents").unwrap();
         let destination = temp.path().join("upload-response.json");
         let result = call_tool(&settings(&server), &McpView::Aggregate,
+            OutputSchemas::On,
             &tool_name("jira-team", "issue.view"),
             json!({"inputs":{"issue":"ABC-1"},"files":[{"role":"attachment","path":file}],"outputPath":destination})
                 .as_object()
@@ -2625,6 +2690,7 @@ mod tests {
             let response = call_tool(
                 &settings,
                 &McpView::Aggregate,
+                OutputSchemas::On,
                 &tool_name("jira-team", "issue.view"),
                 json!({"inputs":{"issue":"ABC-1"}})
                     .as_object()

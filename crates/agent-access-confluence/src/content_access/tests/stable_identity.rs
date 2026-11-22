@@ -302,7 +302,7 @@ async fn foreign_root_moving_after_admission_invalidates_the_operation() {
         false,
         Some(parent(ConfluenceNodeKind::Page, "100")),
     );
-    let error = provider.invoke(request).await.unwrap_err();
+    let error = provider.invoke_checked(request).await.unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert_eq!(backend.writes.load(Ordering::SeqCst), 0);
 }
@@ -466,7 +466,7 @@ async fn disclosed_stable_identity_uses_the_described_id_input_for_execution() {
         .containment(authority)
         .state(state)
         .build();
-    let result = provider.invoke(request).await.unwrap();
+    let result = provider.invoke_checked(request).await.unwrap();
     assert_eq!(result.result["id"], "100");
     assert_eq!(backend.page_reads.load(Ordering::SeqCst), 1);
 }
@@ -574,7 +574,7 @@ async fn final_move_pass_read_limit_uses_execution_access_and_preserves_root_dia
     let request = InvocationBuilder::from(request)
         .credential(execution.clone())
         .build();
-    let error = provider.invoke(request).await.unwrap_err();
+    let error = provider.invoke_checked(request).await.unwrap_err();
     assert_move_pass_budget_refusal(&error, &backend);
     assert!(
         backend

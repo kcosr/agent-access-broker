@@ -43,6 +43,21 @@ impl EmbeddedBodyCodec for TestBody {
         Ok(Some(selected))
     }
 }
+struct ReplacedBody;
+impl EmbeddedBodyCodec for ReplacedBody {
+    fn supported_formats(&self) -> &'static [OutputContentFormat] {
+        FORMATS
+    }
+    fn select(
+        &self,
+        _: &Value,
+        _: OutputContentFormat,
+        _: u64,
+        _: &mut RenderBudget,
+    ) -> Result<Option<SelectedContent>, RenderError> {
+        Err(RenderError)
+    }
+}
 const PRESENTATION: ActionPresentation = ActionPresentation::new(
     &[EmbeddedBody::new(&[], "body", &TestBody)],
     FORMATS,
@@ -67,6 +82,12 @@ impl agent_access_provider::test_support::DescribedProvider for ContentProvider 
     fn descriptor(&self) -> ServiceDescriptor {
         let mut descriptor = agent_access_fake::fake_descriptor();
         descriptor.actions[0].presentation = Some(PRESENTATION);
+        descriptor.actions[0].result_schemas =
+            Some(agent_access_provider::ActionResultSchemas::new(json!({
+                "type": "object",
+                "properties": {"body": {"type": "string"}, "id": {"type": "string"}},
+                "required": ["body", "id"]
+            })));
         descriptor.preferred_output_content_format = self.preference;
         descriptor
     }
@@ -173,7 +194,14 @@ async fn prepared_content_pins_format_descriptor_and_body_limit() {
     let service = Arc::make_mut(services.get_mut("fake").unwrap());
     service.preferred_output_content_format = Some(OutputContentFormat::Adf);
     service.presentation_body_limit = Some(1);
-    service.actions[0].presentation = None;
+    // Keep the declared final shape but replace the codec with one that would
+    // fail: execution must retain the admitted codec and its body budget.
+    const REPLACED_BODIES: &[EmbeddedBody] = &[EmbeddedBody::new(&[], "body", &ReplacedBody)];
+    service.actions[0].presentation = Some(ActionPresentation::new(
+        REPLACED_BODIES,
+        FORMATS,
+        OutputContentFormat::Adf,
+    ));
     let response = runtime.finish_prepared_invoke(prepared, vec![]).await;
     assert_eq!(response.status, 200);
     assert_eq!(

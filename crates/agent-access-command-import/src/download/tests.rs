@@ -20,8 +20,16 @@ fn document(bytes: &[u8]) -> Value {
     }})
 }
 
+/// Every outcome a test reads conforms to the download's result schemas.
+fn checked(outcome: Result<InvokeOutcome, Error>) -> Result<InvokeOutcome, Error> {
+    if let Ok(outcome) = &outcome {
+        crate::result_schema::assert_conforms(true, outcome);
+    }
+    outcome
+}
+
 fn read_raw(text: &[u8], cap: usize) -> Result<InvokeOutcome, Error> {
-    invoke(
+    checked(invoke(
         "reports",
         &action(),
         true,
@@ -29,7 +37,7 @@ fn read_raw(text: &[u8], cap: usize) -> Result<InvokeOutcome, Error> {
         &CommandSecrets::new(),
         cap,
         &Control::new(Instant::now() + Duration::from_secs(30)),
-    )
+    ))
 }
 
 fn read(document: &Value, cap: usize) -> Result<ProviderResult, Error> {
@@ -276,7 +284,7 @@ fn output_schema_checks_metadata_and_read_write_receipts_keep_their_semantics() 
     );
     let mut doc = document(&[]);
     let call = |doc: &Value, read_only| {
-        invoke(
+        checked(invoke(
             "reports",
             &action,
             read_only,
@@ -284,7 +292,7 @@ fn output_schema_checks_metadata_and_read_write_receipts_keep_their_semantics() 
             &CommandSecrets::new(),
             1,
             &control,
-        )
+        ))
     };
     assert_eq!(violation(call(&doc, true).unwrap_err()), "output_schema");
     doc["result"] = json!({"warnings": []});

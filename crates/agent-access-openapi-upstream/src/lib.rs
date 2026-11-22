@@ -7,6 +7,7 @@ mod json;
 mod model;
 mod readers;
 mod refs;
+mod result_schema;
 mod security;
 mod transport;
 
@@ -121,6 +122,10 @@ impl ImportedAdapter for OpenApiAdapter {
     }
     fn validate_action(&self, action: &ImportedActionDefinition) -> Result<(), String> {
         CompiledAction::new(action).map(|_| ())
+    }
+    /// One wrapper for every operation, whatever responses it declares.
+    fn result_schemas(&self, _: &ImportedActionDefinition) -> Result<ActionResultSchemas, String> {
+        Ok(result_schema::result_schemas())
     }
     fn scoped_mcp_name(&self, action: &ImportedActionDefinition) -> Result<String, String> {
         let source = action

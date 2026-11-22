@@ -8,6 +8,9 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::process::{Child, ChildStdin, Stdio};
 
+#[path = "../common/mcp_output.rs"]
+mod mcp_output;
+
 const WARNING: &str = "Only completed synthetic records are included.";
 const SENTINEL: &[u8] = b"\0\xfffile-payload-sentinel-7331\x80\n";
 const COMMAND: &str = r#"#!/bin/sh
@@ -350,54 +353,71 @@ async fn imported_downloads_cross_real_cli_http_and_stdio_boundaries() {
     );
     assert_eq!(response.bytes().await.unwrap().as_ref(), SENTINEL);
 
-    let mut mcp = StdioMcp::start(&fixture.agent);
-    mcp.request("initialize", json!({"protocolVersion":MCP_VERSION,"capabilities":{},"clientInfo":{"name":"command-download-smoke","version":"1"}})).await;
-    mcp.notify("notifications/initialized", json!({}));
-    let listing = mcp.request("tools/list", json!({})).await;
-    let tool = listing["result"]["tools"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|tool| tool["_meta"]["agent-access/action"] == "report.download")
-        .unwrap();
-    assert!(
-        tool["inputSchema"]["required"]
+    for include_text_copy in [true, false] {
+        fixture.success(SENTINEL);
+        let mut mcp = StdioMcp::start(&fixture.agent, include_text_copy);
+        mcp.request("initialize", json!({"protocolVersion":MCP_VERSION,"capabilities":{},"clientInfo":{"name":"command-download-smoke","version":"1"}})).await;
+        mcp.notify("notifications/initialized", json!({}));
+        let listing = mcp.request("tools/list", json!({})).await;
+        let tool = listing["result"]["tools"]
             .as_array()
             .unwrap()
-            .contains(&json!("outputPath"))
-    );
-    let downloaded = mcp.request("tools/call", json!({"name":tool["name"],"arguments":{"inputs":{"reportId":"monthly"},"outputPath":destination}})).await;
-    assert_eq!(downloaded["result"]["isError"], false, "{downloaded}");
-    receipt(
-        &downloaded["result"]["structuredContent"],
-        &destination,
-        SENTINEL,
-    );
-    no_payload(&downloaded.to_string());
-    let before = fixture.requests().len();
-    for output in [
-        "relative.bin".to_owned(),
-        "-".to_owned(),
-        fixture
-            .directory
-            .join("missing/output.bin")
-            .display()
-            .to_string(),
-    ] {
-        let rejected = mcp.request("tools/call", json!({"name":tool["name"],"arguments":{"inputs":{"reportId":"monthly"},"outputPath":output}})).await;
-        assert_eq!(rejected["result"]["isError"], true, "{rejected}");
-        assert_eq!(fixture.requests().len(), before);
+            .iter()
+            .find(|tool| tool["_meta"]["agent-access/action"] == "report.download")
+            .unwrap();
+        // The imported download advertises its receipt with the adapter's
+        // metadata wrapper: computed integrity, open command metadata.
+        let metadata = &tool["outputSchema"]["anyOf"][0]["properties"]["result"]["anyOf"][0];
+        assert_eq!(
+            metadata["required"],
+            json!([
+                "upstreamCommand",
+                "filename",
+                "contentType",
+                "size",
+                "sha256"
+            ])
+        );
+        assert_eq!(metadata["properties"]["upstreamCommand"]["type"], "object");
+        assert!(
+            tool["inputSchema"]["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("outputPath"))
+        );
+        let downloaded = mcp.request("tools/call", json!({"name":tool["name"],"arguments":{"inputs":{"reportId":"monthly"},"outputPath":destination}})).await;
+        assert_eq!(downloaded["result"]["isError"], false, "{downloaded}");
+        receipt(
+            &downloaded["result"]["structuredContent"],
+            &destination,
+            SENTINEL,
+        );
+        no_payload(&downloaded.to_string());
+        let before = fixture.requests().len();
+        for output in [
+            "relative.bin".to_owned(),
+            "-".to_owned(),
+            fixture
+                .directory
+                .join("missing/output.bin")
+                .display()
+                .to_string(),
+        ] {
+            let rejected = mcp.request("tools/call", json!({"name":tool["name"],"arguments":{"inputs":{"reportId":"monthly"},"outputPath":output}})).await;
+            assert_eq!(rejected["result"]["isError"], true, "{rejected}");
+            assert_eq!(fixture.requests().len(), before);
+        }
+        fixture.response(r#"{"ok":false,"error":{"code":"resource_not_found","message":"The requested download was not found."}}"#);
+        let missing = mcp.request("tools/call", json!({"name":tool["name"],"arguments":{"inputs":{"reportId":"monthly"},"outputPath":destination}})).await;
+        assert_eq!(missing["result"]["isError"], true, "{missing}");
+        assert_eq!(
+            missing["result"]["structuredContent"]["reasonCode"],
+            "resource_not_found"
+        );
+        assert_eq!(std::fs::read(&destination).unwrap(), SENTINEL);
+        let stderr = mcp.finish().await;
+        no_payload(&stderr);
     }
-    fixture.response(r#"{"ok":false,"error":{"code":"resource_not_found","message":"The requested download was not found."}}"#);
-    let missing = mcp.request("tools/call", json!({"name":tool["name"],"arguments":{"inputs":{"reportId":"monthly"},"outputPath":destination}})).await;
-    assert_eq!(missing["result"]["isError"], true, "{missing}");
-    assert_eq!(
-        missing["result"]["structuredContent"]["reasonCode"],
-        "resource_not_found"
-    );
-    assert_eq!(std::fs::read(&destination).unwrap(), SENTINEL);
-    let stderr = mcp.finish().await;
-    no_payload(&stderr);
 
     assert!(
         !mcp_tool_names(&fixture.base, &fixture.token)
@@ -580,17 +600,22 @@ async fn remote_and_local_failures_preserve_files_and_never_replay_commands() {
     stop(fixture.broker).await;
 }
 
+/// A stdio MCP subprocess. Every `tools/call` result it returns is checked
+/// against the listed tool's advertised `outputSchema`.
 struct StdioMcp {
     child: Child,
     stdin: Option<ChildStdin>,
     responses: tokio::sync::mpsc::UnboundedReceiver<String>,
     next_id: u64,
+    tools: mcp_output::AdvertisedTools,
 }
 
 impl StdioMcp {
-    fn start(config: &Path) -> Self {
+    fn start(config: &Path, include_text_copy: bool) -> Self {
+        // Explicitly advertise output schemas so every result is checked.
         let mut child = cli(config)
-            .args(["mcp", "serve"])
+            .args(["mcp", "serve", "--output-schemas", "on"])
+            .arg(format!("--include-text-copy={include_text_copy}"))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -612,6 +637,11 @@ impl StdioMcp {
             stdin,
             responses,
             next_id: 1,
+            tools: mcp_output::AdvertisedTools::new(
+                Some(agent_access_core::mcp::OutputSchemas::On),
+                None,
+            )
+            .with_text_copy(include_text_copy),
         }
     }
 
@@ -627,6 +657,19 @@ impl StdioMcp {
     }
 
     async fn request(&mut self, method: &str, params: Value) -> Value {
+        let call = (method == "tools/call")
+            .then(|| params["name"].as_str().map(str::to_owned))
+            .flatten();
+        let response = self.exchange(method, params).await;
+        match call {
+            Some(name) => self.tools.check_call(&name, &response),
+            None if method == "tools/list" => self.tools.record_listing(&response),
+            None => {}
+        }
+        response
+    }
+
+    async fn exchange(&mut self, method: &str, params: Value) -> Value {
         let id = self.next_id;
         self.next_id += 1;
         self.send(json!({"jsonrpc":"2.0", "id":id, "method":method, "params":params}));

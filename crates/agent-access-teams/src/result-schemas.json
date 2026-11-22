@@ -1,0 +1,15 @@
+{
+  "definitions": {},
+  "actions": {
+    "notification.send": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "destination": {"type": "string"},
+          "accepted": {"const": true, "description": "The Workflow endpoint accepted the request; Teams delivery is not confirmed"}
+        },
+        "required": ["destination", "accepted"]
+      }
+    }
+  }
+}

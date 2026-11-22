@@ -84,6 +84,7 @@ struct EvidenceBackend {
     draft_read_failure: Mutex<Option<ConfluenceBackendError>>,
     draft_read_budget: Mutex<Option<ConfluenceMetadataBudget>>,
     draft_read_override: Mutex<Option<ConfluenceDraftContent>>,
+    page_draft_parent: Option<ConfluenceParent>,
     move_during_body: bool,
     move_during_download: bool,
     move_after_upload: bool,
@@ -137,6 +138,7 @@ impl EvidenceBackend {
             draft_read_failure: Mutex::new(None),
             draft_read_budget: Mutex::new(None),
             draft_read_override: Mutex::new(None),
+            page_draft_parent: Some(parent(ConfluenceNodeKind::Page, "200")),
             move_during_body: false,
             move_during_download: false,
             move_after_upload: false,
@@ -185,7 +187,8 @@ impl EvidenceBackend {
             space_id: "98765".into(),
             space_alias: None,
             parent: (kind == ConfluenceDraftContentType::Page)
-                .then(|| parent(ConfluenceNodeKind::Page, "200")),
+                .then(|| self.page_draft_parent.clone())
+                .flatten(),
             web_url: None,
             space_web_url: None,
             status: Some("draft".into()),
@@ -917,7 +920,7 @@ async fn json_and_download_are_withheld_when_location_changes_after_fetch() {
         let backend = Arc::new(raw);
         let provider = backend.provider();
         let request = admitted(&provider, action, ContainmentEvidenceLevel::CompleteLineage).await;
-        let error = provider.invoke(request).await.unwrap_err();
+        let error = provider.invoke_checked(request).await.unwrap_err();
         assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved, "{action}");
         assert!(error.result.is_none());
         assert_eq!(backend.emitted_bytes.load(Ordering::SeqCst), 0);
@@ -939,7 +942,7 @@ async fn update_has_no_side_effect_after_location_changes_and_never_reads_v1_met
     )
     .await;
     backend.move_page();
-    let error = provider.invoke(request).await.unwrap_err();
+    let error = provider.invoke_checked(request).await.unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert_eq!(backend.writes.load(Ordering::SeqCst), 0);
     assert_eq!(backend.page_reads.load(Ordering::SeqCst), 0);
@@ -1012,7 +1015,7 @@ async fn upload_rechecks_before_each_file_and_preserves_first_success() {
         BrokerBodyPart::in_memory("file0",Some("a.txt".into()),Some("text/plain".into()),b"x".to_vec()),
         BrokerBodyPart::in_memory("file1",Some("b.txt".into()),Some("text/plain".into()),b"y".to_vec()),
     ]).build();
-    let error = provider.invoke(request).await.unwrap_err();
+    let error = provider.invoke_checked(request).await.unwrap_err();
     let result = error.result.unwrap();
     assert_eq!(backend.writes.load(Ordering::SeqCst), 1);
     assert_eq!(result["status"], "partial");
@@ -1150,7 +1153,7 @@ async fn prewrite_version_conflict_does_not_release_new_facts_after_location_cha
     let request = InvocationBuilder::from(request)
         .input("baseVersion", json!(2))
         .build();
-    let error = provider.invoke(request).await.unwrap_err();
+    let error = provider.invoke_checked(request).await.unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert!(error.result.is_none());
     assert_eq!(backend.writes.load(Ordering::SeqCst), 0);
@@ -1300,7 +1303,7 @@ async fn a_move_root_lost_after_admission_preserves_diagnostic_and_blocks_the_mo
                 .unwrap()
                 .remove(&(ConfluenceNodeKind::Page, "900000000001".into()));
         }
-        let error = provider.invoke(request).await.unwrap_err();
+        let error = provider.invoke_checked(request).await.unwrap_err();
         assert_private_move_diagnostic(&error);
         assert_eq!(
             error.audit.as_deref().unwrap()["locationProof"]["space"],
@@ -1332,7 +1335,7 @@ async fn lookup_readable_intermediate_never_substitutes_for_execution_visibility
         let request = InvocationBuilder::from(request)
             .credential(execution.clone())
             .build();
-        let error = provider.invoke(request).await.unwrap_err();
+        let error = provider.invoke_checked(request).await.unwrap_err();
         assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
         assert!(error.result.is_none());
         assert_eq!(
@@ -1396,7 +1399,7 @@ async fn new_and_staged_drafts_publish_with_distinct_versions_and_same_identity_
             let backend = Arc::new(EvidenceBackend::new());
             let provider = backend.provider();
             let request = draft_origin_request(&provider, action, origin).await;
-            let result = provider.invoke(request).await.unwrap();
+            let result = provider.invoke_checked(request).await.unwrap();
             let expected = if origin == ConfluenceDraftOrigin::New {
                 1
             } else {
@@ -1438,7 +1441,7 @@ async fn staged_publish_rechecks_current_version_and_placement_before_any_write(
         let provider = backend.provider();
         let request = draft_origin_request(&provider, action, ConfluenceDraftOrigin::Staged).await;
         backend.published_current_version.store(8, Ordering::SeqCst);
-        let error = provider.invoke(request).await.unwrap_err();
+        let error = provider.invoke_checked(request).await.unwrap_err();
         assert_eq!(error.reason_code(), ReasonCode::VersionConflict);
         assert_eq!(error.result.as_deref().unwrap()["expectedBaseVersion"], 7);
         assert_eq!(error.result.as_deref().unwrap()["currentVersion"], 8);
@@ -1466,7 +1469,7 @@ async fn staged_publish_rechecks_current_version_and_placement_before_any_write(
     .await;
     *backend.published_current_parent.lock().unwrap() =
         Some(parent(ConfluenceNodeKind::Page, "300"));
-    let error = provider.invoke(request).await.unwrap_err();
+    let error = provider.invoke_checked(request).await.unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert!(error.result.is_none());
     assert_eq!(
@@ -1509,7 +1512,7 @@ async fn accepted_publish_mismatches_keep_applied_unverified_receipts_without_re
                     _ => unreachable!(),
                 }
                 *backend.publish_response.lock().unwrap() = Some(response);
-                let error = provider.invoke(request).await.unwrap_err();
+                let error = provider.invoke_checked(request).await.unwrap_err();
                 assert_eq!(
                     error.reason_code(),
                     ReasonCode::UpstreamProtocolFailed,
@@ -1540,7 +1543,7 @@ async fn staged_discard_and_attachment_modes_remain_explicitly_unsupported() {
             let provider = backend.provider();
             let request =
                 draft_origin_request(&provider, &action, ConfluenceDraftOrigin::Staged).await;
-            let error = provider.invoke(request).await.unwrap_err();
+            let error = provider.invoke_checked(request).await.unwrap_err();
             assert_eq!(
                 error.reason_code(),
                 ReasonCode::ServiceActionDenied,
@@ -1566,7 +1569,7 @@ async fn all_attachment_downloads_recheck_location_before_opening_content() {
         let backend = Arc::new(raw);
         let provider = backend.provider();
         let request = admitted(&provider, action, ContainmentEvidenceLevel::CompleteLineage).await;
-        let error = provider.invoke(request).await.unwrap_err();
+        let error = provider.invoke_checked(request).await.unwrap_err();
         assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved, "{action}");
         assert!(error.result.is_none(), "{action}");
         assert_eq!(backend.content_opens.load(Ordering::SeqCst), 0, "{action}");
@@ -1586,7 +1589,7 @@ async fn page_update_upstream_conflict_is_distinct_from_measured_version_mismatc
         ContainmentEvidenceLevel::ContainerOnly,
     )
     .await;
-    let error = provider.invoke(request).await.unwrap_err();
+    let error = provider.invoke_checked(request).await.unwrap_err();
     assert_eq!(error.reason_code().as_str(), "confluence_update_conflict");
     assert_eq!(error.decision(), Decision::Error);
     assert_eq!(error.message, "Confluence rejected the page update");
@@ -1614,7 +1617,7 @@ async fn page_update_upstream_conflict_is_distinct_from_measured_version_mismatc
         inputs,
     )
     .await;
-    let error = provider.invoke(request).await.unwrap_err();
+    let error = provider.invoke_checked(request).await.unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::VersionConflict);
     assert_eq!(error.result.as_deref().unwrap()["currentVersion"], 1);
     assert_eq!(backend.writes.load(Ordering::SeqCst), 1);
@@ -1758,7 +1761,7 @@ async fn draft_stage_accepts_only_absent_or_matching_current_probe_responses() {
                     *backend.draft_read_override.lock().unwrap() = Some(content);
                 }
             }
-            let result = provider.invoke(request).await;
+            let result = provider.invoke_checked(request).await;
             if matches!(mode, "missing" | "current") {
                 let result = result.unwrap_or_else(|error| panic!("{action} {mode}: {error:?}"));
                 assert_eq!(backend.writes.load(Ordering::SeqCst), 1, "{action} {mode}");
@@ -1787,6 +1790,7 @@ async fn draft_stage_accepts_only_absent_or_matching_current_probe_responses() {
     }
 }
 
+mod result_schemas;
 mod stable_identity;
 
 #[tokio::test]
@@ -1811,7 +1815,7 @@ async fn selected_body_is_released_only_after_current_location_recheck() {
             ResponseOptions::default(),
         )
         .unwrap();
-        match provider.invoke(request).await {
+        match provider.invoke_checked(request).await {
             Ok(mut result) => {
                 assert!(!moved);
                 present_result(&resolved, &mut result.result, 1024, 16384).unwrap();

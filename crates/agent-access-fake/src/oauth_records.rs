@@ -2,13 +2,14 @@
 //! delegated OAuth reads against the independent OAuth test server.
 use agent_access_provider::host::UpstreamClientFactory;
 use agent_access_provider::{
-    ActionDescriptor, BackendConfig, BackendRegistration, BodyReadError, BuildContext,
-    ClientProfile, CredentialDescriptor, DelegatedAccess, EgressDeclaration, EgressProxyConfig,
-    Provider, ProviderBuildError, ProviderError, ProviderInvocation, ProviderLimits,
-    ProviderResult, ReasonCode, ResourceScopeCapabilities, ResourceScopes, ResourceType,
-    ResourceTypeDescriptor, ScopeRequest, ScopeResolution, ServiceDescriptor, UpstreamAuthority,
-    UpstreamCall, UpstreamClient, UpstreamClientSpec, ValidationContext, complete_upstream_trace,
-    is_literal_loopback, parse_backend_config, read_bounded_body, take_upstream_trace,
+    ActionDescriptor, ActionResultSchemas, BackendConfig, BackendRegistration, BodyReadError,
+    BuildContext, ClientProfile, CredentialDescriptor, DelegatedAccess, EgressDeclaration,
+    EgressProxyConfig, Provider, ProviderBuildError, ProviderError, ProviderInvocation,
+    ProviderLimits, ProviderResult, ReasonCode, ResourceScopeCapabilities, ResourceScopes,
+    ResourceType, ResourceTypeDescriptor, ScopeRequest, ScopeResolution, ServiceDescriptor,
+    UpstreamAuthority, UpstreamCall, UpstreamClient, UpstreamClientSpec, ValidationContext,
+    complete_upstream_trace, is_literal_loopback, parse_backend_config, read_bounded_body,
+    take_upstream_trace,
 };
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -124,6 +125,10 @@ impl BackendConfig for OAuthStubProviderConfig {
 fn oauth_stub_descriptor() -> ServiceDescriptor {
     let collection = || json!({"type":"string","pattern":"^[a-z0-9_-]{1,64}$"});
     let schema = |required: Value, properties: Value| json!({"type":"object","required":required,"properties":properties,"additionalProperties":false});
+    // The records API's JSON is passed through verbatim, including scalar,
+    // array and null roots: an explicit opaque leaf.
+    let passthrough =
+        |description: &str| ActionResultSchemas::new(json!({"description": description}));
     ServiceDescriptor::new("oauth_stub", "OAuth Test Records")
         .with_resource_scopes(BTreeMap::from([(
             "collection".into(),
@@ -139,6 +144,9 @@ fn oauth_stub_descriptor() -> ServiceDescriptor {
                 schema(json!(["collection"]), json!({"collection": collection()})),
             )
             .documentation(action_documentation("record.list"))
+            .result_schemas(passthrough(
+                "The records API's collection response, passed through verbatim.",
+            ))
             .read_only()
             .scope("collection")
             .credential_modes(["per_user"])
@@ -155,6 +163,9 @@ fn oauth_stub_descriptor() -> ServiceDescriptor {
                 ),
             )
             .documentation(action_documentation("record.view"))
+            .result_schemas(passthrough(
+                "The records API's record, passed through verbatim.",
+            ))
             .read_only()
             .scope("collection")
             .credential_modes(["per_user"])
@@ -166,6 +177,9 @@ fn oauth_stub_descriptor() -> ServiceDescriptor {
                 schema(json!([]), json!({})),
             )
             .documentation(action_documentation("account.view"))
+            .result_schemas(passthrough(
+                "The records API's account identity, passed through verbatim.",
+            ))
             .read_only()
             .credential_modes(["per_user"]),
         ])
@@ -512,6 +526,28 @@ mod tests {
             [("collection", "Collection"), ("id", "Record ID")]
         );
         assert!(audited("account.view").is_empty());
+    }
+
+    #[test]
+    fn passthrough_result_schemas_preserve_every_json_root_kind() {
+        let descriptor = oauth_stub_descriptor();
+        descriptor.validate().unwrap();
+        for action in &descriptor.actions {
+            for value in [
+                json!({"record": {"custom": [true, null, 7]}}),
+                json!([{"id": "record-one"}, "opaque"]),
+                json!("opaque"),
+                json!(17),
+                json!(1.5),
+                json!(false),
+                Value::Null,
+            ] {
+                agent_access_provider::test_support::assert_result_conforms(
+                    action,
+                    &Ok(ProviderResult::new(value)),
+                );
+            }
+        }
     }
 
     #[test]

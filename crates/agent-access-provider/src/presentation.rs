@@ -2,6 +2,9 @@
 //!
 //! Resolve request controls once against the admitted action. The resulting
 //! [`ResolvedPresentation`] pins the concrete format and its body declarations.
+mod schema;
+pub use schema::{UnresolvedBodyField, inject_selected_content_schema, selected_content_schema};
+
 use crate::{ProviderError, ReasonCode};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};

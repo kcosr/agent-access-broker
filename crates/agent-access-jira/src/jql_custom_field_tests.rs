@@ -276,7 +276,7 @@ async fn custom_field_search_continuations_bind_normalized_query_and_current_aut
         per_user_invocation("search", inputs, vec![])
     };
     let first = provider
-        .invoke(invoke("CF[12345] ~ 'privateSearchTerm'", None))
+        .invoke_checked(invoke("CF[12345] ~ 'privateSearchTerm'", None))
         .await
         .unwrap();
     let token = first.result["nextPageToken"].as_str().unwrap();
@@ -285,7 +285,7 @@ async fn custom_field_search_continuations_bind_normalized_query_and_current_aut
         assert!(!audit.contains(private));
     }
     provider
-        .invoke(invoke("cf[12345] ~ \"privateSearchTerm\"", Some(token)))
+        .invoke_checked(invoke("cf[12345] ~ \"privateSearchTerm\"", Some(token)))
         .await
         .unwrap();
     assert_eq!(
@@ -305,7 +305,7 @@ async fn custom_field_search_continuations_bind_normalized_query_and_current_aut
         "cf[12345] = privateSearchTerm",
     ] {
         let error = provider
-            .invoke(invoke(changed, Some(token)))
+            .invoke_checked(invoke(changed, Some(token)))
             .await
             .unwrap_err();
         assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
@@ -316,7 +316,7 @@ async fn custom_field_search_continuations_bind_normalized_query_and_current_aut
             .build();
     assert!(
         provider
-            .invoke(changed_scope)
+            .invoke_checked(changed_scope)
             .await
             .unwrap_err()
             .message
@@ -324,7 +324,7 @@ async fn custom_field_search_continuations_bind_normalized_query_and_current_aut
     );
 
     let quoted = provider
-        .invoke(invoke(
+        .invoke_checked(invoke(
             "CF[12345] = 'No' AND cf[12346] IN ('True', 'False', 'Default')",
             None,
         ))
@@ -332,7 +332,7 @@ async fn custom_field_search_continuations_bind_normalized_query_and_current_aut
         .unwrap();
     let quoted_token = quoted.result["nextPageToken"].as_str().unwrap();
     provider
-        .invoke(invoke(
+        .invoke_checked(invoke(
             "cf[12345] = \"No\" AND cf[12346] IN (\"True\", \"False\", \"Default\")",
             Some(quoted_token),
         ))
@@ -345,7 +345,7 @@ async fn custom_field_search_continuations_bind_normalized_query_and_current_aut
     // Removing quotes changes the canonical upstream query and cannot reuse
     // a continuation issued for the quoted values.
     let error = provider
-        .invoke(invoke(
+        .invoke_checked(invoke(
             "cf[12345] = No AND cf[12346] IN (True, False, Default)",
             Some(quoted_token),
         ))
@@ -359,7 +359,7 @@ async fn custom_field_search_continuations_bind_normalized_query_and_current_aut
     denied.issues[0].project = "OTHER".into();
     *backend.search_page.lock().unwrap() = Some(denied);
     let error = provider
-        .invoke(invoke("cf[12345] = OTHER OR project = OTHER", None))
+        .invoke_checked(invoke("cf[12345] = OTHER OR project = OTHER", None))
         .await
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);

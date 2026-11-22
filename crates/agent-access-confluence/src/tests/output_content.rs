@@ -3,6 +3,24 @@ use agent_access_provider::presentation::{
     OutputContentFormat, ResponseOptions, present_result, resolve_response_options,
 };
 
+fn assert_selected_conforms(
+    action: &ActionDescriptor,
+    format: OutputContentFormat,
+    result: &Value,
+) {
+    let mut schema = action.result_schemas.as_ref().unwrap().success().clone();
+    for field in action.presentation.unwrap().body_fields() {
+        agent_access_provider::presentation::inject_selected_content_schema(
+            &mut schema,
+            &field,
+            &[format],
+        )
+        .unwrap();
+    }
+    agent_access_provider::test_support::check_strict_conformance(&schema, result)
+        .unwrap_or_else(|problem| panic!("{} {format:?}: {problem}", action.action));
+}
+
 const BODY_MUTATIONS: &[&str] = &[
     "page.footer_comment.add",
     "blog.footer_comment.add",
@@ -85,7 +103,7 @@ async fn every_successful_body_mutation_has_a_hidden_completed_recovery_receipt(
             ProviderLimits::default(),
             backend.clone(),
         );
-        let mut outcome = provider
+        let outcome = provider
             .invoke_fixture(invocation(action, mutation_inputs(action)))
             .await
             .unwrap_or_else(|error| panic!("{action}: {error:?}"));
@@ -99,25 +117,103 @@ async fn every_successful_body_mutation_has_a_hidden_completed_recovery_receipt(
         assert!(serialized.get("presentationRecoveryReceipt").is_none());
         assert!(serialized.get("presentation_recovery_receipt").is_none());
         assert!(outcome.result.get("mutationStatus").is_none());
-        let presentation = descriptor
-            .actions
-            .iter()
-            .find(|item| item.action == *action)
-            .unwrap()
-            .presentation;
-        let resolved =
-            resolve_response_options(presentation, None, ResponseOptions::default()).unwrap();
-        present_result(&resolved, &mut outcome.result, 1024, 16384).unwrap();
-        assert_eq!(
-            outcome.result["comment"]["body"],
-            json!({"format":"markdown","value":"Completed mutation"})
-        );
+        let declared = descriptor.action(action).unwrap();
+        for format in declared.presentation.unwrap().output_content_formats() {
+            let resolved = resolve_response_options(
+                declared.presentation,
+                None,
+                ResponseOptions::new(Some(*format), None),
+            )
+            .unwrap();
+            let mut selected = outcome.result.clone();
+            present_result(&resolved, &mut selected, 1024, 16384).unwrap();
+            assert_selected_conforms(declared, *format, &selected);
+            assert_eq!(selected["comment"]["body"]["format"], format.as_str());
+            assert_eq!(
+                selected["comment"]["body"]["value"],
+                if *format == OutputContentFormat::Storage {
+                    "<p>Completed mutation</p>"
+                } else {
+                    "Completed mutation"
+                }
+            );
+            assert!(present_result(&resolved, &mut outcome.result.clone(), 1024, 1).is_err());
+            assert_eq!(
+                outcome
+                    .presentation_recovery_receipt
+                    .as_ref()
+                    .unwrap()
+                    .status(),
+                MutationStatus::Applied
+            );
+        }
         assert_eq!(
             backend.create_requests.lock().unwrap().len()
                 + backend.update_requests.lock().unwrap().len(),
             1,
             "{action}"
         );
+    }
+}
+
+#[tokio::test]
+async fn configured_page_body_sources_conform_before_and_after_selection() {
+    let adf = json!({"type":"doc","version":1,"content":[
+        {"type":"paragraph","content":[{"type":"text","text":"Selected page"}]}
+    ]});
+    for sources in [
+        &[][..],
+        &["storage"],
+        &["atlas_doc_format"],
+        &["storage", "atlas_doc_format"],
+    ] {
+        let mut backend = backend_for_action("page.view");
+        let page = backend.pages.get_mut("123456").unwrap();
+        page.bodies = BTreeMap::from([
+            ("storage".into(), "<p>Selected page</p>".into()),
+            ("atlas_doc_format".into(), adf.to_string()),
+        ]);
+        let mut config = confluence_config();
+        config.content.page_formats = sources.iter().map(ToString::to_string).collect();
+        let descriptor = confluence_descriptor(&config);
+        let action = descriptor.action("page.view").unwrap();
+        let provider =
+            ConfluenceProvider::with_backend(config, ProviderLimits::default(), Arc::new(backend));
+        let outcome = provider
+            .invoke_fixture(invocation("page.view", json!({"pageId":"123456"})))
+            .await
+            .unwrap();
+        let Some(presentation) = action.presentation else {
+            assert!(outcome.result.get("body").is_none());
+            continue;
+        };
+        assert_eq!(
+            outcome.result["body"].as_object().unwrap().len(),
+            sources.len()
+        );
+        for format in presentation.output_content_formats() {
+            let options = resolve_response_options(
+                Some(presentation),
+                None,
+                ResponseOptions::new(Some(*format), None),
+            )
+            .unwrap();
+            let mut selected = outcome.result.clone();
+            present_result(&options, &mut selected, 4096, 65536).unwrap();
+            assert_selected_conforms(action, *format, &selected);
+            assert_eq!(selected["body"]["format"], format.as_str());
+            let expected = match format {
+                OutputContentFormat::Adf => adf.clone(),
+                OutputContentFormat::Storage => json!("<p>Selected page</p>"),
+                OutputContentFormat::Markdown | OutputContentFormat::Text => json!("Selected page"),
+                _ => panic!("unsupported test format"),
+            };
+            assert_eq!(selected["body"]["value"], expected);
+            selected.as_object_mut().unwrap().remove("body");
+            let mut metadata = outcome.result.clone();
+            metadata.as_object_mut().unwrap().remove("body");
+            assert_eq!(selected, metadata);
+        }
     }
 }
 

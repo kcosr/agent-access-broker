@@ -103,7 +103,7 @@ async fn provider_classified_failures_withhold_two_candidates_in_initial_and_fin
                 two_exact(kind)
             };
             let error = provider(backend.clone(), config())
-                .invoke_content_search(invocation(kind, selected, inputs()), kind)
+                .invoke_content_search_checked(invocation(kind, selected, inputs()), kind)
                 .await
                 .unwrap_err();
             let reason = if failure == "wrong_kind" {
@@ -199,7 +199,10 @@ async fn actual_request_and_byte_exhaustion_are_whole_page_errors_in_either_pass
                         .insert(format!("{prefix}:102"), charges.into());
                 }
                 let error = provider(backend.clone(), limits)
-                    .invoke_content_search(invocation(kind, two_exact(kind), inputs()), kind)
+                    .invoke_content_search_checked(
+                        invocation(kind, two_exact(kind), inputs()),
+                        kind,
+                    )
                     .await
                     .unwrap_err();
                 assert_whole_page_failure(&error, ReasonCode::ScopeUnresolved, final_pass);
@@ -234,7 +237,7 @@ async fn actual_request_and_byte_exhaustion_are_whole_page_errors_in_either_pass
     let mut limits = config();
     limits.content_access.max_metadata_requests = 7;
     let result = provider(backend.clone(), limits)
-        .invoke_content_search(invocation(kind, two_exact(kind), inputs()), kind)
+        .invoke_content_search_checked(invocation(kind, two_exact(kind), inputs()), kind)
         .await
         .unwrap();
     assert_eq!(result.result["pages"].as_array().unwrap().len(), 1);
@@ -327,7 +330,8 @@ async fn metadata_http_deadline_withholds_two_candidate_page_in_either_pass() {
         let kind = ConfluenceSearchContentKind::Page;
         let error = tokio::time::timeout(
             Duration::from_secs(10),
-            provider.invoke_content_search(invocation(kind, two_exact(kind), inputs()), kind),
+            provider
+                .invoke_content_search_checked(invocation(kind, two_exact(kind), inputs()), kind),
         )
         .await
         .expect("the HTTP client's own deadline must end the proof")

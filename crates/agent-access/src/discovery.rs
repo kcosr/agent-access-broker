@@ -2,7 +2,7 @@
 use agent_access_core::{ActionList, ApiCatalog, ResourceAccessDescription};
 use agent_access_provider::ActionCapabilities;
 use anyhow::{Context, Result, bail};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 #[derive(Debug)]
 pub(crate) struct BrokerFailure {
@@ -217,6 +217,7 @@ pub(crate) async fn actions_list(
 pub(crate) async fn action_describe(
     settings: &crate::ResolvedCliSettings,
     view: &agent_access_core::mcp::McpView,
+    output_schemas: agent_access_core::mcp::OutputSchemas,
     service: &str,
     action: &str,
 ) -> Result<Value> {
@@ -275,23 +276,16 @@ pub(crate) async fn action_describe(
         &catalog,
         view,
         agent_access_core::mcp::ProjectionMode::Stdio,
+        output_schemas,
         agent_access_core::mcp::STDIO_MAX_CATALOG_BYTES,
     )?;
-    if let Some(tool) = registry.action_detail(service, action) {
-        detail["mcpTool"] = tool;
-    } else if let Some(issue) = registry.action_unavailable(service, action) {
-        detail["mcpToolUnavailable"] = json!(issue.code.as_str());
-    }
-    if let Some(object) = detail.as_object_mut() {
-        object.remove("scopedMcpName");
-    }
-    detail["service"] = json!(service);
-    Ok(detail)
+    Ok(registry.describe_action(service, entry, detail))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use wiremock::{
         Mock, MockServer, ResponseTemplate,
         matchers::{header, method, path, query_param},
@@ -353,6 +347,7 @@ mod tests {
         let detail = action_describe(
             &settings(&server),
             &agent_access_core::mcp::McpView::Aggregate,
+            agent_access_core::mcp::OutputSchemas::On,
             "gitlab",
             "repo.fetch",
         )
@@ -381,6 +376,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn describe_projects_output_schema_metadata_only_when_selected() {
+        use agent_access_core::mcp::{McpView, OutputSchemas, ProjectionMode};
+        let server = MockServer::start().await;
+        let raw = service("invoke");
+        let mut catalog = catalog(&raw);
+        let result_schemas =
+            json!({"success":{"type":"object","properties":{"ref":{"type":"string"}}}});
+        catalog["services"][0]["actions"][0]["resultSchemas"] = result_schemas.clone();
+        mount(&server, "/v1/services/gitlab", 200, raw).await;
+        mount(&server, "/v1/spec/catalog", 200, catalog.clone()).await;
+        let action: agent_access_core::ApiActionSpec =
+            serde_json::from_value(catalog["services"][0]["actions"][0].clone()).unwrap();
+        let schema =
+            agent_access_core::output_schema::action_output_schema(&action, ProjectionMode::Stdio)
+                .unwrap();
+        for view in [McpView::Aggregate, McpView::Service("gitlab".into())] {
+            let on = action_describe(
+                &settings(&server),
+                &view,
+                OutputSchemas::On,
+                "gitlab",
+                "repo.fetch",
+            )
+            .await
+            .unwrap();
+            assert_eq!(on["mcpTool"]["outputSchema"], schema);
+            assert!(on.get("resultSchemas").is_none());
+            let off = action_describe(
+                &settings(&server),
+                &view,
+                OutputSchemas::Off,
+                "gitlab",
+                "repo.fetch",
+            )
+            .await
+            .unwrap();
+            assert!(off["mcpTool"].get("outputSchema").is_none(), "{off}");
+            assert!(off.get("resultSchemas").is_none(), "{off}");
+            assert_eq!(off["mcpTool"]["name"], on["mcpTool"]["name"]);
+            assert_eq!(off["mcpTool"]["inputSchema"], on["mcpTool"]["inputSchema"]);
+            let mut stripped = on.clone();
+            stripped["mcpTool"]
+                .as_object_mut()
+                .unwrap()
+                .remove("outputSchema");
+            assert_eq!(off, stripped);
+        }
+    }
+
+    #[tokio::test]
     async fn describe_reports_connection_preference_without_changing_canonical_capabilities() {
         use agent_access_provider::presentation::{BodyField, OutputContentFormat};
         let server = MockServer::start().await;
@@ -403,6 +448,7 @@ mod tests {
             let detail = action_describe(
                 &connection,
                 &agent_access_core::mcp::McpView::Aggregate,
+                agent_access_core::mcp::OutputSchemas::On,
                 "gitlab",
                 "repo.fetch",
             )
@@ -448,6 +494,7 @@ mod tests {
                 let error = action_describe(
                     &settings(&server),
                     &agent_access_core::mcp::McpView::Aggregate,
+                    agent_access_core::mcp::OutputSchemas::On,
                     "gitlab",
                     "repo.fetch",
                 )
@@ -473,6 +520,7 @@ mod tests {
             action_describe(
                 &settings(&server),
                 &agent_access_core::mcp::McpView::Aggregate,
+                agent_access_core::mcp::OutputSchemas::On,
                 "gitlab",
                 "repo.fetch"
             )
@@ -495,6 +543,8 @@ mod tests {
             raw["service"] = json!(service_id);
             raw["actions"][0]["action"] = json!(action_id);
             let mut value = catalog(&raw);
+            let result_schemas = json!({"success":{"type":"object"}});
+            value["services"][0]["actions"][0]["resultSchemas"] = result_schemas.clone();
             if code == "name_conflict" {
                 let mut other = value["services"][0]["actions"][0].clone();
                 other["action"] = json!("repo_fetch");
@@ -506,28 +556,46 @@ mod tests {
             }
             mount(&server, &format!("/v1/services/{service_id}"), 200, raw).await;
             mount(&server, "/v1/spec/catalog", 200, value).await;
-            let detail = action_describe(
-                &settings(&server),
-                &agent_access_core::mcp::McpView::Aggregate,
-                service_id,
-                &action_id,
-            )
-            .await
-            .unwrap();
-            assert_eq!(detail["action"], action_id);
-            assert!(detail.get("mcpTool").is_none(), "{detail}");
-            assert_eq!(detail["mcpToolUnavailable"], code, "{detail}");
-            assert!(!detail.to_string().contains("OtherToolName"));
-            let scoped = action_describe(
-                &settings(&server),
-                &agent_access_core::mcp::McpView::Service(service_id.into()),
-                service_id,
-                &action_id,
-            )
-            .await
-            .unwrap();
-            assert_eq!(scoped["mcpTool"]["name"], "OriginalToolName");
-            assert!(scoped.get("mcpToolUnavailable").is_none());
+            for output_schemas in [
+                agent_access_core::mcp::OutputSchemas::On,
+                agent_access_core::mcp::OutputSchemas::Off,
+            ] {
+                let detail = action_describe(
+                    &settings(&server),
+                    &agent_access_core::mcp::McpView::Aggregate,
+                    output_schemas,
+                    service_id,
+                    &action_id,
+                )
+                .await
+                .unwrap();
+                assert_eq!(detail["action"], action_id);
+                assert!(detail.get("mcpTool").is_none(), "{detail}");
+                assert_eq!(detail["mcpToolUnavailable"], code, "{detail}");
+                assert!(!detail.to_string().contains("OtherToolName"));
+                // Without a tool, on keeps the payload schemas; off omits them.
+                assert_eq!(
+                    detail.get("resultSchemas"),
+                    (output_schemas == agent_access_core::mcp::OutputSchemas::On)
+                        .then_some(&result_schemas)
+                );
+                let scoped = action_describe(
+                    &settings(&server),
+                    &agent_access_core::mcp::McpView::Service(service_id.into()),
+                    output_schemas,
+                    service_id,
+                    &action_id,
+                )
+                .await
+                .unwrap();
+                assert_eq!(scoped["mcpTool"]["name"], "OriginalToolName");
+                assert!(scoped.get("mcpToolUnavailable").is_none());
+                assert!(scoped.get("resultSchemas").is_none());
+                assert_eq!(
+                    scoped["mcpTool"].get("outputSchema").is_some(),
+                    output_schemas == agent_access_core::mcp::OutputSchemas::On
+                );
+            }
         }
     }
 
@@ -538,6 +606,7 @@ mod tests {
         let absent = action_describe(
             &settings(&server),
             &agent_access_core::mcp::McpView::Aggregate,
+            agent_access_core::mcp::OutputSchemas::On,
             "gitlab",
             "repo.push",
         )
@@ -553,6 +622,7 @@ mod tests {
         let missing = action_describe(
             &settings(&server),
             &agent_access_core::mcp::McpView::Aggregate,
+            agent_access_core::mcp::OutputSchemas::On,
             "gitlab",
             "repo.fetch",
         )
@@ -571,6 +641,7 @@ mod tests {
         let skew = action_describe(
             &settings(&server),
             &agent_access_core::mcp::McpView::Aggregate,
+            agent_access_core::mcp::OutputSchemas::On,
             "gitlab",
             "repo.fetch",
         )
@@ -583,6 +654,7 @@ mod tests {
         let error = action_describe(
             &settings(&server),
             &agent_access_core::mcp::McpView::Aggregate,
+            agent_access_core::mcp::OutputSchemas::On,
             "gitlab",
             "repo.fetch",
         )
@@ -602,6 +674,7 @@ mod tests {
             let error = action_describe(
                 &settings(&server),
                 &agent_access_core::mcp::McpView::Aggregate,
+                agent_access_core::mcp::OutputSchemas::On,
                 "gitlab",
                 "repo.fetch",
             )

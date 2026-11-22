@@ -1136,7 +1136,7 @@ async fn exercise(action: &str, operation: &str) {
                     .build();
             }
         }
-        let result = provider.invoke(request).await;
+        let result = provider.invoke_checked(request).await;
         if outside {
             assert_eq!(
                 backend.writes.load(Ordering::SeqCst),

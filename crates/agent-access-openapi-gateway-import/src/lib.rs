@@ -184,6 +184,11 @@ impl ImportedAdapter for OpenApiGatewayAdapter {
     fn scoped_mcp_name(&self, _: &ImportedActionDefinition) -> Result<String, String> {
         Err("gateway actions have no executable MCP name".into())
     }
+    /// Gateway operations forward raw upstream responses and are never
+    /// invoked, so they have no Broker result; core never asks.
+    fn result_schemas(&self, _: &ImportedActionDefinition) -> Result<ActionResultSchemas, String> {
+        Err("gateway actions have no invocation result".into())
+    }
     fn build(
         &self,
         definition: &ImportedServiceDefinition,

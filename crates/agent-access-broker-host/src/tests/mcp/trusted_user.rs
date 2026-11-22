@@ -321,7 +321,9 @@ async fn trusted_user_content_preferences_preserve_valid_admission_and_audited_q
             ("/mcp", if relayed { "adf" } else { "markdown" }),
             ("/mcp/fake", if relayed { "storage" } else { "text" }),
         ] {
-            let uri = format!("{path}?preferredOutputContentFormat={format}&includeTextCopy=false");
+            let uri = format!(
+                "{path}?outputSchemas=on&preferredOutputContentFormat={format}&includeTextCopy=false"
+            );
             let tool_call = |id| {
                 let mut message = call(id);
                 if path != "/mcp" {
@@ -375,6 +377,8 @@ async fn trusted_user_content_preferences_preserve_valid_admission_and_audited_q
                 "includeTextCopy=%66alse",
                 "includeTextCopy=false&",
                 "includeTextCopy=false&preferredOutputContentFormat=",
+                "outputSchemas=on&includeTextCopy=false&outputSchemas=off",
+                "preferredOutputContentFormat=text&outputSchemas=query-private-marker",
             ] {
                 let id = format!("invalid-content-preference-{}", denied_ids.len());
                 let mut invalid = user_request(relayed, Some(&session), tool_call(11));
@@ -1411,4 +1415,115 @@ async fn trusted_user_initialize_runs_between_background_prune_batches() {
     assert_eq!(response.status(), StatusCode::OK);
     assert!(response.headers().contains_key("mcp-session-id"));
     rpc_body(response).await;
+}
+
+#[tokio::test]
+async fn output_schema_selection_applies_alike_under_username_and_fingerprint_admission() {
+    let (fixture, store, _) = fixture(16).await;
+    let ring = CredentialKeyRing::load(
+        fixture
+            .state
+            .current()
+            .runtime
+            .config()
+            .credential_encryption
+            .as_ref()
+            .unwrap(),
+    )
+    .unwrap();
+    let token = store.reveal_identity_token("alice", &ring).unwrap();
+    let fingerprint = format!("sha256:{:x}", Sha256::digest(token.as_bytes()));
+    // Direct username, relayed username and relayed fingerprint admission.
+    let admitted = |admission: usize, uri: &str, session: Option<&str>, message: Value| {
+        let request = if admission < 2 {
+            user_request(admission == 1, session, message)
+        } else {
+            let mut request = request(Method::POST, None, session, Some(message));
+            request.headers_mut().insert(
+                CALLER,
+                HeaderValue::from_str(&format!("Bearer {RELAY}")).unwrap(),
+            );
+            request.headers_mut().insert(
+                "x-aw-identity-token-sha256",
+                HeaderValue::from_str(&fingerprint).unwrap(),
+            );
+            request
+        };
+        at_uri(uri, request)
+    };
+    let echo = agent_access_core::mcp::tool_name("fake", "echo");
+    for admission in 0..3 {
+        let mut results = Vec::new();
+        for selection in [Some(OutputSchemas::On), Some(OutputSchemas::Off), None] {
+            let uri = endpoint("/mcp", selection);
+            let response = fixture.send(admitted(admission, &uri, None, init())).await;
+            assert_eq!(response.status(), StatusCode::OK, "{admission} {uri}");
+            let session = response.headers()["mcp-session-id"]
+                .to_str()
+                .unwrap()
+                .to_owned();
+            let listed = rpc_body(
+                fixture
+                    .send(admitted(
+                        admission,
+                        &uri,
+                        Some(&session),
+                        json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
+                    ))
+                    .await,
+            )
+            .await;
+            let tools = listed["result"]["tools"].as_array().unwrap();
+            assert!(tools.iter().any(|tool| tool["name"] == echo));
+            for tool in tools {
+                assert_eq!(
+                    tool.get("outputSchema").is_some(),
+                    selection == Some(OutputSchemas::On),
+                    "{admission} {uri}"
+                );
+            }
+            let called = rpc_body(
+                fixture
+                    .send(admitted(admission, &uri, Some(&session), call(3)))
+                    .await,
+            )
+            .await;
+            let mut result = structured(&called).clone();
+            assert_eq!(result["decision"], "allow", "{called}");
+            // The selection never changes the admitted human.
+            assert_eq!(result["result"]["principal"], "alice");
+            for id in ["agentRequestId", "brokerRequestId"] {
+                result.as_object_mut().unwrap().remove(id);
+            }
+            results.push(result);
+        }
+        assert_eq!(results[0], results[1]);
+        assert_eq!(results[1], results[2]);
+        for query in [
+            "/mcp?outputSchemas=yes",
+            "/mcp?outputSchemas=on&outputSchemas=off",
+        ] {
+            let response = fixture.send(admitted(admission, query, None, init())).await;
+            assert_eq!(
+                response.status(),
+                StatusCode::BAD_REQUEST,
+                "{admission} {query}"
+            );
+            assert_eq!(response.headers()["cache-control"], "no-store");
+            assert!(response.headers().get("mcp-session-id").is_none());
+            let body = rpc_body(response).await;
+            // Query validation preserves current trusted-username admission
+            // failures and their mandatory audit records.
+            if admission < 2 {
+                assert_eq!(
+                    body["reasonCode"], "identity_assertion_invalid",
+                    "{admission} {query}"
+                );
+                assert_eq!(body["action"], "identity.authenticate");
+                assert_eq!(body["decision"], "deny");
+            } else {
+                assert_eq!(body, json!({"error":"Invalid MCP query options"}));
+            }
+        }
+    }
 }

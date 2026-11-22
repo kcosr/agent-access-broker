@@ -30,7 +30,7 @@ async fn exact_page_and_blog_follow_current_space_with_two_fresh_passes() {
         let backend = Backend::new(vec![results(vec![page("101", "OPS")], None)]);
         backend.set_nodes("101", vec![node("101", "2", None)]);
         let result = provider(backend.clone(), config())
-            .invoke_content_search(invocation(kind, exact_authority(kind), inputs()), kind)
+            .invoke_content_search_checked(invocation(kind, exact_authority(kind), inputs()), kind)
             .await
             .unwrap();
         assert_eq!(result.result[field(kind)].as_array().unwrap().len(), 1);
@@ -68,7 +68,10 @@ async fn stable_exact_identity_filters_stale_indexed_space_and_final_moves() {
                 },
             );
             let result = provider(backend.clone(), config())
-                .invoke_content_search(invocation(kind, exact_authority(kind), inputs()), kind)
+                .invoke_content_search_checked(
+                    invocation(kind, exact_authority(kind), inputs()),
+                    kind,
+                )
                 .await
                 .unwrap();
             assert_empty(&result, kind);
@@ -91,7 +94,7 @@ async fn fresh_content_authority_checks_requested_current_keys_despite_upstream_
         let mut query = inputs();
         query["spaces"] = json!(["ENG"]);
         let result = provider(backend.clone(), config())
-            .invoke_content_search(invocation(kind, exact_authority(kind), query), kind)
+            .invoke_content_search_checked(invocation(kind, exact_authority(kind), query), kind)
             .await
             .unwrap();
         assert_empty(&result, kind);
@@ -120,7 +123,7 @@ async fn unchanged_numeric_space_is_refetched_per_candidate_and_final_pass() {
         'a',
     );
     let result = provider(backend.clone(), config())
-        .invoke_content_search(invocation(kind, selected, inputs()), kind)
+        .invoke_content_search_checked(invocation(kind, selected, inputs()), kind)
         .await
         .unwrap();
     assert_empty(&result, kind);
@@ -177,7 +180,7 @@ async fn content_negatives_and_token_terms_force_fresh_proof_even_if_inapplicabl
             )
             .unwrap();
             let result = provider(backend.clone(), config())
-                .invoke_content_search(invocation(kind, selected, inputs()), kind)
+                .invoke_content_search_checked(invocation(kind, selected, inputs()), kind)
                 .await
                 .unwrap();
             assert_eq!(result.result["pages"].as_array().unwrap().len(), 1);
@@ -230,7 +233,7 @@ async fn any_started_proof_error_fails_the_entire_page_without_partial_rows_or_c
                     'a',
                 );
                 let error = provider(backend.clone(), config())
-                    .invoke_content_search(invocation(kind, selected, inputs()), kind)
+                    .invoke_content_search_checked(invocation(kind, selected, inputs()), kind)
                     .await
                     .unwrap_err();
                 assert!(error.result.is_none());
@@ -267,7 +270,7 @@ async fn noncurrent_wrong_kind_and_unreadable_space_are_not_filtered_as_moved_ro
             );
         }
         let error = provider(backend, config())
-            .invoke_content_search(invocation(kind, exact_authority(kind), inputs()), kind)
+            .invoke_content_search_checked(invocation(kind, exact_authority(kind), inputs()), kind)
             .await
             .unwrap_err();
         assert!(error.result.is_none());
@@ -295,14 +298,14 @@ async fn container_only_budget_reserves_both_passes_and_resumes_after_actual_pro
     limits.content_access.max_metadata_requests = 4;
     let provider = provider(backend.clone(), limits);
     let first = provider
-        .invoke_content_search(invocation(kind, selected.clone(), inputs()), kind)
+        .invoke_content_search_checked(invocation(kind, selected.clone(), inputs()), kind)
         .await
         .unwrap();
     assert_eq!(first.result["pages"].as_array().unwrap().len(), 1);
     assert_eq!(first.result["scanStatus"], "scan_budget");
     assert_eq!(backend.reads.lock().unwrap().len(), 4);
     let second = provider
-        .invoke_content_search(invocation(kind, selected, resume(inputs(), &first)), kind)
+        .invoke_content_search_checked(invocation(kind, selected, resume(inputs(), &first)), kind)
         .await
         .unwrap();
     assert_eq!(second.result["pages"][0]["id"], "102");
@@ -311,7 +314,7 @@ async fn container_only_budget_reserves_both_passes_and_resumes_after_actual_pro
     let mut limits = config();
     limits.content_access.max_metadata_requests = 3;
     let error = self::provider(backend.clone(), limits)
-        .invoke_content_search(invocation(kind, exact_authority(kind), inputs()), kind)
+        .invoke_content_search_checked(invocation(kind, exact_authority(kind), inputs()), kind)
         .await
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
@@ -336,11 +339,11 @@ async fn exact_resume_keeps_identity_across_external_move_and_rechecks_current_l
     );
     let provider = provider(backend.clone(), config());
     let first = provider
-        .invoke_content_search(invocation(kind, exact_authority(kind), inputs()), kind)
+        .invoke_content_search_checked(invocation(kind, exact_authority(kind), inputs()), kind)
         .await
         .unwrap();
     let second = provider
-        .invoke_content_search(
+        .invoke_content_search_checked(
             invocation(kind, exact_authority(kind), resume(inputs(), &first)),
             kind,
         )
@@ -364,7 +367,7 @@ async fn subtree_follows_root_across_spaces_but_not_a_detached_descendant() {
         backend.set_nodes("101", vec![node("101", "2", attached.then_some("100"))]);
         backend.set_nodes("100", vec![node("100", "2", None)]);
         let result = provider(backend, config())
-            .invoke_content_search(invocation(kind, tree_authority(), inputs()), kind)
+            .invoke_content_search_checked(invocation(kind, tree_authority(), inputs()), kind)
             .await
             .unwrap();
         assert_eq!(
@@ -399,7 +402,7 @@ async fn actual_space_token_and_exclusion_still_narrow_stable_content_identity()
         )
         .unwrap();
         let result = provider(backend.clone(), config())
-            .invoke_content_search(invocation(kind, selected, inputs()), kind)
+            .invoke_content_search_checked(invocation(kind, selected, inputs()), kind)
             .await
             .unwrap();
         assert_empty(&result, kind);
@@ -423,14 +426,14 @@ async fn complete_lineage_default_budget_finishes_finite_pages_through_bounded_r
     }
     let provider = provider(backend.clone(), config());
     let first = provider
-        .invoke_content_search(invocation(kind, tree_authority(), inputs()), kind)
+        .invoke_content_search_checked(invocation(kind, tree_authority(), inputs()), kind)
         .await
         .unwrap();
     assert_eq!(first.result["pages"].as_array().unwrap().len(), 3);
     assert_eq!(first.result["scanStatus"], "more");
     assert_eq!(backend.reads.lock().unwrap().len(), 18);
     let second = provider
-        .invoke_content_search(
+        .invoke_content_search_checked(
             invocation(kind, tree_authority(), resume(inputs(), &first)),
             kind,
         )
@@ -454,7 +457,7 @@ async fn hidden_ancestor_and_started_byte_exhaustion_fail_without_scan_budget_to
         vec![Some(ConfluenceBackendError::Forbidden)].into(),
     );
     let error = provider(backend, config())
-        .invoke_content_search(invocation(kind, tree_authority(), inputs()), kind)
+        .invoke_content_search_checked(invocation(kind, tree_authority(), inputs()), kind)
         .await
         .unwrap_err();
     assert!(error.result.is_none());
@@ -463,7 +466,7 @@ async fn hidden_ancestor_and_started_byte_exhaustion_fail_without_scan_budget_to
     let mut limits = config();
     limits.content_access.max_metadata_bytes = 128;
     let error = provider(backend, limits)
-        .invoke_content_search(invocation(kind, exact_authority(kind), inputs()), kind)
+        .invoke_content_search_checked(invocation(kind, exact_authority(kind), inputs()), kind)
         .await
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
@@ -501,7 +504,7 @@ async fn scalar_all_and_negative_token_boundary_retain_index_only_cost() {
         None,
     )]);
     let result = provider(backend.clone(), config())
-        .invoke_content_search(invocation(kind, selected, inputs()), kind)
+        .invoke_content_search_checked(invocation(kind, selected, inputs()), kind)
         .await
         .unwrap();
     assert_eq!(result.result["pages"].as_array().unwrap().len(), 1);

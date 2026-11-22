@@ -210,7 +210,7 @@ mod tests {
     }
     impl agent_access_provider::test_support::DescribedProvider for PausedProvider {
         fn descriptor(&self) -> agent_access_provider::ServiceDescriptor {
-            let mut descriptor = agent_access_fake::fake_descriptor();
+            let mut descriptor = crate::tests::untyped_fake_descriptor();
             if self.raw {
                 for action in &mut descriptor.actions {
                     action.io = agent_access_provider::raw_download_io();

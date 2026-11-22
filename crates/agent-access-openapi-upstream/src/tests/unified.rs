@@ -438,7 +438,7 @@ async fn basic_definition_and_execution_use_separate_origins_and_form_wire() {
             &host.context(),
         )
         .unwrap()
-        .provider()
+        .checked()
         .unwrap();
     let invoke = |inputs| {
         InvocationBuilder::new("example", "item.update")
@@ -727,7 +727,7 @@ async fn both_readers_send_equivalent_json_delete_and_form_requests_once() {
                     &host.context(),
                 )
                 .unwrap()
-                .provider()
+                .checked()
                 .unwrap();
             let inputs = if form {
                 json!({"body":{"page":1,"query":"x + 雪"}})
@@ -902,7 +902,7 @@ async fn optional_empty_form_has_content_type_only_when_body_is_present() {
             &test_host().context(),
         )
         .unwrap()
-        .provider()
+        .checked()
         .unwrap();
     for inputs in [json!({}), json!({"body":{}})] {
         provider

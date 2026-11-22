@@ -103,6 +103,12 @@ impl crate::imports::ImportedAdapter for CommandForm {
     fn scoped_mcp_name(&self, action: &ImportedActionDefinition) -> Result<String, String> {
         Ok(action.action.replace('.', "_"))
     }
+    fn result_schemas(
+        &self,
+        _: &ImportedActionDefinition,
+    ) -> Result<agent_access_provider::ActionResultSchemas, String> {
+        Ok(crate::imports::test_result_schemas("upstreamCommand"))
+    }
     fn build(
         &self,
         _: &ImportedServiceDefinition,

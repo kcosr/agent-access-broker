@@ -44,6 +44,12 @@ impl agent_access_provider::test_support::DescribedProvider for ContentProvider 
         let mut descriptor = agent_access_fake::fake_descriptor()
             .with_preferred_output_content_format(OutputContentFormat::Text);
         descriptor.credentials = CredentialDescriptor::default();
+        descriptor.actions[0].result_schemas = Some(
+            agent_access_provider::ActionResultSchemas::new(json!({
+                "type":"object", "properties":{"body":{"type":"string"},"unchanged":{"type":"string"}},
+                "required":["body","unchanged"]
+            })),
+        );
         descriptor.actions[0].presentation = Some(ActionPresentation::new(
             BODIES,
             FORMATS,
@@ -78,7 +84,7 @@ fn at(path: &str, mut request: Request<Body>) -> Request<Body> {
     request
 }
 
-async fn rpc(
+pub(super) async fn rpc(
     fixture: &Fixture,
     path: &str,
     session: &str,
@@ -86,6 +92,7 @@ async fn rpc(
     method: &str,
     params: Value,
 ) -> Value {
+    fixture.prepare_tool_check(path, session, method, &params);
     let response = fixture
         .send(at(
             path,
@@ -93,12 +100,14 @@ async fn rpc(
                 Method::POST,
                 Some(TOKEN_A),
                 Some(session),
-                Some(json!({"jsonrpc":"2.0","id":id,"method":method,"params":params})),
+                Some(json!({"jsonrpc":"2.0","id":id,"method":method,"params":&params})),
             ),
         ))
         .await;
     assert_eq!(response.status(), StatusCode::OK);
-    rpc_body(response).await
+    let body = rpc_body(response).await;
+    fixture.observe_response(path, session, method, &params, &body);
+    body
 }
 
 fn invoke(name: &str, exact: Option<&str>) -> Value {
@@ -578,5 +587,163 @@ async fn http_mcp_catalog_cursor_is_bound_to_the_request_preference() {
             .await;
             assert_eq!(rejected["error"]["code"], -32602);
         }
+    }
+}
+
+#[tokio::test]
+async fn output_schemas_validate_selected_bodies_helpers_and_errors_in_both_copy_modes() {
+    let provider = ContentProvider::default();
+    let fixture = Fixture::with_providers(|_| {}, vec![Arc::new(provider)]).await;
+    for (base, name) in [("/mcp", "fake_echo"), ("/mcp/fake", "echo")] {
+        // Every request owns its presentation selection, including after a
+        // session initialized with the opposite schema and copy settings.
+        let session = scoped::initialize(
+            &fixture,
+            &format!("{base}?outputSchemas=off&includeTextCopy=false"),
+            TOKEN_A,
+        )
+        .await;
+        for mode in [OutputSchemas::On, OutputSchemas::Off] {
+            for include_text_copy in [true, false] {
+                let uri = format!(
+                    "{base}?outputSchemas={}&includeTextCopy={include_text_copy}&preferredOutputContentFormat=markdown",
+                    mode.as_str()
+                );
+                let listed = rpc(&fixture, &uri, &session, 1, "tools/list", json!({})).await;
+                let tools = listed["result"]["tools"].as_array().unwrap();
+                assert!(
+                    tools
+                        .iter()
+                        .all(|tool| tool.get("outputSchema").is_some()
+                            == (mode == OutputSchemas::On))
+                );
+                for (id, tool, arguments, is_error) in [
+                    (
+                        2,
+                        name,
+                        json!({"inputs":{"project":"TEST","message":"selected content"}}),
+                        false,
+                    ),
+                    (
+                        3,
+                        "actions_describe",
+                        json!({"service":"fake","action":"echo"}),
+                        false,
+                    ),
+                    (4, "services_describe", json!({"service":"fake"}), false),
+                    (
+                        5,
+                        "resource_access_describe",
+                        json!({"service":"fake"}),
+                        false,
+                    ),
+                    (6, "services_describe", json!({"unexpected":true}), true),
+                    (7, name, json!({"inputs":[]}), true),
+                    (
+                        8,
+                        name,
+                        json!({"inputs":{"project":"PRIVATE","message":"denied"}}),
+                        true,
+                    ),
+                ] {
+                    let response = rpc(
+                        &fixture,
+                        &uri,
+                        &session,
+                        id,
+                        "tools/call",
+                        json!({"name":tool,"arguments":arguments}),
+                    )
+                    .await;
+                    assert_eq!(response["result"]["isError"], is_error, "{response}");
+                    assert_eq!(
+                        response["result"]["content"].as_array().unwrap().is_empty(),
+                        !include_text_copy
+                    );
+                    if id == 2 {
+                        assert_eq!(
+                            response["result"]["structuredContent"]["result"]["body"],
+                            json!({"format":"markdown","value":"synthetic rich content"})
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn output_schema_accepts_actual_wire_overflow_with_and_without_text_copy() {
+    let fixture = Fixture::new(|config| {
+        config.mcp.max_response_bytes = 64 * 1024;
+        config.mcp.max_request_bytes = 256 * 1024;
+    })
+    .await;
+    let session = fixture.initialize().await;
+    for include_text_copy in [true, false] {
+        let uri = format!("/mcp?outputSchemas=on&includeTextCopy={include_text_copy}");
+        rpc(&fixture, &uri, &session, 1, "tools/list", json!({})).await;
+        let response = rpc(&fixture, &uri, &session, 2, "tools/call", json!({
+            "name":"fake_echo", "arguments":{"inputs":{"project":"TEST","message":"x".repeat(80 * 1024)}}
+        })).await;
+        assert_eq!(response["result"]["isError"], true, "{response}");
+        assert_eq!(
+            response["result"]["structuredContent"]["error"]["code"],
+            "mcp_response_too_large"
+        );
+        assert_eq!(
+            response["result"]["structuredContent"]["resultAvailable"],
+            false
+        );
+        assert_eq!(response["result"]["structuredContent"]["retrySafe"], false);
+        assert!(serde_json::to_vec(&response).unwrap().len() < 64 * 1024);
+    }
+    let executions = read_audit_records(&fixture.audit_path)
+        .into_iter()
+        .filter(|entry| {
+            entry["service"] == "fake" && entry["action"] == "echo" && entry["decision"] == "allow"
+        })
+        .count();
+    assert_eq!(executions, 2, "overflow never repeats provider work");
+}
+
+#[tokio::test]
+async fn output_schema_accepts_dispatched_timeout_in_both_copy_modes() {
+    for include_text_copy in [true, false] {
+        let provider = ControlledProvider::new(false);
+        let fixture = controlled_fixture_with(provider.clone(), |config| {
+            config.mcp.operation_timeout_ms = 250;
+        })
+        .await;
+        let session = fixture.initialize().await;
+        let uri = format!("/mcp?outputSchemas=on&includeTextCopy={include_text_copy}");
+        rpc(&fixture, &uri, &session, 1, "tools/list", json!({})).await;
+        let params = invoke("fake_echo", None);
+        fixture.prepare_tool_check(&uri, &session, "tools/call", &params);
+        let response = fixture
+            .send(at(
+                &uri,
+                request(
+                    Method::POST,
+                    Some(TOKEN_A),
+                    Some(&session),
+                    Some(json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":&params})),
+                ),
+            ))
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        provider.wait_entered().await;
+        let body = tokio::time::timeout(Duration::from_secs(3), rpc_body(response))
+            .await
+            .unwrap();
+        fixture.observe_response(&uri, &session, "tools/call", &params, &body);
+        let envelope = &body["result"]["structuredContent"];
+        assert_eq!(envelope["reasonCode"], "operation_timeout", "{body}");
+        assert_eq!(envelope["result"]["executionState"], "unknown");
+        assert_eq!(envelope["result"]["retrySafe"], false);
+        assert_eq!(provider.executions.load(Ordering::SeqCst), 1);
+        let records = read_audit_records(&fixture.audit_path);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0]["reasonCode"], "operation_timeout");
     }
 }

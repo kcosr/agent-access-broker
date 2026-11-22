@@ -197,7 +197,11 @@ Use `spec catalog` for canonical provider action names and input schemas,
 HTTP clients. Specs are caller-filtered by default and change with config
 reloads, token class, policy grants, service/action caveats, and management
 rights. Finite token resource restrictions remain request-time checks and do
-not change provider schemas.
+not change provider schemas. Every built-in provider action also publishes
+catalog `resultSchemas` for its raw provider `result` payloads, before selected
+rich-text presentation. Core composes these into OpenAPI responses and the MCP
+[output schemas](mcp.md#output-schemas) connections can select. Provider schemas
+cover every supported configuration, so a declared field can be absent.
 
 ## Gmail
 

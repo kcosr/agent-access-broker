@@ -1,5 +1,6 @@
 # Shared by CLI commands and `agent-access mcp serve` (local stdio MCP).
-# MCP reloads configuration and token files for each tool-list/call request.
+# MCP reloads connection/identity settings for each tool-list/call request.
+# Its [mcp] presentation defaults are selected only at process startup.
 [service]
 url = "http://127.0.0.1:8787"
 # Total JSON/upload timeout and download send/header timeout. Allow Broker rate
@@ -21,6 +22,12 @@ verify_certificates = true
 # environment; an explicit --output-content-format is strict. Unsupported
 # preferences use the action's native format. Omit to use the service preference.
 # preferred_output_content_format = "markdown"  # markdown | text | adf | storage
+
+# Local stdio defaults. CLI --output-schemas and --include-text-copy override
+# these values. Restart stdio to pick up changes; Broker defaults do not apply.
+[mcp]
+output_schemas = "off" # on | off
+include_text_copy = true
 
 [identity]
 header = "Authorization"

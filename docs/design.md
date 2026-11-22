@@ -49,7 +49,16 @@ names; transport mode independently determines local-file capabilities. Pure
 adapter naming hooks derive imported names from accepted metadata. Readiness is
 computed before caller filtering and published with the immutable runtime,
 without a name table, extra discovery or credential lookup. HTTP routes share
-one endpoint and bind sessions to the view. Current authorization, credential
+one endpoint and bind sessions to the view. Output-schema advertisement is a
+third, per-connection projection dimension. HTTP resolves the `outputSchemas`
+query over Broker `[mcp].output_schemas` for each admitted request; stdio resolves
+`--output-schemas` over client `[mcp].output_schemas` once at startup. Both
+built-in defaults are off. Presentation-default reloads preserve HTTP sessions
+and admitted selections; stdio retains its selection until restart. When selected, a tool
+whose action declares result schemas advertises an `outputSchema` that core
+composes from the catalog entry for its transport and helpers carry core-owned
+schemas; otherwise none is composed. Readiness and publication budgets measure
+the schema-bearing projection. Current authorization, credential
 selection, revision fences, limits and audit remain in their existing owners.
 See the [MCP contract](mcp.md) for connection setup, naming, readiness and transport
 boundaries.
@@ -160,7 +169,14 @@ also includes a same-origin browser portal frontend:
   service/action definitions, bounded import schemas, the `ImportedAdapter`
   seam, and the opaque `ImportedAdapterRegistration` that the shipped adapter
   crates build with an internal free function. That contract is Broker
-  implementation, not a provider-author interface.
+  implementation, not a provider-author interface. Its required, offline
+  `ImportedAdapter::result_schemas` states each accepted invocation action's
+  result schemas: a wrapper fixed per adapter and output kind, with upstream
+  payloads as open leaves whatever the accepted output schema, declared
+  responses or read classification, so refresh and re-acceptance never change
+  them. Core attaches them to the imported descriptor; an adapter error refuses
+  acceptance or publication, and leaves a loaded import unavailable
+  (`ActionPlanInvalid`). Gateway actions are never asked and carry none.
 - **Import adapter crates** — `agent-access-mcp-upstream`,
   `agent-access-openapi-upstream` and `agent-access-command-import` implement
   the internal import contract and depend on core. Each exports
@@ -678,8 +694,10 @@ validate`) when an action's input schema is not an object schema that compiles
 as JSON Schema, when an upload locator is not an input, when a sensitive output
 is not a JSON pointer into `/result`, when an action resolves its scope by
 lookup without declaring one, when a raw-download action declares a response
-presentation, or when a scope binds an unregistered resource type or offers a
-selector that type does not support.
+presentation, when an action's result schemas leave the authoring profile,
+exceed their size budget or do not resolve a declared body field, or when a
+scope binds an unregistered resource type or offers a selector that type does
+not support.
 
 An action's presentation descriptor declares each rich-text field's owner path,
 terminal field, presence rules and codec, plus supported output formats and one
@@ -690,12 +708,24 @@ the declared fields under shared source, render and serialized-result budgets.
 `agent-access-content` supplies the bounded codecs. Discovery derives format
 capabilities and `bodyFields` from the same descriptor.
 
+An action may also declare result schemas: the provider's success and failure
+`result` payloads before presentation and the envelope, as action-wide
+supersets across configurations and inputs. Core owns composition
+(`output_schema.rs`): it replaces the declared body fields with selected
+`{format,value}` schemas, preserves their presence and owner-predicate rules,
+and adds shared failure fields and each transport's delivery shapes. This
+produces MCP `outputSchema` (advertised to connections that select it) and typed
+OpenAPI invoke responses from the catalog's raw provider `resultSchemas`.
+Production never validates results against these schemas; test-support builds
+check every invocation strictly (see
+[result schema conformance](testing.md#result-schema-conformance)).
+
 A descriptor declares the service's resource scopes and the resource type each
 one authorizes, and for every action its input schema, resource scope (if any),
 credential modes, lookup requirement (none, execution-time only, or before
 policy to resolve scope), its optional native search enforcement mode, upstream resource
 ownership, JSON/multipart-upload/raw-download I/O, explicit `read_only`,
-sensitive output pointers, optional extended `documentation`,
+sensitive output pointers, optional result schemas, optional extended `documentation`,
 optional explicit `listingOf` enumeration metadata,
 attribution capability, and whether it issues durable handles that need a stable
 signing key. At service level it declares accepted service credential kinds,

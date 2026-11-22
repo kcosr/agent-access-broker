@@ -7,6 +7,19 @@ use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::time::UNIX_EPOCH;
 
+impl ConfluenceProvider {
+    async fn invoke_content_search_checked(
+        &self,
+        request: ProviderInvocation,
+        kind: ConfluenceSearchContentKind,
+    ) -> Result<ProviderResult, ProviderError> {
+        let action = request.action().to_string();
+        let outcome = self.invoke_content_search(request, kind).await;
+        crate::tests::assert_conforms(&self.config, &action, &outcome);
+        outcome
+    }
+}
+
 const SITE: &str = "https://example.atlassian.net";
 const CLOUD: &str = "00000000-0000-0000-0000-000000000000";
 
@@ -434,7 +447,7 @@ async fn scalar_only_authority_uses_one_query_and_no_metadata() {
         let backend = Backend::new(vec![results(vec![page("101", "ENG")], None)]);
         let provider = provider(backend.clone(), config());
         let result = provider
-            .invoke_content_search(invocation(kind, space_authority(kind), inputs()), kind)
+            .invoke_content_search_checked(invocation(kind, space_authority(kind), inputs()), kind)
             .await
             .unwrap();
         assert_eq!(result.result[field(kind)].as_array().unwrap().len(), 1);
@@ -456,7 +469,7 @@ async fn denied_rows_are_filtered_and_malformed_rows_fail_even_outside_scope() {
         )]);
         let provider = provider(backend, config());
         let result = provider
-            .invoke_content_search(invocation(kind, space_authority(kind), inputs()), kind)
+            .invoke_content_search_checked(invocation(kind, space_authority(kind), inputs()), kind)
             .await
             .unwrap();
         let rows = result.result[field(kind)].as_array().unwrap();
@@ -480,7 +493,10 @@ async fn denied_rows_are_filtered_and_malformed_rows_fail_even_outside_scope() {
             let backend = Backend::new(vec![results(vec![malformed], None)]);
             let provider = self::provider(backend, config());
             let error = provider
-                .invoke_content_search(invocation(kind, space_authority(kind), inputs()), kind)
+                .invoke_content_search_checked(
+                    invocation(kind, space_authority(kind), inputs()),
+                    kind,
+                )
                 .await
                 .unwrap_err();
             assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
@@ -497,7 +513,7 @@ async fn cursor_is_confidential_and_bound_to_authority_even_when_cql_is_identica
     ]);
     let provider = provider(backend.clone(), config());
     let first = provider
-        .invoke_content_search(invocation(kind, space_authority(kind), inputs()), kind)
+        .invoke_content_search_checked(invocation(kind, space_authority(kind), inputs()), kind)
         .await
         .unwrap();
     let token = first.result["nextPageToken"].as_str().unwrap();
@@ -533,13 +549,13 @@ async fn cursor_is_confidential_and_bound_to_authority_even_when_cql_is_identica
     assert_eq!(query_a.cql, query_b.cql);
     assert_invalid(
         provider
-            .invoke_content_search(invocation(kind, changed, resumed.clone()), kind)
+            .invoke_content_search_checked(invocation(kind, changed, resumed.clone()), kind)
             .await
             .unwrap_err(),
     );
     assert_eq!(backend.requests.lock().unwrap().len(), 1);
     let next = provider
-        .invoke_content_search(invocation(kind, space_authority(kind), resumed), kind)
+        .invoke_content_search_checked(invocation(kind, space_authority(kind), resumed), kind)
         .await
         .unwrap();
     assert_eq!(next.result["pages"][0]["id"], "102");
@@ -557,7 +573,7 @@ async fn continuation_rejects_caller_context_mode_method_query_and_provider_chan
     let backend = Backend::new(vec![results(vec![page("101", "ENG")], Some("next"))]);
     let mut provider = provider(backend.clone(), config());
     let first = provider
-        .invoke_content_search(invocation(kind, space_authority(kind), inputs()), kind)
+        .invoke_content_search_checked(invocation(kind, space_authority(kind), inputs()), kind)
         .await
         .unwrap();
     let resumed = resume(inputs(), &first);
@@ -591,7 +607,7 @@ async fn continuation_rejects_caller_context_mode_method_query_and_provider_chan
     for request in changed {
         assert_invalid(
             provider
-                .invoke_content_search(request, kind)
+                .invoke_content_search_checked(request, kind)
                 .await
                 .unwrap_err(),
         );
@@ -599,7 +615,7 @@ async fn continuation_rejects_caller_context_mode_method_query_and_provider_chan
     let restarted = self::provider(backend.clone(), config());
     assert_invalid(
         restarted
-            .invoke_content_search(request.clone(), kind)
+            .invoke_content_search_checked(request.clone(), kind)
             .await
             .unwrap_err(),
     );
@@ -608,7 +624,7 @@ async fn continuation_rejects_caller_context_mode_method_query_and_provider_chan
     provider.config.content_search.max_candidates += 1;
     assert_invalid(
         provider
-            .invoke_content_search(request, kind)
+            .invoke_content_search_checked(request, kind)
             .await
             .unwrap_err(),
     );
@@ -638,13 +654,13 @@ async fn mid_page_resume_refetches_original_page_and_commits_to_its_identity_ord
         config.content_access.max_metadata_requests = 132;
         let provider = provider(backend.clone(), config);
         let first = provider
-            .invoke_content_search(invocation(kind, tree_authority(), inputs()), kind)
+            .invoke_content_search_checked(invocation(kind, tree_authority(), inputs()), kind)
             .await
             .unwrap();
         assert_eq!(first.result["pages"].as_array().unwrap().len(), 1);
         assert_eq!(first.result["scanStatus"], "scan_budget");
         let next = provider
-            .invoke_content_search(
+            .invoke_content_search_checked(
                 invocation(kind, tree_authority(), resume(inputs(), &first)),
                 kind,
             )
@@ -676,11 +692,11 @@ async fn repeated_upstream_cursor_is_rejected_across_invocations() {
     ]);
     let provider = provider(backend, config());
     let first = provider
-        .invoke_content_search(invocation(kind, space_authority(kind), inputs()), kind)
+        .invoke_content_search_checked(invocation(kind, space_authority(kind), inputs()), kind)
         .await
         .unwrap();
     let error = provider
-        .invoke_content_search(
+        .invoke_content_search_checked(
             invocation(kind, space_authority(kind), resume(inputs(), &first)),
             kind,
         )
@@ -717,7 +733,10 @@ async fn cursor_history_stays_fixed_after_filtered_pages_and_ring_wraps() {
     let mut token_lengths = BTreeSet::new();
     for index in 0..20 {
         let result = provider
-            .invoke_content_search(invocation(kind, space_authority(kind), next_inputs), kind)
+            .invoke_content_search_checked(
+                invocation(kind, space_authority(kind), next_inputs),
+                kind,
+            )
             .await
             .unwrap();
         assert_eq!(
@@ -733,7 +752,7 @@ async fn cursor_history_stays_fixed_after_filtered_pages_and_ring_wraps() {
         "history must not disclose page count"
     );
     let error = provider
-        .invoke_content_search(invocation(kind, space_authority(kind), next_inputs), kind)
+        .invoke_content_search_checked(invocation(kind, space_authority(kind), next_inputs), kind)
         .await
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
@@ -803,7 +822,7 @@ async fn traversal_cap_allows_exhaustion_but_refuses_further_work_as_broker_budg
         let request = InvocationBuilder::from(request)
             .input("nextPageToken", json!(token))
             .build();
-        let result = provider.invoke_content_search(request, kind).await;
+        let result = provider.invoke_content_search_checked(request, kind).await;
         if has_next {
             let error = result.unwrap_err();
             assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
@@ -840,7 +859,7 @@ async fn complete_lineage_filters_current_and_final_moves_before_release() {
         }
         let provider = provider(backend.clone(), config());
         let result = provider
-            .invoke_content_search(invocation(kind, tree_authority(), inputs()), kind)
+            .invoke_content_search_checked(invocation(kind, tree_authority(), inputs()), kind)
             .await
             .unwrap();
         assert!(result.result["pages"].as_array().unwrap().is_empty());
@@ -876,7 +895,7 @@ async fn complete_lineage_requires_budget_for_initial_and_final_checks_before_fe
     config.content_access.max_metadata_requests = 129;
     let provider = provider(backend.clone(), config);
     let error = provider
-        .invoke_content_search(invocation(kind, tree_authority(), inputs()), kind)
+        .invoke_content_search_checked(invocation(kind, tree_authority(), inputs()), kind)
         .await
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
@@ -1038,7 +1057,7 @@ async fn oauth_refresh_preserves_resume_but_reconnection_and_principal_changes_r
         .execution(delegated("connection-one", "access-v1"))
         .build();
     let first = provider
-        .invoke_content_search(request.clone(), kind)
+        .invoke_content_search_checked(request.clone(), kind)
         .await
         .unwrap();
     let resumed = InvocationBuilder::from(request)
@@ -1057,7 +1076,7 @@ async fn oauth_refresh_preserves_resume_but_reconnection_and_principal_changes_r
     ] {
         assert_invalid(
             provider
-                .invoke_content_search(changed, kind)
+                .invoke_content_search_checked(changed, kind)
                 .await
                 .unwrap_err(),
         );
@@ -1067,7 +1086,7 @@ async fn oauth_refresh_preserves_resume_but_reconnection_and_principal_changes_r
         .execution(delegated("connection-one", "access-v2"))
         .build();
     let result = provider
-        .invoke_content_search(refreshed, kind)
+        .invoke_content_search_checked(refreshed, kind)
         .await
         .unwrap();
     assert_eq!(result.result["pages"][0]["id"], "102");
@@ -1083,7 +1102,10 @@ async fn text_query_resume_binds_each_operand_and_its_polarity() {
         let provider = provider(backend.clone(), config());
         let query = json!({"query":{"type":"cql","value":"title !~ \"obsolete\" AND text !~ \"deprecated\""},"maxResults":3});
         let first = provider
-            .invoke_content_search(invocation(kind, space_authority(kind), query.clone()), kind)
+            .invoke_content_search_checked(
+                invocation(kind, space_authority(kind), query.clone()),
+                kind,
+            )
             .await
             .unwrap();
         for changed in [
@@ -1096,7 +1118,10 @@ async fn text_query_resume_binds_each_operand_and_its_polarity() {
             next["query"] = changed;
             assert_invalid(
                 provider
-                    .invoke_content_search(invocation(kind, space_authority(kind), next), kind)
+                    .invoke_content_search_checked(
+                        invocation(kind, space_authority(kind), next),
+                        kind,
+                    )
                     .await
                     .unwrap_err(),
             );
@@ -1116,13 +1141,13 @@ async fn empty_filtered_pages_stop_at_scan_budget_and_resume_at_the_next_cursor(
     config.content_search.max_candidate_pages = 1;
     let provider = provider(backend.clone(), config);
     let first = provider
-        .invoke_content_search(invocation(kind, space_authority(kind), inputs()), kind)
+        .invoke_content_search_checked(invocation(kind, space_authority(kind), inputs()), kind)
         .await
         .unwrap();
     assert!(first.result["pages"].as_array().unwrap().is_empty());
     assert_eq!(first.result["scanStatus"], "scan_budget");
     let second = provider
-        .invoke_content_search(
+        .invoke_content_search_checked(
             invocation(kind, space_authority(kind), resume(inputs(), &first)),
             kind,
         )
@@ -1151,7 +1176,7 @@ async fn duplicate_rows_and_empty_upstream_cursors_fail_closed() {
         let backend = Backend::new(vec![candidate]);
         let provider = provider(backend, config());
         let error = provider
-            .invoke_content_search(invocation(kind, space_authority(kind), inputs()), kind)
+            .invoke_content_search_checked(invocation(kind, space_authority(kind), inputs()), kind)
             .await
             .unwrap_err();
         assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
@@ -1191,7 +1216,7 @@ async fn broker_cursor_payload_limit_is_a_value_free_budget_refusal() {
         test_signing_key(9),
     );
     let error = provider
-        .invoke_content_search(invocation(kind, space_authority(kind), inputs()), kind)
+        .invoke_content_search_checked(invocation(kind, space_authority(kind), inputs()), kind)
         .await
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
@@ -1233,7 +1258,7 @@ async fn final_proof_failure_records_unresolved_without_releasing_candidates() {
     );
     let provider = provider(backend, config());
     let error = provider
-        .invoke_content_search(invocation(kind, tree_authority(), inputs()), kind)
+        .invoke_content_search_checked(invocation(kind, tree_authority(), inputs()), kind)
         .await
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);

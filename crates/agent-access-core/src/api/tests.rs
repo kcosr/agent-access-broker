@@ -268,6 +268,7 @@ fn extended_action_documentation_flows_to_specs_but_not_tool_definitions() {
                 &catalog,
                 &view,
                 mode,
+                crate::mcp::OutputSchemas::On,
                 crate::mcp::STDIO_MAX_CATALOG_BYTES,
             )
             .unwrap();
@@ -1077,6 +1078,7 @@ fn generated_invoke_send_schema_exposes_secret_sources_only_for_sensitive_action
         native_output_content_format: None,
         default_output_content_format: None,
         body_fields: Vec::new(),
+        result_schemas: None,
     };
     let mut sensitive_action = action.clone();
     sensitive_action.action = "secret.echo".to_string();
@@ -1188,6 +1190,7 @@ fn generated_specs_describe_multipart_uploads() {
             native_output_content_format: None,
             default_output_content_format: None,
             body_fields: Vec::new(),
+            result_schemas: None,
         }],
     });
 
@@ -1288,6 +1291,7 @@ fn generated_upload_send_schema_uses_catalog_plan_constraints() {
             native_output_content_format: None,
             default_output_content_format: None,
             body_fields: Vec::new(),
+            result_schemas: None,
         }],
     });
 
@@ -1357,6 +1361,7 @@ fn generated_upload_send_schema_removes_nested_generated_metadata_inputs() {
             native_output_content_format: None,
             default_output_content_format: None,
             body_fields: Vec::new(),
+            result_schemas: None,
         }],
     });
 

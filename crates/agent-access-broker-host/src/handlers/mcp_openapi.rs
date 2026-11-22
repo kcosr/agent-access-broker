@@ -1,13 +1,36 @@
 //! MCP is a protocol endpoint, not a CLI send route or a REST envelope action.
-use agent_access_core::RenderAuthMode;
+use agent_access_core::{McpConfig, RenderAuthMode};
 use serde_json::{Value, json};
 
-pub(super) fn add(document: &mut Value, public_url: &str, auth: RenderAuthMode) {
+pub(super) fn add(
+    document: &mut Value,
+    public_url: &str,
+    auth: RenderAuthMode,
+    defaults: &McpConfig,
+) {
     let Ok(url) = url::Url::parse(public_url) else {
         return;
     };
     let session = json!({"in":"header","name":"Mcp-Session-Id","required":false,"description":"Required after initialization; identifies routing state, never authentication authority.","schema":{"type":"string"}});
     let version = json!({"in":"header","name":"MCP-Protocol-Version","required":false,"description":"Clients should send the negotiated version after initialization. An omitted header uses the known session profile; a conflicting supplied value is rejected.","schema":{"type":"string","enum":["2025-11-25"]}});
+    // Evaluated independently on every request, so all three controls are
+    // declared on each path item and apply to every HTTP method.
+    let query_contract = "Only the literal query keys outputSchemas, preferredOutputContentFormat and includeTextCopy are accepted, each at most once in any order. Keys and values are matched without percent or form decoding; unknown keys, invalid or empty values, repeated keys and empty query segments are rejected with HTTP 400 before dispatch. Trusted-username ingress returns the audited identity_assertion_invalid envelope for malformed queries.";
+    let output_schemas = json!({
+        "in":"query", "name":"outputSchemas", "required":false,
+        "description":format!("MCP output-schema advertisement for this request. on adds each tool's outputSchema and output-schema metadata in action details; off omits that metadata. Omission uses Broker [mcp].output_schemas (built-in off). Evaluated independently on every request and bound to catalog cursors, never stored in session identity. It never changes identity, context, grants, credentials, tool names, inputs or results. {query_contract}"),
+        "schema":{"type":"string","enum":["on","off"],"default":defaults.output_schemas.as_str()}
+    });
+    let preferred_output_content_format = json!({
+        "in":"query", "name":"preferredOutputContentFormat", "required":false,
+        "description":"Soft preference for rich-text fields within JSON results, overridden by an exact outputContentFormat tool argument. Omission uses the service preference, then Markdown; an unsupported preference selects the action's native format. Evaluated per request and bound to catalog cursors.",
+        "schema":{"type":"string","enum":["markdown","text","adf","storage"]}
+    });
+    let include_text_copy = json!({
+        "in":"query", "name":"includeTextCopy", "required":false,
+        "description":"Include a readable text copy beside each structured tool result. false emits top-level content: [] while retaining complete structuredContent, isError and metadata, including tool errors. Omission uses Broker [mcp].include_text_copy (built-in true). Evaluated per request; does not affect session identity or discovery cursors. Only the literal values true and false are accepted.",
+        "schema":{"type":"boolean","enum":[true,false],"default":defaults.include_text_copy}
+    });
     let error = json!({"type":"object","required":["jsonrpc","error"],"properties":{"jsonrpc":{"const":"2.0"},"id":{"type":["string","integer","null"]},"error":{"type":"object","required":["code","message"],"properties":{"code":{"type":"integer"},"message":{"type":"string"},"data":{}}}}});
     let result = json!({"oneOf":[{"type":"object","required":["jsonrpc","id","result"],"properties":{"jsonrpc":{"const":"2.0"},"id":{"type":["string","integer"]},"result":{}}},error]});
     let mut post = json!({
@@ -18,7 +41,7 @@ pub(super) fn add(document: &mut Value, public_url: &str, auth: RenderAuthMode) 
         "responses":{
             "200":{"description":"JSON-RPC result/error or request-scoped SSE response stream.","headers":{"Mcp-Session-Id":{"schema":{"type":"string"},"description":"Opaque session established by initialization."}},"content":{"application/json":{"schema":result},"text/event-stream":{"schema":{"type":"string"},"description":"Bounded SSE frames carrying JSON-RPC messages; no replay."}}},
             "202":{"description":"Notification accepted; no response body."},
-            "400":{"description":"Malformed protocol request, headers, or unsupported negotiated version."},
+            "400":{"description":"Malformed protocol request, headers or endpoint query, or unsupported negotiated version."},
             "401":{"description":"Missing, malformed, wrong-carrier or invalid principal/caller credential.","headers":{"WWW-Authenticate":{"schema":{"type":"string"}}}},
             "403":{"description":"Origin, token class, execution context, caller capability or trusted human identity denied."},
             "404":{"description":"Unknown, expired, or wrong-owner session, or disabled endpoint."},
@@ -35,7 +58,7 @@ pub(super) fn add(document: &mut Value, public_url: &str, auth: RenderAuthMode) 
     let mut delete = json!({
         "operationId":"mcp.closeSession","description":"Terminate the caller's session. Does not roll back dispatched operations or discard their terminal audit ownership.",
         "parameters":[required_session,version],
-        "responses":{"202":{"description":"Session termination accepted; no response body."},"400":{"description":"Missing or malformed session/protocol headers."},"401":{"description":"Principal authentication or a valid trusted caller and subject assertion required."},"403":{"description":"Origin, token class, execution context, caller capability or trusted human identity denied."},"404":{"description":"Unknown, expired, or wrong-owner session, or disabled endpoint."},"503":{"description":"Required identity state is unavailable."}}
+        "responses":{"202":{"description":"Session termination accepted; no response body."},"400":{"description":"Missing or malformed session/protocol headers or endpoint query."},"401":{"description":"Principal authentication or a valid trusted caller and subject assertion required."},"403":{"description":"Origin, token class, execution context, caller capability or trusted human identity denied."},"404":{"description":"Unknown, expired, or wrong-owner session, or disabled endpoint."},"503":{"description":"Required identity state is unavailable."}}
     });
     let mut get = json!({"operationId":"mcp.noStandaloneStream","description":"Authenticate every request; authenticated GET returns 405 because standalone notification streams are unsupported. Tools do not advertise listChanged; refresh tools/list.","responses":{"405":{"description":"Use POST or DELETE.","headers":{"Allow":{"schema":{"type":"string","const":"POST, DELETE"}}}}}});
     if matches!(auth, RenderAuthMode::Include) {
@@ -55,17 +78,19 @@ pub(super) fn add(document: &mut Value, public_url: &str, auth: RenderAuthMode) 
             operation["x-agent-access-identity-contract"] = json!({
                 "subjectHeader":"X-Agent-Access-User",
                 "subjectSchema":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9._@+-]+$"},
-                "description":"Repeat identity credentials and assertions on every request. User assertions select username mode before ordinary token authentication. Duplicate subject/credential headers, competing carriers or assertions, all query delimiters, and trailer declarations/frames are rejected. Incidental cookies confer no authority. Dedicated callers use their existing fixed/asserted context contract; fixed/direct callers reject X-Agent-Access-Context. Sessions bind the original live caller, human gate, binding and context; identity transitions require fresh initialization."
+                "description":format!("Repeat identity credentials and assertions on every request. User assertions select username mode before ordinary token authentication. Duplicate subject/credential headers, competing carriers or assertions, and trailer declarations/frames are rejected. {query_contract} Incidental cookies confer no authority. Dedicated callers use their existing fixed/asserted context contract; fixed/direct callers reject X-Agent-Access-Context. Sessions bind the original live caller, human gate, binding and context; identity transitions require fresh initialization.")
             });
         }
     }
     let aggregate = json!({
         "servers":[{"url":url.origin().ascii_serialization()}],
         "x-mcp-protocol-version":"2025-11-25",
+        "description":query_contract,
+        "parameters":[output_schemas,preferred_output_content_format,include_text_copy],
         "post":post,"delete":delete,"get":get,
     });
     let mut scoped = aggregate.clone();
-    scoped["parameters"] = json!([{"in":"path","name":"service","required":true,"description":"Canonical configured service ID. Only an exact raw path is accepted; no encoded aliases or query strings. The selected service is bound to the session and does not widen authorization.","schema":{"type":"string","pattern":"^[a-z][a-z0-9_-]{0,62}$"}}]);
+    scoped["parameters"] = json!([{"in":"path","name":"service","required":true,"description":"Canonical configured service ID. Only an exact raw path is accepted; no encoded aliases. The selected service is bound to the session and does not widen authorization.","schema":{"type":"string","pattern":"^[a-z][a-z0-9_-]{0,62}$"}}, output_schemas, preferred_output_content_format, include_text_copy]);
     scoped["post"]["operationId"] = json!("mcp.service.message");
     scoped["delete"]["operationId"] = json!("mcp.service.closeSession");
     scoped["get"]["operationId"] = json!("mcp.service.noStandaloneStream");
@@ -95,6 +120,7 @@ mod tests {
             &mut document,
             "https://broker.example.com/mcp",
             RenderAuthMode::Include,
+            &McpConfig::default(),
         );
         assert_eq!(
             document["paths"]["/mcp"]["servers"][0]["url"],
@@ -145,7 +171,58 @@ mod tests {
                     .is_some()
             );
         }
+        for path in ["/mcp", "/mcp/{service}"] {
+            let parameters = document["paths"][path]["parameters"].as_array().unwrap();
+            let query = parameters
+                .iter()
+                .filter(|parameter| parameter["in"] == "query")
+                .collect::<Vec<_>>();
+            assert_eq!(query.len(), 3, "{path}");
+            for (name, schema) in [
+                (
+                    "outputSchemas",
+                    json!({"type":"string","enum":["on","off"],"default":"off"}),
+                ),
+                (
+                    "preferredOutputContentFormat",
+                    json!({"type":"string","enum":["markdown","text","adf","storage"]}),
+                ),
+                (
+                    "includeTextCopy",
+                    json!({"type":"boolean","enum":[true,false],"default":true}),
+                ),
+            ] {
+                let parameter = query
+                    .iter()
+                    .find(|parameter| parameter["name"] == name)
+                    .unwrap();
+                assert_eq!(parameter["required"], false, "{path} {name}");
+                assert_eq!(parameter["schema"], schema, "{path} {name}");
+            }
+            let description = document["paths"][path]["description"].as_str().unwrap();
+            for contract in [
+                "outputSchemas",
+                "preferredOutputContentFormat",
+                "includeTextCopy",
+                "each at most once in any order",
+                "without percent or form decoding",
+                "HTTP 400 before dispatch",
+                "audited identity_assertion_invalid envelope",
+            ] {
+                assert!(description.contains(contract), "{path}: {contract}");
+                for method in ["post", "delete", "get"] {
+                    assert!(document["paths"][path][method]["x-agent-access-identity-contract"]["description"].as_str().unwrap().contains(contract), "{path} {method}: {contract}");
+                }
+            }
+        }
         let scoped = &document["paths"]["/mcp/{service}"];
+        assert_eq!(
+            &scoped["parameters"].as_array().unwrap()[1..],
+            document["paths"]["/mcp"]["parameters"]
+                .as_array()
+                .unwrap()
+                .as_slice()
+        );
         assert_eq!(scoped["parameters"][0]["name"], "service");
         assert_eq!(scoped["parameters"][0]["required"], true);
         assert_eq!(
@@ -176,12 +253,55 @@ mod tests {
         );
     }
     #[test]
+    fn documents_the_configured_defaults_in_both_views_and_auth_modes() {
+        use agent_access_core::mcp::OutputSchemas;
+        for output_schemas in [OutputSchemas::On, OutputSchemas::Off] {
+            for include_text_copy in [false, true] {
+                for auth in [RenderAuthMode::Include, RenderAuthMode::Omit] {
+                    let defaults = McpConfig {
+                        output_schemas,
+                        include_text_copy,
+                        ..McpConfig::default()
+                    };
+                    let mut document = json!({"paths":{},"components":{}});
+                    add(
+                        &mut document,
+                        "https://broker.example.com/mcp",
+                        auth,
+                        &defaults,
+                    );
+                    for path in ["/mcp", "/mcp/{service}"] {
+                        let parameters = document["paths"][path]["parameters"].as_array().unwrap();
+                        for (name, expected, key) in [
+                            (
+                                "outputSchemas",
+                                json!(output_schemas),
+                                "[mcp].output_schemas",
+                            ),
+                            (
+                                "includeTextCopy",
+                                json!(include_text_copy),
+                                "[mcp].include_text_copy",
+                            ),
+                        ] {
+                            let parameter = parameters.iter().find(|p| p["name"] == name).unwrap();
+                            assert_eq!(parameter["schema"]["default"], expected);
+                            assert!(parameter["description"].as_str().unwrap().contains(key));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn auth_omit_also_omits_mcp_bearer_requirement() {
         let mut document = json!({"paths":{},"components":{}});
         add(
             &mut document,
             "https://broker.example.com/mcp",
             RenderAuthMode::Omit,
+            &McpConfig::default(),
         );
         assert!(document["paths"]["/mcp"]["post"].get("security").is_none());
         assert!(
@@ -190,5 +310,16 @@ mod tests {
                 .is_none()
         );
         assert!(document["components"].get("securitySchemes").is_none());
+        for path in ["/mcp", "/mcp/{service}"] {
+            assert_eq!(
+                document["paths"][path]["parameters"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|parameter| parameter["in"] == "query")
+                    .count(),
+                3
+            );
+        }
     }
 }

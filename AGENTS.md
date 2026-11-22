@@ -107,6 +107,37 @@ actions and exposes typed wrappers for supported services.
   references, small constants and `not`/`if`/`contains` subschemas), keep the
   budget check before compiling, and before policy explain only when caller
   discovery lists the action.
+- Native result schemas (`ActionResultSchemas` from a provider's
+  `src/result-schemas.json` or `src/result-schemas/` bundle) describe the
+  provider payload before presentation and the envelope. Update them with the
+  projection in the same change, as supersets across every supported
+  configuration and input, within the SDK authoring profile and 8 KiB budget.
+  Strict tests (`assert_result_conforms`) and the test-support runtime check,
+  which aborts the test process, require every emitted field to be declared;
+  advertised objects stay open. Never change a delivered payload to satisfy a
+  schema. Catalog `resultSchemas` retain these raw provider schemas. Core
+  (`output_schema.rs`) composes selected `{format,value}` bodies at `bodyFields`,
+  shared failure fields, envelopes, MCP `outputSchema` and OpenAPI responses.
+  Preserve field and owner absence/null rules and `ownerEquals` conditions;
+  nonmatching owners retain their native field schemas. Composed body schemas
+  cover all four concrete format/value pairings across supported configurations;
+  current `outputContentFormats` still constrains exact requests. Import adapters supply
+  wrapper schemas with open upstream leaves.
+- MCP output-schema advertisement is a per-connection registry dimension
+  (`mcp::OutputSchemas`) beside transport mode and view. HTTP resolves
+  `outputSchemas=on|off` over Broker `[mcp].output_schemas` (built-in off)
+  per admitted request through the one
+  strict endpoint query parser alongside content preference and text-copy
+  controls (no session state; cursors bind schema selection and content preference,
+  not text-copy selection). Stdio resolves `mcp serve --output-schemas on|off`
+  over client `[mcp].output_schemas` (built-in off) at startup, fixed until
+  restart. No server-default lookup or environment override. Off composes no schema and omits
+  `outputSchema`, `mcpTool.outputSchema` and `resultSchemas` from MCP
+  projections; results, the caller catalog, OpenAPI and non-MCP CLI details
+  never depend on it. Both describe paths share `ToolRegistry::describe_action`.
+  Readiness and publication budgets measure the schema-bearing projection. MCP
+  delivery tests state their selection explicitly and never skip validation or
+  borrow another selection's schema.
 - Caller discovery and native MCP lists expose only authority with locally usable
   selected execution and lookup credentials. Preserve grant precedence and hide
   unknown availability too. Discovery must not contact upstream services,
@@ -225,7 +256,11 @@ results without allocating an omitted copy and count actual emitted wire bytes;
 preserve provider/body and resource-access caps. Never remove nested imported
 `result.upstreamMcp.content` or add client-detection fallback. HTTP owns this
 setting per admitted request, independently of session identity and discovery
-cursors; stdio owns `--include-text-copy` for the process. Keep strict composable
+cursors, with query over Broker `[mcp].include_text_copy`; stdio resolves
+`--include-text-copy` over client `[mcp].include_text_copy` at startup and pins
+it for the process. Both built-in values are true. Presentation-default reloads
+preserve HTTP sessions and admitted operations; effective schema changes still
+invalidate listing cursors. Keep strict composable
 HTTP query parsing and trusted-username admission audits. This is transport
 presentation, separate from output-content selection and tool arguments.
 
@@ -675,7 +710,9 @@ stdio MCP subprocess; keep those file, receipt and transport boundaries covered.
   Credential equality exists only with `test-support`, in constant time. `lib.rs`
   lists every supported export explicitly, one path per item; never add a
   wildcard re-export. Presentation items are reachable only through
-  `presentation`. The supported `host` module holds the host cooperation ports:
+  `presentation`. `result_schema.rs` holds result schemas, bundles, the
+  authoring profile and the shared failure schema; strict conformance helpers
+  are in `test_support`. The supported `host` module holds the host cooperation ports:
   the client factory contract and `build_context`, the constructors of
   host-owned request values (scope requests, static credentials, admitted
   requests, spooled body parts, final invocations), the initial correlation,
@@ -722,8 +759,9 @@ stdio MCP subprocess; keep those file, receipt and transport boundaries covered.
   membership renewal (`microsoft_oidc/renewal.rs`: the bounded token-endpoint
   request, response classification and backoff;
   `managed_store/oidc_membership_renewal.rs`: the encrypted records of migration
-  `031`, the renewal hint, and the attempt-start and outcome writes); contains no
-  backend. Its internal
+  `031`, the renewal hint, and the attempt-start and outcome writes) and output
+  schema composition (`output_schema.rs`, checked under test support by
+  `runtime/result_conformance.rs`); contains no backend. Its internal
   `imports` module owns the import adapter contract (`ImportedAdapter`, imported
   definitions, bounded import schemas) and the opaque
   `ImportedAdapterRegistration`. Crates that use backend-contract items import
@@ -987,16 +1025,18 @@ stdio MCP subprocess; keep those file, receipt and transport boundaries covered.
   presentation (connection paths, identity, policy, request evaluation, rate
   limits, audit) for readers new to the broker; Markdown remains canonical.
 - `docs/http-api.md`: HTTP routes, runtime spec endpoints, request-id rules,
-  response envelopes, reason codes, status mapping, management endpoints,
-  upstream correlation headers, and raw download negotiation.
+  response envelopes, result schemas and typed OpenAPI responses, reason codes,
+  status mapping, management endpoints, upstream correlation headers, and raw
+  download negotiation.
 - `docs/cli.md`: command catalog, runtime spec commands, JSON `send`, config/env
   precedence, exit codes, transport security, and CLI recipes.
 - `docs/mcp.md`: local stdio and downstream HTTP MCP setup, discovery, file inputs/transfers,
-  protocol lifecycle, and client/broker authorization boundaries. The adapter
+  output schemas, protocol lifecycle, and client/broker authorization boundaries. The adapter
   lives in `crates/agent-access/src/mcp/`; never call CLI print/exit helpers from
   an MCP request handler, and never write diagnostics to protocol stdout.
-- `docs/testing.md`: deterministic test suite, offline smoke harnesses, ignored
-  live smokes, and Confluence CQL conformance smoke workflow.
+- `docs/testing.md`: deterministic test suite, result schema conformance, offline
+  smoke harnesses, ignored live smokes, and Confluence CQL conformance smoke
+  workflow.
 - `docs/configuration.md`: canonical broker and CLI config schema, including
   identity, policy, credentials, managed store, broker tokens, encryption,
   management, audit, services, and providers.
@@ -1017,8 +1057,8 @@ stdio MCP subprocess; keep those file, receipt and transport boundaries covered.
 - `docs/providers.md`: provider overview, shared concepts, and links to the
   provider-specific docs.
 - `docs/provider-sdk.md`: provider-author guide: supported SDK surface, trust
-  model, registration and configuration, descriptors and scope resolution,
-  provider state, admitted authority and static/delegated credential
+  model, registration and configuration, descriptors, result schemas and scope
+  resolution, provider state, admitted authority and static/delegated credential
   obligations, governed HTTP and the loopback rule, continuation tokens,
   standard and domain reasons, outcomes, test support, the compatibility policy
   and a worked example. Mark every `rust` block as described in

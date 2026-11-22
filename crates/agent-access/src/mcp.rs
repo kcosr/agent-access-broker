@@ -6,7 +6,7 @@ mod transport;
 
 use std::path::PathBuf;
 
-use agent_access_core::mcp::McpView;
+use agent_access_core::mcp::{McpView, OutputSchemas};
 use anyhow::{Context, Result};
 use rmcp::{
     ErrorData, RoleServer, ServerHandler, ServiceExt,
@@ -28,24 +28,59 @@ struct BrokerMcp {
     cli: crate::Cli,
     config: PathBuf,
     view: McpView,
+    /// Selected at launch and fixed for the process lifetime, including
+    /// across configuration and token rotation.
+    output_schemas: OutputSchemas,
     include_text_copy: bool,
 }
 
+fn config_error(error: anyhow::Error) -> anyhow::Error {
+    anyhow::anyhow!(
+        error
+            .downcast_ref::<agent_access_core::ConfigError>()
+            .and_then(crate::retired_cli_default_message)
+            .unwrap_or(CONFIG_ERROR)
+    )
+}
+
 impl BrokerMcp {
+    fn new(
+        cli: crate::Cli,
+        config: PathBuf,
+        view: McpView,
+        output_schemas: Option<OutputSchemas>,
+        include_text_copy: Option<bool>,
+    ) -> Result<Self> {
+        let defaults = crate::load_config_or_default(&config, cli.config.is_some())
+            .map_err(config_error)?
+            .mcp;
+        let server = Self {
+            cli,
+            config,
+            view,
+            output_schemas: output_schemas.unwrap_or(defaults.output_schemas),
+            include_text_copy: include_text_copy.unwrap_or(defaults.include_text_copy),
+        };
+        server.settings()?;
+        Ok(server)
+    }
+
     fn settings(&self) -> Result<crate::ResolvedCliSettings> {
         // Resolve for every request: token files and config may rotate while the
         // client keeps this subprocess alive. Never cache an identity or grants.
-        let settings = crate::resolve_cli_settings(&self.cli, &self.config).map_err(|error| {
-            anyhow::anyhow!(
-                error
-                    .downcast_ref::<agent_access_core::ConfigError>()
-                    .and_then(crate::retired_cli_default_message)
-                    .unwrap_or(CONFIG_ERROR)
-            )
-        })?;
+        let settings =
+            crate::resolve_cli_settings(&self.cli, &self.config).map_err(config_error)?;
         validate_broker_transport(&settings)?;
         Ok(settings)
     }
+}
+
+/// `--output-schemas`: exactly `on` or `off`, with a required value.
+pub(crate) fn output_schemas_parser() -> impl clap::builder::TypedValueParser<Value = OutputSchemas>
+{
+    use clap::builder::TypedValueParser as _;
+    clap::builder::PossibleValuesParser::new(["on", "off"])
+        .map(|value| OutputSchemas::parse(&value).expect("possible value"))
 }
 
 pub(crate) fn parse_service(value: &str) -> Result<String, String> {
@@ -89,7 +124,7 @@ impl ServerHandler for BrokerMcp {
         let tools = tokio::select! {
             biased;
             _ = context.ct.cancelled() => return Err(ErrorData::internal_error("Request cancelled", None)),
-            result = tools::list_tools(&settings, &self.view) => result
+            result = tools::list_tools(&settings, &self.view, self.output_schemas) => result
                 .map_err(|error| ErrorData::internal_error(error.to_string(), None))?,
         };
         paginate(
@@ -114,7 +149,7 @@ impl ServerHandler for BrokerMcp {
                 "Request cancelled. An upstream mutation may already have completed; inspect its state before retrying.",
                 self.include_text_copy,
             ),
-            result = tools::call_tool(&settings, &self.view, &request.name, request.arguments.unwrap_or_default(), self.include_text_copy) => {
+            result = tools::call_tool(&settings, &self.view, self.output_schemas, &request.name, request.arguments.unwrap_or_default(), self.include_text_copy) => {
                 match result {
                     Ok(result) => result,
                     Err(error) if error.is::<tools::UnknownToolError>() => {
@@ -194,15 +229,16 @@ pub async fn serve(
     cli: crate::Cli,
     config: PathBuf,
     view: McpView,
-    include_text_copy: bool,
+    output_schemas: Option<OutputSchemas>,
+    include_text_copy: Option<bool>,
 ) -> Result<()> {
-    let server = BrokerMcp {
+    let server = crate::require_cli_input(BrokerMcp::new(
         cli,
         config,
         view,
+        output_schemas,
         include_text_copy,
-    };
-    crate::require_cli_input(server.settings());
+    ));
     // No CLI rendering or stdout logging is allowed here: stdout is exclusively
     // newline-delimited MCP JSON-RPC, including during authentication failures.
     let (input, oversized) = transport::BoundedStdioRead::new(tokio::io::stdin());
@@ -232,17 +268,19 @@ mod tests {
     #[test]
     fn include_text_copy_is_an_explicit_strict_startup_boolean() {
         for (extra, expected) in [
-            (vec![], true),
-            (vec!["--include-text-copy=true"], true),
-            (vec!["--include-text-copy=false"], false),
+            (vec![], None),
+            (vec!["--include-text-copy=true"], Some(true)),
+            (vec!["--include-text-copy=false"], Some(false)),
             (
                 vec![
                     "--include-text-copy",
                     "false",
                     "--preferred-output-content-format",
                     "text",
+                    "--output-schemas",
+                    "on",
                 ],
-                false,
+                Some(false),
             ),
         ] {
             let mut args = vec!["agent-access", "mcp", "serve"];
@@ -276,6 +314,17 @@ mod tests {
                 result["structuredContent"],
                 json!({"error":{"message":message}})
             );
+            for definition in agent_access_core::mcp::helper_definitions(
+                agent_access_core::mcp::ProjectionMode::Stdio,
+                OutputSchemas::On,
+            ) {
+                let validator = jsonschema::validator_for(&definition["outputSchema"]).unwrap();
+                assert!(
+                    validator.is_valid(&result["structuredContent"]),
+                    "{}: {result}",
+                    definition["name"]
+                );
+            }
             assert_eq!(
                 result["content"],
                 if include_text_copy {
@@ -303,6 +352,7 @@ mod tests {
             .unwrap(),
             config: config.path().to_path_buf(),
             view: McpView::Aggregate,
+            output_schemas: OutputSchemas::On,
             include_text_copy: false,
         };
         // rmcp suppresses wire replies after notifications/cancelled. Call the
@@ -332,6 +382,18 @@ mod tests {
                 "error":{"message":"Request cancelled. An upstream mutation may already have completed; inspect its state before retrying."}
             })
         );
+        let definition = agent_access_core::mcp::helper_definitions(
+            agent_access_core::mcp::ProjectionMode::Stdio,
+            OutputSchemas::On,
+        )
+        .into_iter()
+        .find(|tool| tool["name"] == "services_list")
+        .unwrap();
+        assert!(
+            jsonschema::validator_for(&definition["outputSchema"])
+                .unwrap()
+                .is_valid(&result["structuredContent"])
+        );
         running.cancel().await.unwrap();
     }
 
@@ -344,6 +406,7 @@ mod tests {
                 view: service.map_or(McpView::Aggregate, |service| {
                     McpView::Service(service.into())
                 }),
+                output_schemas: OutputSchemas::Off,
                 include_text_copy: true,
             };
             let info = server.get_info();
@@ -475,12 +538,57 @@ mod tests {
     }
 
     #[test]
+    fn output_schema_selection_is_explicit_off_by_default_and_fixed_in_cli_syntax() {
+        let selected = |arguments: &[&str]| {
+            let mut command = vec!["agent-access", "mcp", "serve"];
+            command.extend_from_slice(arguments);
+            match crate::Cli::try_parse_from(command).map(|cli| cli.command) {
+                Ok(crate::Command::Mcp {
+                    command: crate::McpCommand::Serve { output_schemas, .. },
+                }) => Some(output_schemas),
+                Ok(_) => unreachable!("mcp serve parses as itself"),
+                Err(_) => None,
+            }
+        };
+        assert_eq!(selected(&[]), Some(None));
+        assert_eq!(
+            selected(&["--output-schemas", "on"]),
+            Some(Some(OutputSchemas::On))
+        );
+        assert_eq!(
+            selected(&["--output-schemas=off"]),
+            Some(Some(OutputSchemas::Off))
+        );
+        assert_eq!(
+            selected(&["--service", "fake", "--output-schemas", "on"]),
+            Some(Some(OutputSchemas::On))
+        );
+        for invalid in [
+            &["--output-schemas"][..],
+            &["--output-schemas", ""],
+            &["--output-schemas", "ON"],
+            &["--output-schemas", "true"],
+            &["--output-schemas", "auto"],
+            &["--output-schemas", "on", "--output-schemas", "off"],
+        ] {
+            assert_eq!(selected(invalid), None, "{invalid:?}");
+        }
+        let help = crate::Cli::try_parse_from(["agent-access", "mcp", "serve", "--help"])
+            .unwrap_err()
+            .to_string();
+        assert!(help.contains("--output-schemas <MODE>"), "{help}");
+        assert!(help.contains("client [mcp].output_schemas"), "{help}");
+        assert!(help.contains("[possible values: on, off]"), "{help}");
+    }
+
+    #[test]
     fn pagination_binds_view_identity_context_and_complete_dispatch_metadata() {
-        let binding = json!({"view":McpView::Service("one".into()),"identity":{"principal":"alice"},"executionContext":"internal"});
+        let binding = json!({"view":McpView::Service("one".into()),"outputSchemas":OutputSchemas::Off,"identity":{"principal":"alice"},"executionContext":"internal"});
         let first = paginate(catalog(101), &binding, None).unwrap();
         for (field, replacement) in [
             ("view", json!(McpView::Aggregate)),
             ("view", json!(McpView::Service("two".into()))),
+            ("outputSchemas", json!(OutputSchemas::On)),
             ("identity", json!({"principal":"bob"})),
             ("executionContext", json!("external")),
         ] {
@@ -517,6 +625,7 @@ mod tests {
             cli,
             config: file.path().to_path_buf(),
             view: McpView::Aggregate,
+            output_schemas: OutputSchemas::Off,
             include_text_copy: true,
         };
         let error = server.settings().unwrap_err();
@@ -548,6 +657,59 @@ mod tests {
         assert!(!message.contains("broker.example.test"));
     }
     #[test]
+    fn mcp_defaults_resolve_flags_over_toml_and_pin_until_restart() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("client.toml");
+        for configured in [
+            None,
+            Some((OutputSchemas::Off, true)),
+            Some((OutputSchemas::On, false)),
+        ] {
+            let source = match configured {
+                None => "[identity]\ndisabled=true\n".to_string(),
+                Some((schemas, copy)) => format!(
+                    "[identity]\ndisabled=true\n[mcp]\noutput_schemas={:?}\ninclude_text_copy={copy}\n",
+                    schemas.as_str()
+                ),
+            };
+            for schema_flag in [None, Some(OutputSchemas::Off), Some(OutputSchemas::On)] {
+                for copy_flag in [None, Some(true), Some(false)] {
+                    std::fs::write(&path, &source).unwrap();
+                    let cli = crate::Cli::try_parse_from([
+                        "agent-access",
+                        "--config",
+                        path.to_str().unwrap(),
+                        "mcp",
+                        "serve",
+                    ])
+                    .unwrap();
+                    let server = BrokerMcp::new(
+                        cli,
+                        path.clone(),
+                        McpView::Aggregate,
+                        schema_flag,
+                        copy_flag,
+                    )
+                    .unwrap();
+                    let (schemas, copy) = configured.unwrap_or((OutputSchemas::Off, true));
+                    let expected = (schema_flag.unwrap_or(schemas), copy_flag.unwrap_or(copy));
+                    assert_eq!((server.output_schemas, server.include_text_copy), expected);
+                    std::fs::write(&path, "[identity]\ndisabled=true\n[mcp]\noutput_schemas=\"on\"\ninclude_text_copy=false\n").unwrap();
+                    server.settings().unwrap();
+                    assert_eq!((server.output_schemas, server.include_text_copy), expected);
+                    std::fs::write(
+                        &path,
+                        "[mcp]\ninclude_text_copy=\"private-invalid-value\"\n",
+                    )
+                    .unwrap();
+                    assert_eq!(server.settings().unwrap_err().to_string(), CONFIG_ERROR);
+                    assert_eq!((server.output_schemas, server.include_text_copy), expected);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn content_preferences_reload_and_process_override_stays_authoritative() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("client.toml");
@@ -570,6 +732,7 @@ mod tests {
                 cli: crate::Cli::try_parse_from(args).unwrap(),
                 config: path.clone(),
                 view: McpView::Aggregate,
+                output_schemas: OutputSchemas::Off,
                 include_text_copy: true,
             }
         };

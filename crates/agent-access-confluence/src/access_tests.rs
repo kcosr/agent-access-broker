@@ -1797,7 +1797,7 @@ async fn space_listing_reserves_and_counts_one_oauth_replay_for_the_whole_call()
             .mount(&server)
             .await;
         let result = p
-            .invoke(space_listing_request(&credential, json!({"maxResults":1})))
+            .invoke_checked(space_listing_request(&credential, json!({"maxResults":1})))
             .await;
         if attempts == 2 {
             assert_eq!(result.unwrap().result["scanStatus"], "scan_budget");
@@ -1845,7 +1845,7 @@ async fn space_listing_reserves_and_counts_one_oauth_replay_for_the_whole_call()
         .mount(&server)
         .await;
     assert_eq!(
-        p.invoke(space_listing_request(&credential, json!({})))
+        p.invoke_checked(space_listing_request(&credential, json!({})))
             .await
             .unwrap()
             .result["scanStatus"],
@@ -1866,7 +1866,7 @@ async fn space_listing_marks_rejected_access_before_a_failed_body_read() {
         .mount(&server)
         .await;
     assert!(
-        p.invoke(space_listing_request(&credential, json!({})))
+        p.invoke_checked(space_listing_request(&credential, json!({})))
             .await
             .is_err()
     );
@@ -1887,7 +1887,7 @@ async fn space_listing_continuation_survives_refresh_but_rejects_a_changed_crede
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({"results":[{"id":version.to_string(),"key":key,"name":key,"type":"global","status":"current"}],"_links":{"next":format!("?cursor={next}")}}))).mount(&server).await;
     }
     let first = p
-        .invoke(space_listing_request(&credential, json!({"maxResults":1})))
+        .invoke_checked(space_listing_request(&credential, json!({"maxResults":1})))
         .await
         .unwrap();
     let resumed = space_listing_request(
@@ -1898,12 +1898,12 @@ async fn space_listing_continuation_survives_refresh_but_rejects_a_changed_crede
         .credential(bearer_credential("static"))
         .build();
     assert_eq!(
-        p.invoke(changed).await.unwrap_err().reason_code(),
+        p.invoke_checked(changed).await.unwrap_err().reason_code(),
         ReasonCode::InputInvalid
     );
     assert_eq!(server.received_requests().await.unwrap().len(), 1);
     lease.current.store(2, Ordering::SeqCst);
-    let result = p.invoke(resumed).await.unwrap();
+    let result = p.invoke_checked(resumed).await.unwrap();
     assert_eq!(result.result["items"][0]["key"], "OPS");
     assert_eq!(server.received_requests().await.unwrap().len(), 2);
 }

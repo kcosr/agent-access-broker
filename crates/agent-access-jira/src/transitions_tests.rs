@@ -99,7 +99,9 @@ impl Fixture {
     }
 
     async fn invoke(&self, action: &str, inputs: Value) -> Result<ProviderResult, ProviderError> {
-        self.provider.invoke(invocation(action, inputs)).await
+        self.provider
+            .invoke_checked(invocation(action, inputs))
+            .await
     }
 }
 
@@ -157,6 +159,62 @@ fn transition_inputs_and_descriptors_preserve_the_narrow_contract() {
         json!({"issue":"PROJ-1","includeFields":null}),
     ] {
         assert!(transitions::parse_list(&candidate, &config).is_err());
+    }
+}
+
+#[tokio::test]
+async fn transition_optional_metadata_and_nested_fields_conform_without_becoming_opaque() {
+    for fields in [None, Some(Value::Null)] {
+        let mut offered = offered();
+        let transition = offered["transitions"][0].as_object_mut().unwrap();
+        transition.remove("hasScreen");
+        transition.remove("fields");
+        if let Some(fields) = fields {
+            transition.insert("fields".into(), fields);
+        }
+        let fixture = Fixture::ready(offered).await;
+        let outcome = fixture
+            .invoke(
+                "issue.transition.list",
+                json!({"issue":"PROJ-1", "includeFields":true}),
+            )
+            .await
+            .unwrap();
+        let transition = &outcome.result["transitions"][0];
+        assert_eq!(transition["fields"], Value::Null);
+        assert_eq!(transition["hasScreen"], Value::Null);
+        assert_eq!(transition["to"]["statusCategory"], Value::Null);
+
+        let descriptor = jira_descriptor(&jira_config());
+        let action = descriptor.action("issue.transition.list").unwrap();
+        let schema = action.result_schemas.as_ref().unwrap().success();
+        assert_eq!(
+            schema.pointer("/properties/transitions/items/properties/fields/properties/items/items/properties/allowedValues/properties/items/items/properties/id/type"),
+            Some(&json!("string"))
+        );
+        let mut undeclared = outcome.result.clone();
+        undeclared["transitions"][0]["to"]["rawStatus"] = json!(PRIVATE);
+        assert!(
+            agent_access_provider::test_support::check_result_conforms(
+                action,
+                &Ok(ProviderResult::new(undeclared)),
+            )
+            .is_err()
+        );
+        let mut wrong_type = outcome.result;
+        wrong_type["transitions"][0]["fields"] = json!({"count":1,"truncated":false,"items":[{
+            "id":"resolution","name":"Resolution","required":true,
+            "hasDefaultValue":null,"brokerInput":"resolutionId",
+            "allowedValues":{"count":1,"truncated":false,"items":[{"id":1,"name":"Fixed"}]}
+        }]});
+        assert!(
+            agent_access_provider::test_support::check_result_conforms(
+                action,
+                &Ok(ProviderResult::new(wrong_type)),
+            )
+            .is_err()
+        );
+        assert_eq!(fixture.posts.load(Ordering::SeqCst), 0);
     }
 }
 

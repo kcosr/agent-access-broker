@@ -1,5 +1,5 @@
 //! Configuration for the downstream, authenticated HTTP MCP ingress.
-use crate::{BrokerConfig, IdentitySourceConfig};
+use crate::{BrokerConfig, IdentitySourceConfig, mcp::OutputSchemas};
 use serde::Deserialize;
 use url::Url;
 
@@ -7,6 +7,10 @@ use url::Url;
 #[serde(default, deny_unknown_fields)]
 pub struct McpConfig {
     pub enabled: bool,
+    /// Default advertisement when the HTTP request omits outputSchemas.
+    pub output_schemas: OutputSchemas,
+    /// Default text-copy selection when the HTTP request omits includeTextCopy.
+    pub include_text_copy: bool,
     pub public_url: Option<String>,
     pub allowed_origins: Vec<String>,
     pub max_request_bytes: usize,
@@ -25,6 +29,8 @@ impl Default for McpConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            output_schemas: OutputSchemas::CONNECTION_DEFAULT,
+            include_text_copy: true,
             public_url: None,
             allowed_origins: Vec::new(),
             max_request_bytes: 16 * 1024 * 1024,
@@ -204,6 +210,51 @@ upload_spool_dir="upload-spool"
         validate(config, &mut errors);
         errors
     }
+    #[test]
+    fn presentation_defaults_are_strict_and_independent_of_http_enablement() {
+        for source in ["", "enabled=false", "enabled=true"] {
+            let config: McpConfig = toml::from_str(source).unwrap();
+            assert_eq!(config.output_schemas, OutputSchemas::Off);
+            assert!(config.include_text_copy);
+        }
+        for schemas in ["on", "off"] {
+            for copy in [true, false] {
+                let fields = format!("output_schemas={schemas:?}\ninclude_text_copy={copy}");
+                let server: McpConfig =
+                    toml::from_str(&format!("enabled=false\n{fields}")).unwrap();
+                let client: crate::CliConfig = toml::from_str(&format!("[mcp]\n{fields}")).unwrap();
+                assert_eq!(
+                    server.output_schemas,
+                    OutputSchemas::parse(schemas).unwrap()
+                );
+                assert_eq!(server.include_text_copy, copy);
+                assert_eq!(client.mcp.output_schemas, server.output_schemas);
+                assert_eq!(client.mcp.include_text_copy, copy);
+            }
+        }
+        let client: crate::CliConfig = toml::from_str("").unwrap();
+        assert_eq!(client.mcp.output_schemas, OutputSchemas::Off);
+        assert!(client.mcp.include_text_copy);
+        for invalid in [
+            "output_schemas=true",
+            "output_schemas='ON'",
+            "output_schemas='auto'",
+            "include_text_copy='false'",
+            "include_text_copy=0",
+            "output_schema='on'",
+        ] {
+            assert!(
+                toml::from_str::<McpConfig>(&format!("enabled=false\n{invalid}")).is_err(),
+                "{invalid}"
+            );
+            assert!(
+                toml::from_str::<crate::CliConfig>(&format!("[mcp]\n{invalid}")).is_err(),
+                "{invalid}"
+            );
+        }
+        assert!(toml::from_str::<crate::CliConfig>("[mcp]\nenabled=true").is_err());
+    }
+
     #[test]
     fn public_endpoint_requires_https_and_canonical_path_except_local_development() {
         let mut config = config();

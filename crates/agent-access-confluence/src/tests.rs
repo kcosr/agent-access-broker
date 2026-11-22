@@ -16,6 +16,7 @@ mod execution_matrix;
 mod output_content;
 mod personal_spaces;
 mod plain_inputs;
+mod result_schemas;
 mod review_locations;
 mod search_exclusions;
 mod space_aliases;
@@ -6581,6 +6582,8 @@ struct CommentStubConfluenceBackend {
     update_requests: std::sync::Mutex<Vec<ConfluenceCommentUpdateRequest>>,
     /// Throttle comment reads once a comment write has applied.
     throttle_reads_after_write: bool,
+    /// Confluence rejects every comment update with a version conflict.
+    conflict_on_update: bool,
 }
 
 impl CommentStubConfluenceBackend {
@@ -6657,6 +6660,7 @@ impl CommentStubConfluenceBackend {
             create_requests: std::sync::Mutex::new(Vec::new()),
             update_requests: std::sync::Mutex::new(Vec::new()),
             throttle_reads_after_write: false,
+            conflict_on_update: false,
         }
     }
 
@@ -6721,6 +6725,8 @@ struct AttributionStubConfluenceBackend {
     blog_create_requests: std::sync::Mutex<Vec<ConfluenceBlogCreateRequest>>,
     blog_update_requests: std::sync::Mutex<Vec<ConfluenceBlogUpdateRequest>>,
     backend_calls: std::sync::Mutex<u64>,
+    /// Confluence rejects every page and blog update with a version conflict.
+    conflict_on_update: bool,
 }
 
 impl AttributionStubConfluenceBackend {
@@ -6762,6 +6768,7 @@ impl AttributionStubConfluenceBackend {
             blog_create_requests: std::sync::Mutex::new(Vec::new()),
             blog_update_requests: std::sync::Mutex::new(Vec::new()),
             backend_calls: std::sync::Mutex::new(0),
+            conflict_on_update: false,
         }
     }
 }
@@ -7194,6 +7201,9 @@ impl ConfluenceBackend for CommentStubConfluenceBackend {
             .get(&request.comment_id)
             .cloned()
             .ok_or(ConfluenceBackendError::NotFound)?;
+        if self.conflict_on_update {
+            return Err(ConfluenceBackendError::Conflict);
+        }
         self.update_requests.lock().unwrap().push(request.clone());
         comment.version = Some(request.base_version + 1);
         comment.bodies = BTreeMap::from([(request.body.representation, request.body.value)]);
@@ -8352,6 +8362,9 @@ impl ConfluenceBackend for AttributionStubConfluenceBackend {
         if request.page_id != self.page.id {
             return Err(ConfluenceBackendError::NotFound);
         }
+        if self.conflict_on_update {
+            return Err(ConfluenceBackendError::Conflict);
+        }
         self.page_update_requests
             .lock()
             .unwrap()
@@ -8448,6 +8461,9 @@ impl ConfluenceBackend for AttributionStubConfluenceBackend {
     ) -> Result<ConfluenceBackendResponse<ConfluenceBlog>, ConfluenceBackendError> {
         if request.blog_id != self.blog.id {
             return Err(ConfluenceBackendError::NotFound);
+        }
+        if self.conflict_on_update {
+            return Err(ConfluenceBackendError::Conflict);
         }
         self.blog_update_requests
             .lock()
@@ -9317,6 +9333,45 @@ async fn credential_verification_uses_current_user_probe() {
     assert_eq!(verification.upstream_status, 200);
     assert_eq!(verification.upstream_duration_ms, 2);
     assert_eq!(verification.audit["provider"], "confluence");
+}
+
+impl ConfluenceProvider {
+    /// [`Provider::invoke`], asserting that the outcome strictly matches the
+    /// action's result schemas. Fixture admission calls this after preparing
+    /// containment evidence; missing-state tests call it directly.
+    pub(crate) async fn invoke_checked(
+        &self,
+        request: ProviderInvocation,
+    ) -> Result<ProviderResult, ProviderError> {
+        let action = request.action().to_string();
+        let outcome = Provider::invoke(self, request).await;
+        assert_conforms(&self.config, &action, &outcome);
+        outcome
+    }
+}
+
+/// Asserts that `outcome` strictly matches `action`'s result schemas as the
+/// descriptor for `config` publishes them. An action `config` does not
+/// publish is checked against its bundled schemas, and an unknown action must
+/// carry no result.
+pub(crate) fn assert_conforms(
+    config: &ConfluenceProviderConfig,
+    action: &str,
+    outcome: &Result<ProviderResult, ProviderError>,
+) {
+    let descriptor = confluence_descriptor(config);
+    if let Some(published) = descriptor.action(action) {
+        agent_access_provider::test_support::assert_result_conforms(published, outcome);
+    } else if RESULT_SCHEMAS.actions().contains(&action) {
+        let unpublished = ActionDescriptor::new(action, "unpublished", json!({"type": "object"}))
+            .result_schemas(RESULT_SCHEMAS.action(action));
+        agent_access_provider::test_support::assert_result_conforms(&unpublished, outcome);
+    } else {
+        assert!(
+            outcome.as_ref().is_err_and(|error| error.result.is_none()),
+            "unknown Confluence action {action} returned a result"
+        );
+    }
 }
 
 fn invocation(action: &str, inputs: Value) -> ProviderInvocation {
@@ -10387,10 +10442,14 @@ struct DraftThrottleBackend {
     uploads: std::sync::Mutex<Vec<ConfluenceAttachment>>,
     throttle_uploads_after: usize,
     throttle_attachment_reads_after_uploads: usize,
+    /// Location becomes unresolved before the next file, after earlier uploads verified.
+    unresolved_location_after_uploads: usize,
     published_or_discarded: std::sync::atomic::AtomicBool,
     verification_failure: DraftVerificationFailure,
     proof_budget: std::sync::Mutex<Option<ConfluenceMetadataBudget>>,
     draft_after_finish_missing: bool,
+    /// A current version for draft-stage conflict tests; absent for new drafts.
+    current_version: Option<u64>,
 }
 
 impl DraftThrottleBackend {
@@ -10401,10 +10460,12 @@ impl DraftThrottleBackend {
             uploads: std::sync::Mutex::new(Vec::new()),
             throttle_uploads_after: usize::MAX,
             throttle_attachment_reads_after_uploads: usize::MAX,
+            unresolved_location_after_uploads: usize::MAX,
             published_or_discarded: std::sync::atomic::AtomicBool::new(false),
             verification_failure: DraftVerificationFailure::Throttled,
             proof_budget: std::sync::Mutex::new(None),
             draft_after_finish_missing: false,
+            current_version: None,
         }
     }
 
@@ -10530,6 +10591,13 @@ impl DraftThrottleBackend {
         }
         Ok(())
     }
+
+    fn check_upload_location(&self) -> Result<(), ConfluenceBackendError> {
+        if self.uploads.lock().unwrap().len() >= self.unresolved_location_after_uploads {
+            return Err(ConfluenceBackendError::ScopeUnresolved);
+        }
+        Ok(())
+    }
 }
 
 fn ok<T>(value: T) -> Result<ConfluenceBackendResponse<T>, ConfluenceBackendError> {
@@ -10551,6 +10619,7 @@ impl ConfluenceBackend for DraftThrottleBackend {
         credential: &AtlassianCredential,
         _budget: &ConfluenceMetadataBudget,
     ) -> Result<ConfluenceBackendResponse<ConfluenceNode>, ConfluenceBackendError> {
+        self.check_upload_location()?;
         if kind != ConfluenceNodeKind::Page {
             return Err(ConfluenceBackendError::NotFound);
         }
@@ -10621,6 +10690,7 @@ impl ConfluenceBackend for DraftThrottleBackend {
         credential: &AtlassianCredential,
         _budget: &ConfluenceMetadataBudget,
     ) -> Result<ConfluenceBackendResponse<ConfluenceBlogLocation>, ConfluenceBackendError> {
+        self.check_upload_location()?;
         if status == ConfluenceContentStatus::Draft {
             let draft = self.draft_blog(id, None, credential).await?.value;
             return ok(ConfluenceBlogLocation {
@@ -10666,20 +10736,54 @@ impl ConfluenceBackend for DraftThrottleBackend {
 
     async fn page_metadata(
         &self,
-        _page_id: &str,
+        page_id: &str,
         _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         self.after_finish()?;
-        Err(ConfluenceBackendError::NotFound)
+        match self.current_version {
+            Some(version)
+                if self.content_type == ConfluenceDraftContentType::Page
+                    && page_id == self.id() =>
+            {
+                ok(ConfluencePage {
+                    version,
+                    ..test_current_page(page_id, "Current", "ENG")
+                })
+            }
+            _ => Err(ConfluenceBackendError::NotFound),
+        }
     }
 
     async fn blog_metadata(
         &self,
-        _blog_id: &str,
+        blog_id: &str,
         _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceBlog>, ConfluenceBackendError> {
         self.after_finish()?;
-        Err(ConfluenceBackendError::NotFound)
+        match self.current_version {
+            Some(version)
+                if self.content_type == ConfluenceDraftContentType::Blog
+                    && blog_id == self.id() =>
+            {
+                ok(ConfluenceBlog {
+                    id: blog_id.to_string(),
+                    title: "Current".to_string(),
+                    space: "ENG".to_string(),
+                    space_id: "98765".to_string(),
+                    space_alias: None,
+                    web_url: None,
+                    space_web_url: None,
+                    status: Some("current".to_string()),
+                    version,
+                    created_at: None,
+                    updated_at: None,
+                    created_by: None,
+                    updated_by: None,
+                    bodies: BTreeMap::new(),
+                })
+            }
+            _ => Err(ConfluenceBackendError::NotFound),
+        }
     }
 
     async fn page(
@@ -10908,6 +11012,59 @@ fn draft_invocation(action: &str, inputs: Value) -> ProviderInvocation {
         )]))
         .build();
     request
+}
+
+#[tokio::test]
+async fn draft_upload_location_failure_preserves_completed_and_skipped_file_metadata() {
+    for (kind, prefix, id_key) in [
+        (ConfluenceDraftContentType::Page, "page", "pageId"),
+        (ConfluenceDraftContentType::Blog, "blog", "blogId"),
+    ] {
+        let mut raw = DraftThrottleBackend::new(kind);
+        raw.unresolved_location_after_uploads = 1;
+        let (provider, backend, handle) = draft_throttle_provider(raw);
+        let error = provider
+            .invoke_fixture(draft_attachment_add_invocation(
+                prefix,
+                id_key,
+                backend.id(),
+                &handle,
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamFailed, "{prefix}");
+        let result = error.result.as_deref().unwrap();
+        assert_eq!(result["status"], "partial");
+        assert_eq!(result[id_key], backend.id());
+        assert_eq!(result["attachments"].as_array().unwrap().len(), 1);
+        assert_eq!(result["attachments"][0]["attachmentId"], "att1");
+        assert_eq!(result["attachments"][0]["parentStatus"], "draft");
+        assert_eq!(
+            result["failures"],
+            json!(["second", "third"].map(|name| json!({
+                "status":"skipped", "reason":"scope_unresolved",
+                "attachment":{
+                    "filename":format!("{name}.txt"), "contentType":"text/plain",
+                    "size":name.len(), "sha256":sha256_hex(name.as_bytes())
+                }
+            })))
+        );
+        assert_eq!(result["mutationStatus"], "unknown");
+        assert_eq!(result["retrySafe"], false);
+        assert_eq!(
+            error.object_ids.as_deref().unwrap()["attachmentIds"],
+            json!(["att1"])
+        );
+        assert_eq!(
+            error.audit.as_deref().unwrap()["locationProof"]["finalCheck"],
+            "unresolved"
+        );
+        assert_eq!(
+            backend.uploads.lock().unwrap().len(),
+            1,
+            "{prefix}: never replay the batch"
+        );
+    }
 }
 
 #[tokio::test]

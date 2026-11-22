@@ -4900,12 +4900,20 @@ enum McpCommand {
         /// Expose one canonical service with its original tool names.
         #[arg(long, value_parser = mcp::parse_service)]
         service: Option<String>,
+        /// Advertise MCP output schemas: each tool's outputSchema and the
+        /// output schemas in action details. Off omits them; results are
+        /// identical either way. Overrides client [mcp].output_schemas
+        /// (built-in: off). Fixed for this process.
+        #[arg(long, value_name = "MODE", value_parser = mcp::output_schemas_parser())]
+        output_schemas: Option<agent_access_core::mcp::OutputSchemas>,
         /// Soft preference for returned rich-text fields.
         #[arg(long, value_enum)]
         preferred_output_content_format: Option<OutputContentFormatArg>,
         /// Include a readable text copy beside each structured tool result.
-        #[arg(long, action = clap::ArgAction::Set, default_value_t = true)]
-        include_text_copy: bool,
+        /// Overrides client [mcp].include_text_copy (built-in: true).
+        /// Fixed for this process.
+        #[arg(long, action = clap::ArgAction::Set)]
+        include_text_copy: Option<bool>,
     },
 }
 
@@ -4919,6 +4927,7 @@ async fn main() -> Result<()> {
         command:
             McpCommand::Serve {
                 service,
+                output_schemas,
                 include_text_copy,
                 ..
             },
@@ -4928,8 +4937,9 @@ async fn main() -> Result<()> {
             .clone()
             .map(agent_access_core::mcp::McpView::Service)
             .unwrap_or_default();
+        let output_schemas = *output_schemas;
         let include_text_copy = *include_text_copy;
-        return mcp::serve(cli, config, view, include_text_copy).await;
+        return mcp::serve(cli, config, view, output_schemas, include_text_copy).await;
     }
     let result = match &cli.command {
         Command::Auth {
@@ -9993,11 +10003,14 @@ async fn run_actions_list(
 }
 
 async fn run_action_describe(ctx: &CliContext<'_>, service: &str, action: &str) -> Result<()> {
+    // CLI action details keep the schema-bearing stdio MCP projection; the
+    // MCP output-schema selection applies only to MCP connections.
     render_discovery(
         ctx,
         discovery::action_describe(
             ctx.settings,
             &agent_access_core::mcp::McpView::Aggregate,
+            agent_access_core::mcp::OutputSchemas::On,
             service,
             action,
         )
@@ -17248,6 +17261,7 @@ fn resolve_cli_settings(cli: &Cli, config_path: &PathBuf) -> Result<ResolvedCliS
         defaults: agent_access_core::CliDefaultsConfig {
             preferred_output_content_format: resolved.preferred_output_content_format,
         },
+        mcp: config.mcp,
     })?;
     Ok(resolved)
 }
@@ -19270,6 +19284,7 @@ Details"}}});
                 .iter()
                 .map(|value| parse_output_content_format(value, "test").unwrap())
                 .collect(),
+            result_schemas: None,
             native_output_content_format: output_content_formats
                 .first()
                 .map(|value| parse_output_content_format(value, "test").unwrap()),
@@ -22243,6 +22258,7 @@ upload_spool_dir = "upload-spool"
                     io: ActionIo::Json,
                     response_kind: agent_access_core::ResponseKind::ResponseEnvelope,
                     exit_policy: ExitPolicy::InvokeDecision,
+                    result_schemas: None,
                     output_content_formats: Vec::new(),
                     native_output_content_format: None,
                     default_output_content_format: None,

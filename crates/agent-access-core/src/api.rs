@@ -7,6 +7,7 @@ use agent_access_provider::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 mod imports;
 mod schema_refs;
 pub(crate) use schema_refs::relocate_local_schema_refs;
@@ -100,6 +101,23 @@ pub struct ApiActionSpec {
     /// Exact locations and presence rules for the action's selected rich bodies.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub body_fields: Vec<BodyField>,
+    /// The provider payload schemas the action declares, from which MCP
+    /// output schemas and typed OpenAPI responses are composed; omitted when
+    /// it declares none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_schemas: Option<ApiResultSchemas>,
+}
+
+/// An action's provider payload schemas: its success `result` and,
+/// optionally, the `result` its provider errors carry before the shared
+/// failure properties are merged in. Catalog copies share immutable JSON
+/// storage with the provider descriptor; serialization retains plain schemas.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ApiResultSchemas {
+    pub success: Arc<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<Arc<Value>>,
 }
 
 fn required_nullable_name<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
@@ -309,7 +327,7 @@ pub fn api_service_spec(
     })
 }
 
-fn api_action_spec(service: &str, action: &ActionDescriptor) -> Option<ApiActionSpec> {
+pub(crate) fn api_action_spec(service: &str, action: &ActionDescriptor) -> Option<ApiActionSpec> {
     if !is_service_name(service) || !is_action_name(&action.action) {
         return None;
     }
@@ -359,6 +377,13 @@ fn api_action_spec(service: &str, action: &ActionDescriptor) -> Option<ApiAction
         native_output_content_format: response_capabilities.native_output_content_format,
         default_output_content_format: response_capabilities.default_output_content_format,
         body_fields,
+        result_schemas: action
+            .result_schemas
+            .as_ref()
+            .map(|schemas| ApiResultSchemas {
+                success: schemas.shared_success(),
+                error: schemas.shared_error(),
+            }),
     })
 }
 
@@ -486,25 +511,55 @@ pub fn openapi_from_catalog(
                     ),
                 );
             }
-            let mut responses = json!({
-                "200": {
-                    "description": "Broker response",
-                    "content": {
-                        "application/json": {
-                            "schema": envelope_schema(action.response_kind)
+            // An action with result schemas types the envelope's `result`.
+            let typed_envelope = crate::output_schema::result_payload_schema(action)
+                .map(crate::output_schema::envelope_schema);
+            let mut responses = match &typed_envelope {
+                Some(envelope) => json!({
+                    "200": {
+                        "description": "Broker response",
+                        "content": {"application/json": {"schema": envelope}}
+                    },
+                    "default": {
+                        "description": "Broker error envelope",
+                        "content": {"application/json": {"schema": envelope}}
+                    }
+                }),
+                None => json!({
+                    "200": {
+                        "description": "Broker response",
+                        "content": {
+                            "application/json": {
+                                "schema": envelope_schema(action.response_kind)
+                            }
                         }
                     }
-                }
-            });
+                }),
+            };
             if matches!(action.io, ActionIo::RawDownload { .. }) {
+                let metadata = match &typed_envelope {
+                    Some(envelope) => json!({
+                        "description": "Base64-encoded JSON ResponseEnvelope metadata; contentSchema describes the decoded envelope, whose result is the download metadata",
+                        "schema": {
+                            "type": "string",
+                            "contentEncoding": "base64",
+                            "contentMediaType": "application/json",
+                            "contentSchema": envelope
+                        }
+                    }),
+                    None => json!({
+                        "description": "Base64-encoded JSON ResponseEnvelope metadata",
+                        "schema": { "type": "string" }
+                    }),
+                };
+                let error_envelope = typed_envelope
+                    .clone()
+                    .unwrap_or_else(|| envelope_schema(ResponseKind::ResponseEnvelope));
                 responses = json!({
                     "200": {
                         "description": "Raw download stream",
                         "headers": {
-                            RESULT_METADATA_HEADER: {
-                                "description": "Base64-encoded JSON ResponseEnvelope metadata",
-                                "schema": { "type": "string" }
-                            },
+                            RESULT_METADATA_HEADER: metadata,
                             "Content-Disposition": {
                                 "description": "Download disposition without a filename parameter; filename metadata remains in the response envelope",
                                 "schema": { "type": "string", "const": "attachment" }
@@ -524,7 +579,7 @@ pub fn openapi_from_catalog(
                         "description": "Broker error envelope",
                         "content": {
                             "application/json": {
-                                "schema": envelope_schema(ResponseKind::ResponseEnvelope)
+                                "schema": error_envelope
                             }
                         }
                     }

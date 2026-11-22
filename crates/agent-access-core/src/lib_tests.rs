@@ -290,6 +290,7 @@ fn cli_tls_config_rejects_empty_certificate_paths_in_both_modes() {
             },
             identity: CliIdentityConfig::default(),
             defaults: CliDefaultsConfig::default(),
+            mcp: CliMcpConfig::default(),
         };
         let errors = validation_errors(validate_cli_config(&config));
         assert_contains(

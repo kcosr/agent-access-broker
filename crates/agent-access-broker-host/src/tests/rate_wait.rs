@@ -21,7 +21,7 @@ impl agent_access_provider::test_support::DescribedProvider for RecordingProvide
     fn descriptor(&self) -> ServiceDescriptor {
         // Keep the fake_project resource type and read classification used by
         // fake_config's grants; only execution is replaced by this recorder.
-        agent_access_fake::fake_descriptor()
+        super::untyped_fake_descriptor()
     }
 }
 

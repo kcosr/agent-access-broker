@@ -42,6 +42,9 @@ can inspect authorized access to an already known gateway service ID.
 
 Action detail and the caller-filtered `agent-access.catalog.v3` catalog contain
 the inner `inputSchema`, extended `documentation`, I/O and response capabilities.
+Catalog `resultSchemas` describe raw provider success/failure payloads before
+selected-body presentation; OpenAPI response schemas describe the delivered
+`result`, including `{format,value}` bodies at declared `bodyFields`.
 Read documentation for query syntax, field relationships, content formats,
 continuation, companion permissions and write outcomes. `mcpTool` describes a
 different transport; missing MCP naming does not prevent canonical invocation.

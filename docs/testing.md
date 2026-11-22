@@ -893,6 +893,102 @@ proves that the matching gateway host receives the fixed `agent-access` username
 and fake token while a different host receives no credentials from the helper.
 That integration test requires a local `git` executable on `PATH`.
 
+### MCP presentation defaults
+
+The deterministic HTTP MCP tests cover Broker `[mcp]` defaults, explicit query
+overrides in both views, schema-bound cursors across reload, and in-flight
+text-copy selection. The stdio subprocess suite covers separate client TOML
+defaults, explicit flags, discovery, success/error/file results and local
+configuration errors. Rewriting the client defaults leaves the running process's
+selection fixed; Broker defaults do not change it. Config tests reject malformed
+values, including when HTTP MCP is disabled. Existing content-format and
+identity/security-reload tests remain part of the full suite.
+
+### Result schema conformance
+
+Tests check result payloads strictly against the declared
+[result schemas](provider-sdk.md#result-schemas): an object schema that
+declares `properties` without `additionalProperties` is treated as closed, so
+every emitted field must be declared. The advertised schemas stay open.
+
+- Provider unit tests invoke through a local helper that calls the SDK
+  `test-support` `assert_result_conforms`, so stub-driven successes, receipts and
+  failures are checked. Each native provider's tests also require a bundle entry
+  for every action that any supported configuration publishes, and no other.
+  The MCP, OpenAPI and command import adapters check their outcomes strictly
+  against their wrapper schemas the same way.
+- Core's `test-support` feature, which the host's enables, checks every
+  invocation of an action with result schemas twice: the provider outcome after
+  its hook contract check, and the final `result`, after presentation and the
+  host's failure details, against the composed payload union. A mismatch writes
+  the service, action, stage and validator locations to stderr and aborts the
+  process. Invocations run in tasks whose panics become ordinary failure
+  responses, so the abort fails the enclosing test whatever outcome it expected;
+  nextest runs each test in its own process, so only that test fails. Host
+  tests, isolated-broker acceptance tests and the CLI smokes are covered.
+  Release builds contain no check.
+- `runtime::result_conformance::tests::mismatches_abort_the_enclosing_test_process`
+  in `agent-access-core` proves the abort for both stages by re-running its test
+  binary on the ignored, guarded `conformance_abort_child`, which does nothing
+  unless the parent selects a stage. Never run the child directly or include
+  ignored tests broadly.
+- MCP delivery checks validate `structuredContent` from listed or projected
+  tools against their advertised `outputSchema`, as advertised rather than strictly: the host's
+  HTTP MCP fixture (`tests::mcp`) and the stdio subprocess harnesses of the
+  `mcp_stdio` test and the Jira, Confluence, GitLab and CloudBees CI smokes.
+  They select output schemas explicitly (`?outputSchemas=on`,
+  `--output-schemas on`), since connections omit them by default. Each check
+  states its connection's selection: with `on` every helper must advertise a
+  schema and an ordinary result for a tool never listed or projected fails,
+  and with `off` no tool may advertise one; neither skips validation silently or
+  substitutes another selection's schema. Independently of the selection, the
+  HTTP MCP fixture checks a successful discovery helper result strictly against
+  its typed schema. `crates/agent-access/src/output.rs` checks every local
+  receipt and save failure against the stdio schemas.
+- The selection's own suites (`tests::mcp::advertisement`, the
+  `mcp_stdio` `advertisement` module and the core `output_schema` and native
+  projection matrix tests) cover on, off and the omitted default on both
+  transports and views, helpers, native and imported actions, the strict query
+  parser, concurrent connections with different selections, complete pagination
+  and cross-selection cursor refusal, action details and identical invocation
+  results.
+- Core `output_schema` tests cover composition, each transport's delivery
+  shapes, helper schemas and the catalog, detail and OpenAPI projections. Each
+  provider schema pair is at most 8,192 bytes (descriptor validation), and the
+  assembly projection test requires every advertised `outputSchema` to be at
+  most 16,384 bytes and free of `$ref`.
+
+Advertised-schema validation, including captured results checked with Ajv,
+establishes envelope, receipt and failure-shape compatibility. It cannot prove
+native payload-schema accuracy: the composed result union's open, all-optional
+shared-failure alternative can accept object payloads independently of their
+success schema. Use the separate strict provider-outcome and final-result
+conformance checks above to verify native
+payload fields, with fixtures covering each emitted shape.
+
+Set `AGENT_ACCESS_TEST_MCP_CAPTURE` to an absolute file path to append tool
+definitions and results from these checks as JSON lines. Pair each result with
+the preceding definition for its `name`, `pid`, `transport`, `connection`, `view`
+and `outputSchemas` (`on` or `off`). HTTP also binds
+`preferredOutputContentFormat` (a concrete format or null). Stdio uses its latest
+prior listing; its configuration can reload without listing again, so capture
+records omit preference. `view` is the HTTP endpoint path or the stdio service
+ID (`aggregate` for its combined view). `includeTextCopy` records the expected
+text-copy setting and does not change schema identity.
+
+Tool records include `outputSchemaAdvertised` and `definitionSource`:
+`tools/list` is an actual listing, `static_helper` a stdio helper projection,
+and `runtime_projection` an HTTP runtime projection pinned before dispatch
+without an extra request. Response checks use that pinned or actually listed
+definition. Projected definitions do not prove the client listed that tool. Result records include `contentCount`
+and `resultWireBytes`, the serialized tool result size, not the full JSON-RPC
+frame. If an unavailable scoped service fails discovery before any definition
+exists, the explicit error check records `kind: "unadvertised_error"`,
+`unadvertisedReason: "discovery_unavailable"` and the failed `discoveryError`.
+It checks the structured local error and text-copy shape separately from
+advertised-schema conformance; ordinary missing definitions still fail.
+Unset, nothing is captured.
+
 ### Guide code blocks
 
 The [provider SDK guide](provider-sdk.md) and the

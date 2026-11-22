@@ -309,6 +309,16 @@ pub(super) fn descriptor_with_contract(
             if definition.download {
                 action = action.raw_download();
             }
+            // Gateway operations return raw upstream responses and have no
+            // invocation result. An invocation action whose schemas the
+            // adapter cannot state has none here; the provider builder
+            // leaves its import unavailable.
+            if let Some(schemas) = adapter
+                .filter(|_| !gateway)
+                .and_then(|adapter| adapter.result_schemas(definition).ok())
+            {
+                action = action.result_schemas(schemas);
+            }
             action.read_only = definition.read_only;
             action.sensitive_output_pointers = sensitive_output_pointers.clone();
             action.audit_inputs = shape.audit_inputs;
@@ -1167,18 +1177,25 @@ impl BrokerRuntime {
                     .flatten()
             })
             .collect();
+        // Publication bounds the schema-bearing projection of both transports,
+        // independently of any connection's output-schema selection.
         for mode in [
             crate::mcp::ProjectionMode::Http,
             crate::mcp::ProjectionMode::Stdio,
         ] {
-            crate::mcp::project_catalog_bounded(&catalog, mode, self.config.mcp.max_catalog_bytes)
-                .map_err(|error| {
-                    ManagedStoreError::InputInvalid(if error.0 == "catalog exceeds work limit" {
-                        "import would exceed the complete MCP catalog budget".into()
-                    } else {
-                        format!("import catalog cannot be projected: {error}")
-                    })
-                })?;
+            crate::mcp::project_catalog_bounded(
+                &catalog,
+                mode,
+                crate::mcp::OutputSchemas::On,
+                self.config.mcp.max_catalog_bytes,
+            )
+            .map_err(|error| {
+                ManagedStoreError::InputInvalid(if error.0 == "catalog exceeds work limit" {
+                    "import would exceed the complete MCP catalog budget".into()
+                } else {
+                    format!("import catalog cannot be projected: {error}")
+                })
+            })?;
         }
         struct BoundedWriter(usize);
         impl std::io::Write for BoundedWriter {
@@ -1398,7 +1415,9 @@ pub(super) fn build_providers(
         }
         if actions.iter().any(|action| {
             adapter.validate_action(action).is_err()
-                || (adapter.gateway_kind().is_none() && adapter.scoped_mcp_name(action).is_err())
+                || (adapter.gateway_kind().is_none()
+                    && (adapter.scoped_mcp_name(action).is_err()
+                        || adapter.result_schemas(action).is_err()))
         }) {
             unavailable(ImportedGatewayDiagnostic::ActionPlanInvalid);
             continue;
@@ -1726,6 +1745,9 @@ impl BrokerRuntime {
             if adapter.gateway_kind().is_none() {
                 adapter
                     .scoped_mcp_name(action)
+                    .map_err(ManagedStoreError::InputInvalid)?;
+                adapter
+                    .result_schemas(action)
                     .map_err(ManagedStoreError::InputInvalid)?;
             }
         }

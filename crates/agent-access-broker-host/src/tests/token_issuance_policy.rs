@@ -25,7 +25,7 @@ impl ProbeProvider {
 
 impl agent_access_provider::test_support::DescribedProvider for ProbeProvider {
     fn descriptor(&self) -> ServiceDescriptor {
-        let mut descriptor = agent_access_fake::fake_descriptor();
+        let mut descriptor = super::untyped_fake_descriptor();
         for (action, read_only) in [("status.view", true), ("note.write", false)] {
             let mut added = descriptor.actions[0].clone();
             added.action = action.into();

@@ -303,6 +303,7 @@ its builder methods:
 | `.sensitive_output(pointer)` | A JSON pointer into `/result` whose value is a deliberate secret. The host sends such responses with `Cache-Control: no-store`. |
 | `.audit_input(input, label)` | A top-level input whose supplied value the host records, under `label`, in the action's audit records. See [audit inputs](#audit-inputs). |
 | `.requires_stable_signing_key()` | That the action issues durable handles, so the Broker must hold a stable key. |
+| `.result_schemas(schemas)` | The JSON Schemas of its success and failure `result` payloads; see [result schemas](#result-schemas). |
 | `.documentation(json)`, `.presentation(..)`, `.attribution(..)`, `.upstream_resource_ownership(..)` | Extended usage text, rich rendering, attribution footers and static ownership metadata. |
 
 Keep the description and input schema concise; they are part of initial MCP tool
@@ -463,6 +464,99 @@ an input that is not a top-level `input_schema` property, a repeated input, a
 label that is empty, longer than 64 bytes or holds control characters, and an
 input whose schema contains `x-agent-access-sensitive` or a reference, or whose
 whole input schema is marked sensitive.
+
+### Result schemas
+
+`.result_schemas(ActionResultSchemas::new(success))` declares the JSON Schema
+of the action's success `result`, which for a raw download is its metadata
+`result`. Add `.with_error(error)` when the action's provider errors carry a
+`result` of their own, such as a batch's partial results. The schemas describe
+the provider's final JSON before presentation and before the Broker envelope:
+never the upstream API model, MCP wrappers or the selected rich-text values
+that the host produces. The catalog exposes these raw payload schemas as
+`resultSchemas`. The host composes them with the action's selected-content
+presentation, the shared failure fields and each transport's delivery shapes
+into its [MCP output schema](mcp.md#output-schemas), advertised when the
+connection selects output schemas, and typed
+[OpenAPI responses](http-api.md#result-schemas-and-typed-responses). They are
+optional: an action without them publishes no output schema. Every shipped
+native action declares them, and a new provider should.
+
+Keep the schemas in a JSON bundle beside the action documentation, such as
+`src/result-schemas.json`, and load it once through a static
+`ResultSchemaBundle::new(&[include_str!("result-schemas.json")])`. A bundle file
+is an object with an `actions` map and optional `definitions`; each action
+entry has a `success` schema and an optional `error` schema. A
+`{"$ref": "#/definitions/<name>"}` node, optionally with a sibling
+`description`, is replaced by that file's definition when the bundle is first
+parsed. References resolve within their own file, and a recursive reference is
+an error. Several files may declare disjoint actions. `bundle.action(id)`
+returns an action's `ActionResultSchemas` and panics when the bundle is
+malformed or has no entry for it; `bundle.actions()` lists the declared actions,
+so a provider test can require an entry for every action that any supported
+configuration publishes, and no other. The [worked example](#descriptor) shows a
+bundle.
+
+`ServiceDescriptor::validate` checks each action's schemas before activation:
+
+- They use only `type` (one name or an array of distinct names), `properties`,
+  `required` (names declared in its `properties`), `additionalProperties` (Boolean
+  or schema), `items` (one schema), `enum`, `const`, `anyOf`, `minimum`,
+  `maximum`, `minItems`, `maxItems`, `minLength`, `maxLength` and
+  `description`. Every other keyword is rejected, including `$schema`, `$id`,
+  `$defs`, a remaining `$ref`, `format`, `pattern`, `allOf`, `oneOf`, `not`,
+  `if`/`then`/`else`, tuple `items`, `prefixItems`, `contains`, `dependencies`,
+  `dependent*`, `unevaluated*`, anchors, `title`, `default` and `examples`.
+- The root describes the value the provider actually emits: object, array,
+  scalar or null. The Broker/MCP envelope remains an object independently of
+  the provider's `result` type.
+- The compact JSON of the success and error schemas together is at most 8,192
+  bytes, after bundle references are inlined.
+- Every declared `BodyField` resolves in the success schema through named
+  properties and array `items` to its terminal field. The host replaces that
+  field's native value schema with the four concrete selected `{format,value}`
+  alternatives, and does the same in error schemas wherever the field resolves.
+  Composition preserves optional/nullable owners and fields, and `ownerEquals`
+  predicates: a nonmatching owner's field
+  keeps its original schema.
+
+`presentation::selected_content_schema(&[OutputContentFormat])` constructs the
+concrete format/value alternatives. The composition helper
+`presentation::inject_selected_content_schema(&mut Value, &BodyField,
+&[OutputContentFormat])` updates a result schema and returns
+`Result<(), presentation::UnresolvedBodyField>`. Its owner paths start at
+`/result`, while the schema passed to it describes only that payload. Providers
+supply raw schemas; core uses these helpers for delivered representations.
+For provider failures, composition retains native fields for denials, ordinary
+errors and mutation receipts, and adds the selected form for allowed results
+that undergo presentation. Composed schemas cover all four concrete formats,
+so a valid preference-selected response after configuration reload can use a
+newly enabled format; the action's `outputContentFormats` still determines
+which exact per-call format selections are available.
+
+Write the schemas as action-wide supersets across every supported
+configuration and input; never narrow them to the current configuration. Mark a
+field `required` only when the projection always emits it: a passthrough value
+that becomes `null` when the upstream omits it is required and nullable, as in
+`{"type": ["string", "null"]}`. Leave objects open by omitting
+`additionalProperties`, and declare maps with `additionalProperties: <schema>`.
+Genuinely opaque upstream JSON is an explicit open leaf, `{}` or
+`{"type": "object"}` without `properties`; never add an unconstrained branch
+beside a known result. Keep descriptions short: presence conditions, the meaning
+of `null`, units and continuation semantics.
+
+Declare only what the provider emits. The host merges the shared failure
+fields that SDK helpers and the host add into the error schema, keeping the
+provider's own declarations: mutation receipts (`mutationStatus`, `retrySafe`,
+`verificationStage`, `safeLocators`), `executionState`, `deadlineKind`,
+upstream rate-limit details (`limitScope`, `service`, `retryAfterSeconds`,
+`retryAt`) and `hints.upstreamResourceOwnership`. It also offers those fields
+alone as a failure alternative, so an action whose failures carry nothing else
+needs no error schema. A success that reports its own receipt, such as
+`mutationStatus: "applied"`, declares it in the success schema. When a
+projection changes, change its schema with it; never change a delivered
+payload to satisfy a schema. [Result conformance](#sdk-test-support) checks
+outcomes strictly in tests.
 
 ### Token-only actions
 
@@ -2149,8 +2243,8 @@ clients for requests that must not repeat.
 ### SDK test support
 
 Enable the SDK's `test-support` feature in a provider's development
-dependencies. It adds construction helpers only and never changes runtime
-behavior:
+dependencies. It adds construction and conformance helpers without changing
+production runtime behavior:
 
 - `TestHost` lends a `BuildContext` with configurable limits, attribution and
   stable signing key, and a deterministic, offline client factory. Its clients
@@ -2181,6 +2275,18 @@ behavior:
   `take_upstream_requests()` returns the upstream trace events.
 - `DescribedProvider` lets a test provider state its own descriptor so it can
   be injected without a configuration.
+- `assert_result_conforms(&action, &outcome)` checks a provider outcome
+  strictly against the action's [result schemas](#result-schemas): a success
+  `result` against the success schema, and an error's `result` against the
+  error schema merged with the shared failure fields, or against the shared
+  failure fields alone. An error without `result` conforms; an action without
+  result schemas fails. Strict means every object schema that declares
+  `properties` without `additionalProperties` is treated as closed, so an
+  undeclared field fails while the advertised schema stays open. Route unit-test
+  invocations through a local helper that invokes and asserts, so every
+  stub-driven outcome is checked. `check_result_conforms` returns the problem
+  instead of panicking; `check_strict_conformance(schema, value)` and
+  `strict_result_schema(schema)` apply the same rule to any schema.
 
 ### Conformance reference
 
@@ -2209,8 +2315,12 @@ signal handler or global log subscriber; `RunningBroker::reload`, `shutdown` and
 give read-only store views. `ProviderFixture` serves a test provider for a
 selected and configured kind in place of the one its registration would build;
 configuration validation, admission and generation ownership still apply. It is
-a fixture control, not an embedding API. Release builds never enable either
-test-support feature. See [testing](testing.md) for the commands.
+a fixture control, not an embedding API. With the host's test support, every
+invocation of an action with result schemas is also checked strictly, both the
+provider outcome and the final `result` after presentation; a mismatch aborts
+the test process, so the enclosing test fails whatever outcome it expected.
+Release builds never enable either test-support feature. See
+[testing](testing.md) for the commands.
 
 ## Compatibility policy
 
@@ -2270,7 +2380,8 @@ does not replace descriptor, lifecycle and feature behavior checks. The crates d
 This provider serves a synthetic notes service at `https://notes.example.com`.
 It has one read action, `note.view`, scoped to a notebook resource. It uses a
 static bearer token, reads a bounded JSON response and declares one domain
-reason. It is derived from the development `fake` and conformance providers.
+reason and the schema of its result. It is derived from the development `fake`
+and conformance providers.
 Every Rust block on this page compiles against the current SDK; the blocks in
 this section form one crate's `src/lib.rs`.
 
@@ -2312,10 +2423,10 @@ use agent_access_provider::{
     ClientProfile, CredentialDescriptor, EgressDeclaration, EgressProxyConfig, Provider,
     ProviderBuildError, ProviderError, ProviderFailureStatus, ProviderInvocation,
     ProviderReasonDefinition, ProviderResult, ReasonCode, ResourceScopeCapabilities,
-    ResourceScopes, ResourceType, ResourceTypeDescriptor, ScopeRequest, ScopeResolution,
-    ServiceDescriptor, StaticCredentialKind, UpstreamCall, UpstreamClient, UpstreamClientSpec,
-    ValidationContext, complete_upstream_trace, module_metadata, parse_backend_config,
-    read_bounded_body, take_upstream_trace, validate_egress_proxy_config,
+    ResourceScopes, ResourceType, ResourceTypeDescriptor, ResultSchemaBundle, ScopeRequest,
+    ScopeResolution, ServiceDescriptor, StaticCredentialKind, UpstreamCall, UpstreamClient,
+    UpstreamClientSpec, ValidationContext, complete_upstream_trace, module_metadata,
+    parse_backend_config, read_bounded_body, take_upstream_trace, validate_egress_proxy_config,
     validate_upstream_allowlist, validate_upstream_base_url,
 };
 use serde::Deserialize;
@@ -2428,7 +2539,30 @@ impl BackendConfig for NotesConfig {
 
 ### Descriptor
 
+The result schemas sit inline here to keep the example in one file; a provider
+usually keeps them in `src/result-schemas.json` and passes
+`include_str!("result-schemas.json")`.
+
 ```rust file=example-notes/src/lib.rs
+/// The `result` payload of every notes action.
+static RESULT_SCHEMAS: ResultSchemaBundle = ResultSchemaBundle::new(&[r##"{
+    "definitions": {
+        "notebook": {"type": "string", "description": "Notebook name."}
+    },
+    "actions": {
+        "note.view": {
+            "success": {
+                "type": "object",
+                "properties": {
+                    "notebook": {"$ref": "#/definitions/notebook"},
+                    "note": {"description": "The upstream note JSON, unchanged."}
+                },
+                "required": ["notebook", "note"]
+            }
+        }
+    }
+}"##]);
+
 /// The notes service. It depends on nothing but constants, so offline
 /// validation can call it before a provider exists.
 pub fn notes_descriptor() -> ServiceDescriptor {
@@ -2458,7 +2592,8 @@ pub fn notes_descriptor() -> ServiceDescriptor {
             .scope("notebook")
             .credential_modes(["service", "per_user"])
             .audit_input("notebook", "Notebook")
-            .audit_input("note", "Note"),
+            .audit_input("note", "Note")
+            .result_schemas(RESULT_SCHEMAS.action("note.view")),
         ])
         .with_credentials(
             CredentialDescriptor::default()
@@ -2641,17 +2776,35 @@ fn elapsed_ms(started: Instant) -> u64 {
 
 The tests build the provider through `TestHost`, resolve scopes with
 `ScopeRequestFixture` and invoke it against a local mock upstream with
-`InvocationBuilder`, inside an invocation hook as the Broker runs it.
+`InvocationBuilder`, inside an invocation hook as the Broker runs it. Every
+invocation goes through `invoke_checked`, which checks its outcome strictly
+against the action's result schemas.
 
 ```rust file=example-notes/src/lib.rs
 #[cfg(test)]
 mod tests {
     use super::*;
     use agent_access_provider::test_support::{
-        InvocationBuilder, ScopeRequestFixture, TestHost, bearer_credential, in_invocation_hook,
+        InvocationBuilder, ScopeRequestFixture, TestHost, assert_result_conforms,
+        bearer_credential, in_invocation_hook,
     };
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    /// Invokes `request` and requires every field of its outcome to be
+    /// declared by the action's result schemas.
+    async fn invoke_checked(
+        provider: &Arc<dyn Provider>,
+        request: ProviderInvocation,
+    ) -> Result<ProviderResult, ProviderError> {
+        let action = notes_descriptor()
+            .action(request.action())
+            .cloned()
+            .expect("a published notes action");
+        let outcome = provider.invoke(request).await;
+        assert_result_conforms(&action, &outcome);
+        outcome
+    }
 
     fn provider(base_url: &str) -> Arc<dyn Provider> {
         let config = NotesConfig {
@@ -2675,7 +2828,15 @@ mod tests {
 
     #[test]
     fn the_descriptor_is_valid() {
-        notes_descriptor().validate().unwrap();
+        let descriptor = notes_descriptor();
+        descriptor.validate().unwrap();
+        // The bundle declares every published action and no other.
+        let published = descriptor
+            .actions
+            .iter()
+            .map(|action| action.action.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(RESULT_SCHEMAS.actions(), published);
     }
 
     #[tokio::test]
@@ -2702,7 +2863,8 @@ mod tests {
             .mount(&upstream)
             .await;
         let provider = provider(&upstream.uri());
-        let result = in_invocation_hook("notes", "note.view", provider.invoke(invocation("42")))
+        let checked = invoke_checked(&provider, invocation("42"));
+        let result = in_invocation_hook("notes", "note.view", checked)
             .await
             .unwrap();
         assert_eq!(result.result["note"]["title"], "Welcome");
@@ -2717,7 +2879,9 @@ mod tests {
             .mount(&upstream)
             .await;
         let provider = provider(&upstream.uri());
-        let error = provider.invoke(invocation("7")).await.unwrap_err();
+        let error = invoke_checked(&provider, invocation("7"))
+            .await
+            .unwrap_err();
         assert_eq!(error.reason_code().domain(), Some(&NOTE_ARCHIVED));
         assert_eq!(error.reason_code().http_status(), 409);
     }
@@ -2728,7 +2892,7 @@ mod tests {
         let request = InvocationBuilder::from(invocation("42"))
             .execution(agent_access_provider::ExecutionAccess::None)
             .build();
-        let error = provider.invoke(request).await.unwrap_err();
+        let error = invoke_checked(&provider, request).await.unwrap_err();
         assert_eq!(error.reason_code(), ReasonCode::CredentialNotProvisioned);
     }
 }

@@ -153,7 +153,7 @@ async fn exclusion_only_searches_require_finite_effective_scope_before_dispatch(
             );
             let inputs = json!({"query":{"type":"jql","value":query}});
             let error = provider
-                .invoke(invocation(inputs.clone(), broad.clone()))
+                .invoke_checked(invocation(inputs.clone(), broad.clone()))
                 .await
                 .unwrap_err();
             assert_eq!(error.reason_code(), ReasonCode::InputInvalid, "{query}");
@@ -171,10 +171,16 @@ async fn exclusion_only_searches_require_finite_effective_scope_before_dispatch(
             // the bound, even if the caller then excludes that whole selection.
             let mut narrowed = inputs.clone();
             narrowed["projects"] = json!(["PROJ"]);
-            let response = provider.invoke(invocation(narrowed, broad)).await.unwrap();
+            let response = provider
+                .invoke_checked(invocation(narrowed, broad))
+                .await
+                .unwrap();
             assert_eq!(response.result["issues"], json!([]));
             let finite = SearchAuthorizationScope::from_exact_values(vec!["PROJ".into()]);
-            provider.invoke(invocation(inputs, finite)).await.unwrap();
+            provider
+                .invoke_checked(invocation(inputs, finite))
+                .await
+                .unwrap();
             let observations = backend.credential_observations.lock().unwrap();
             assert_eq!(observations.len(), 2);
             assert!(observations.iter().all(|call| call.operation == "search"));
@@ -231,7 +237,10 @@ async fn ordinary_clauses_keep_broad_searches_and_grouped_policy_composition() {
                 provider.local_scopes("search", &inputs).unwrap()["project"],
                 Vec::<String>::new()
             );
-            provider.invoke(invocation(inputs, scope)).await.unwrap();
+            provider
+                .invoke_checked(invocation(inputs, scope))
+                .await
+                .unwrap();
             assert_eq!(
                 backend.last_search.lock().unwrap().as_ref().unwrap().jql,
                 expected
@@ -277,7 +286,7 @@ async fn exclusion_filters_preserve_full_page_containment_and_current_issue_iden
                 );
                 let query = format!("(project != ARCHIVE AND summary !~ 'obsolete') OR {clause}");
                 let error = provider
-                    .invoke(invocation(
+                    .invoke_checked(invocation(
                         json!({"query":{"type":"jql","value":query}}),
                         scope.clone(),
                     ))
@@ -314,7 +323,7 @@ async fn wildcard_text_stays_contained_and_wildcard_project_entries_stay_invalid
     ] {
         assert_eq!(
             provider
-                .invoke(invocation(
+                .invoke_checked(invocation(
                     inputs,
                     SearchAuthorizationScope::from_exact_values(vec!["PROJ".into()])
                 ))
@@ -330,7 +339,7 @@ async fn wildcard_text_stays_contained_and_wildcard_project_entries_stay_invalid
         json!({"type":"jql","value":"text ~ '*'"}),
     ] {
         provider
-            .invoke(invocation(
+            .invoke_checked(invocation(
                 json!({"query":query}),
                 SearchAuthorizationScope::from_exact_values(vec!["PROJ".into()]),
             ))

@@ -1,11 +1,15 @@
 //! Exercise the published stdio command through a real broker, including its
 //! caller-filtered catalog and resource authorization (not a mock MCP handler).
+#[path = "mcp_stdio/advertisement.rs"]
+mod advertisement;
 #[path = "mcp_stdio/documentation.rs"]
 mod documentation;
 #[path = "mcp_stdio/imported_oauth.rs"]
 mod imported_oauth;
 #[path = "mcp_stdio/imports.rs"]
 mod imports;
+#[path = "common/mcp_output.rs"]
+mod mcp_output;
 #[path = "mcp_stdio/names.rs"]
 mod names;
 #[path = "mcp_stdio/output_content.rs"]
@@ -16,6 +20,7 @@ mod rate_wait;
 mod text_copy;
 
 use agent_access_broker_host::test_support::{FixtureDir, IsolatedBroker, RunningBroker};
+use agent_access_core::mcp::OutputSchemas;
 use agent_access_fake::FAKE_PROJECT_RESOURCE;
 use serde_json::{Value, json};
 use std::fmt::Display;
@@ -35,9 +40,12 @@ struct McpProcess {
     stderr: Arc<Mutex<String>>,
     next_id: u64,
     service: Option<String>,
+    tools: mcp_output::AdvertisedTools,
 }
 
 impl McpProcess {
+    /// The aggregate view, explicitly advertising output schemas so every
+    /// result is checked against them.
     fn start(config: &Path) -> Self {
         Self::start_view(config, None)
     }
@@ -47,7 +55,16 @@ impl McpProcess {
     }
 
     fn start_view(config: &Path, service: Option<&str>) -> Self {
-        Self::start_with_text_copy(config, service, None)
+        Self::start_options(config, service, Some(OutputSchemas::On), None)
+    }
+
+    /// `selection` is the `--output-schemas` value; `None` omits the option.
+    fn start_selecting(
+        config: &Path,
+        service: Option<&str>,
+        selection: Option<OutputSchemas>,
+    ) -> Self {
+        Self::start_options(config, service, selection, None)
     }
 
     fn start_with_text_copy(
@@ -55,6 +72,19 @@ impl McpProcess {
         service: Option<&str>,
         include_text_copy: Option<bool>,
     ) -> Self {
+        Self::start_options(config, service, Some(OutputSchemas::On), include_text_copy)
+    }
+
+    fn start_options(
+        config: &Path,
+        service: Option<&str>,
+        selection: Option<OutputSchemas>,
+        include_text_copy: Option<bool>,
+    ) -> Self {
+        let defaults: agent_access_core::CliConfig =
+            toml::from_str(&std::fs::read_to_string(config).unwrap()).unwrap();
+        let effective_schemas = selection.unwrap_or(defaults.mcp.output_schemas);
+        let effective_copy = include_text_copy.unwrap_or(defaults.mcp.include_text_copy);
         let mut command = Command::new(env!("CARGO_BIN_EXE_agent-access"));
         // A developer's ambient broker/token configuration must never change
         // the broker or identity exercised by this subprocess test.
@@ -67,6 +97,7 @@ impl McpProcess {
         if let Some(service) = service {
             command.args(["--service", service]);
         }
+        command.args(mcp_output::output_schema_arguments(selection));
         if let Some(include_text_copy) = include_text_copy {
             command.arg(format!("--include-text-copy={include_text_copy}"));
         }
@@ -102,6 +133,8 @@ impl McpProcess {
             stderr,
             next_id: 1,
             service: service.map(str::to_owned),
+            tools: mcp_output::AdvertisedTools::new(Some(effective_schemas), service)
+                .with_text_copy(effective_copy),
         }
     }
 
@@ -112,7 +145,49 @@ impl McpProcess {
         stdin.flush().unwrap();
     }
 
+    /// Sends one request. A `tools/call` result's structured content is
+    /// checked against the tool's advertised output schema, listing the
+    /// tools first, as a client would, when the tool was not listed yet.
     async fn request(&mut self, method: &str, params: Value) -> Value {
+        let call = (method == "tools/call")
+            .then(|| params["name"].as_str().unwrap_or_default().to_owned());
+        if let Some(name) = &call
+            && !self.tools.knows(name)
+        {
+            self.list_advertised_tools().await;
+        }
+        let response = self.send_request(method, params).await;
+        match &call {
+            Some(name) => self.tools.check_call(name, &response),
+            None if method == "tools/list" => self.tools.record_listing(&response),
+            None => {}
+        }
+        response
+    }
+
+    /// Test the local error returned when discovery cannot advertise a tool.
+    /// The failed listing is retained as explicit evidence for the capture.
+    async fn request_unadvertised_error(&mut self, params: Value, failed_listing: &Value) -> Value {
+        let name = params["name"].as_str().unwrap().to_owned();
+        let response = self.send_request("tools/call", params).await;
+        self.tools
+            .check_unadvertised_error(&name, &response, failed_listing);
+        response
+    }
+
+    async fn list_advertised_tools(&mut self) {
+        let mut params = json!({});
+        loop {
+            let page = self.send_request("tools/list", params).await;
+            self.tools.record_listing(&page);
+            match page["result"]["nextCursor"].as_str() {
+                Some(cursor) => params = json!({"cursor": cursor}),
+                None => break,
+            }
+        }
+    }
+
+    async fn send_request(&mut self, method: &str, params: Value) -> Value {
         let id = self.next_id;
         self.next_id += 1;
         self.send(json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}));

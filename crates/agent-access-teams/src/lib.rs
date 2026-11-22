@@ -19,6 +19,9 @@ const HOST_SUFFIX: &str = ".environment.api.powerplatform.com";
 const MAX_BODY_BYTES: u64 = 24 * 1024;
 const ACTION: &str = "notification.send";
 const SERVICE: &str = "teams";
+/// The action's provider payload schemas.
+static RESULT_SCHEMAS: ResultSchemaBundle =
+    ResultSchemaBundle::new(&[include_str!("result-schemas.json")]);
 
 pub static TEAMS_DESTINATION_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescriptor::new(
     ResourceType::from_static("teams_notification_destination"),
@@ -209,7 +212,8 @@ pub fn descriptor() -> ServiceDescriptor {
             .documentation(documentation::for_action(ACTION))
             .scope("destination").credential_modes(["service"]).resource_attributes()
             // The managed destination only: the notification content is never recorded.
-            .audit_input("destination", "Destination")]).with_credentials(CredentialDescriptor::without_execution_credential())
+            .audit_input("destination", "Destination")
+            .result_schemas(RESULT_SCHEMAS.action(ACTION))]).with_credentials(CredentialDescriptor::without_execution_credential())
 }
 
 /// What the Workflow endpoint answered: its status and, for HTTP 429, the

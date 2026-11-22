@@ -1,7 +1,8 @@
 use super::*;
 use agent_access_provider::presentation::{
-    ResponseOptions, present_result, resolve_response_options,
+    ResponseOptions, inject_selected_content_schema, present_result, resolve_response_options,
 };
+use agent_access_provider::test_support::check_strict_conformance;
 
 const MUTATIONS: &[&str] = &[
     "issue.create",
@@ -250,7 +251,7 @@ async fn every_body_mutation_success_has_a_completed_presentation_recovery_recei
             .mount(&server)
             .await;
         let response = provider
-            .invoke(test_invocation(action, inputs))
+            .invoke_strict(test_invocation(action, inputs))
             .await
             .unwrap_or_else(|error| panic!("{action}: {error:?}"));
         assert_eq!(
@@ -268,6 +269,17 @@ async fn every_body_mutation_success_has_a_completed_presentation_recovery_recei
             1,
             "{action}"
         );
+        let declared = descriptor.action(action).unwrap();
+        let presentation = declared.presentation.as_ref().unwrap();
+        let mut selected_schema = declared.result_schemas.as_ref().unwrap().success().clone();
+        for field in presentation.body_fields() {
+            inject_selected_content_schema(
+                &mut selected_schema,
+                &field,
+                presentation.output_content_formats(),
+            )
+            .unwrap();
+        }
         for format in [OutputContentFormat::Markdown, OutputContentFormat::Text] {
             let resolved = resolve_response_options(
                 present::presentation(action),
@@ -277,6 +289,8 @@ async fn every_body_mutation_success_has_a_completed_presentation_recovery_recei
             .unwrap();
             let mut result = response.result.clone();
             present_result(&resolved, &mut result, 4096, 65536).unwrap();
+            check_strict_conformance(&selected_schema, &result)
+                .unwrap_or_else(|error| panic!("{action} {format:?}: {error}"));
             let serialized = result.to_string();
             assert!(
                 serialized.contains(&format!("\"format\":\"{}\"", format.as_str())),
@@ -307,7 +321,7 @@ async fn body_read_success_does_not_claim_mutation_completion() {
     let server = MockServer::start().await;
     let response = provider(&server)
         .await
-        .invoke(test_invocation(
+        .invoke_strict(test_invocation(
             "issue.view",
             json!({"project":"sip/service","iid":7}),
         ))
