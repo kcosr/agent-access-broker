@@ -10442,6 +10442,8 @@ struct DraftThrottleBackend {
     uploads: std::sync::Mutex<Vec<ConfluenceAttachment>>,
     throttle_uploads_after: usize,
     throttle_attachment_reads_after_uploads: usize,
+    /// Location becomes unresolved before the next file, after earlier uploads verified.
+    unresolved_location_after_uploads: usize,
     published_or_discarded: std::sync::atomic::AtomicBool,
     verification_failure: DraftVerificationFailure,
     proof_budget: std::sync::Mutex<Option<ConfluenceMetadataBudget>>,
@@ -10458,6 +10460,7 @@ impl DraftThrottleBackend {
             uploads: std::sync::Mutex::new(Vec::new()),
             throttle_uploads_after: usize::MAX,
             throttle_attachment_reads_after_uploads: usize::MAX,
+            unresolved_location_after_uploads: usize::MAX,
             published_or_discarded: std::sync::atomic::AtomicBool::new(false),
             verification_failure: DraftVerificationFailure::Throttled,
             proof_budget: std::sync::Mutex::new(None),
@@ -10588,6 +10591,13 @@ impl DraftThrottleBackend {
         }
         Ok(())
     }
+
+    fn check_upload_location(&self) -> Result<(), ConfluenceBackendError> {
+        if self.uploads.lock().unwrap().len() >= self.unresolved_location_after_uploads {
+            return Err(ConfluenceBackendError::ScopeUnresolved);
+        }
+        Ok(())
+    }
 }
 
 fn ok<T>(value: T) -> Result<ConfluenceBackendResponse<T>, ConfluenceBackendError> {
@@ -10609,6 +10619,7 @@ impl ConfluenceBackend for DraftThrottleBackend {
         credential: &AtlassianCredential,
         _budget: &ConfluenceMetadataBudget,
     ) -> Result<ConfluenceBackendResponse<ConfluenceNode>, ConfluenceBackendError> {
+        self.check_upload_location()?;
         if kind != ConfluenceNodeKind::Page {
             return Err(ConfluenceBackendError::NotFound);
         }
@@ -10679,6 +10690,7 @@ impl ConfluenceBackend for DraftThrottleBackend {
         credential: &AtlassianCredential,
         _budget: &ConfluenceMetadataBudget,
     ) -> Result<ConfluenceBackendResponse<ConfluenceBlogLocation>, ConfluenceBackendError> {
+        self.check_upload_location()?;
         if status == ConfluenceContentStatus::Draft {
             let draft = self.draft_blog(id, None, credential).await?.value;
             return ok(ConfluenceBlogLocation {
@@ -11000,6 +11012,59 @@ fn draft_invocation(action: &str, inputs: Value) -> ProviderInvocation {
         )]))
         .build();
     request
+}
+
+#[tokio::test]
+async fn draft_upload_location_failure_preserves_completed_and_skipped_file_metadata() {
+    for (kind, prefix, id_key) in [
+        (ConfluenceDraftContentType::Page, "page", "pageId"),
+        (ConfluenceDraftContentType::Blog, "blog", "blogId"),
+    ] {
+        let mut raw = DraftThrottleBackend::new(kind);
+        raw.unresolved_location_after_uploads = 1;
+        let (provider, backend, handle) = draft_throttle_provider(raw);
+        let error = provider
+            .invoke_fixture(draft_attachment_add_invocation(
+                prefix,
+                id_key,
+                backend.id(),
+                &handle,
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamFailed, "{prefix}");
+        let result = error.result.as_deref().unwrap();
+        assert_eq!(result["status"], "partial");
+        assert_eq!(result[id_key], backend.id());
+        assert_eq!(result["attachments"].as_array().unwrap().len(), 1);
+        assert_eq!(result["attachments"][0]["attachmentId"], "att1");
+        assert_eq!(result["attachments"][0]["parentStatus"], "draft");
+        assert_eq!(
+            result["failures"],
+            json!(["second", "third"].map(|name| json!({
+                "status":"skipped", "reason":"scope_unresolved",
+                "attachment":{
+                    "filename":format!("{name}.txt"), "contentType":"text/plain",
+                    "size":name.len(), "sha256":sha256_hex(name.as_bytes())
+                }
+            })))
+        );
+        assert_eq!(result["mutationStatus"], "unknown");
+        assert_eq!(result["retrySafe"], false);
+        assert_eq!(
+            error.object_ids.as_deref().unwrap()["attachmentIds"],
+            json!(["att1"])
+        );
+        assert_eq!(
+            error.audit.as_deref().unwrap()["locationProof"]["finalCheck"],
+            "unresolved"
+        );
+        assert_eq!(
+            backend.uploads.lock().unwrap().len(),
+            1,
+            "{prefix}: never replay the batch"
+        );
+    }
 }
 
 #[tokio::test]

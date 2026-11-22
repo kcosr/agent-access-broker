@@ -7,7 +7,7 @@
     },
     "nullableParent": {
       "type": ["object", "null"],
-      "properties": {"kind": {"enum": ["page", "folder"]}, "id": {"type": "string"}},
+      "properties": {"kind": {"enum": ["page", "folder", "database", "whiteboard", "embed"]}, "id": {"type": "string"}},
       "required": ["kind", "id"]
     },
     "author": {
@@ -132,7 +132,18 @@
         },
         "reason": {"type": "string"},
         "attachmentId": {"type": "string"},
-        "filename": {"type": "string"}
+        "filename": {"type": "string"},
+        "attachment": {
+          "description": "Metadata of a file skipped after a later location recheck failed.",
+          "type": "object",
+          "properties": {
+            "filename": {"type": "string"},
+            "contentType": {"type": "string"},
+            "size": {"type": "integer"},
+            "sha256": {"type": "string"}
+          },
+          "required": ["filename", "contentType", "size", "sha256"]
+        }
       },
       "required": ["status", "reason"]
     },

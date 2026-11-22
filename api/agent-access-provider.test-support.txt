@@ -2437,6 +2437,8 @@ impl !core::panic::unwind_safe::UnwindSafe for agent_access_provider::ActionDesc
 impl agent_access_provider::ActionResultSchemas
 pub fn agent_access_provider::ActionResultSchemas::error(&self) -> core::option::Option<&serde_json::value::Value>
 pub fn agent_access_provider::ActionResultSchemas::new(serde_json::value::Value) -> Self
+pub fn agent_access_provider::ActionResultSchemas::shared_error(&self) -> core::option::Option<alloc::sync::Arc<serde_json::value::Value>>
+pub fn agent_access_provider::ActionResultSchemas::shared_success(&self) -> alloc::sync::Arc<serde_json::value::Value>
 pub fn agent_access_provider::ActionResultSchemas::success(&self) -> &serde_json::value::Value
 pub fn agent_access_provider::ActionResultSchemas::with_error(self, serde_json::value::Value) -> Self
 impl core::clone::Clone for agent_access_provider::ActionResultSchemas

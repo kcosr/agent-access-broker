@@ -78,7 +78,11 @@ fn content_schemas_expose_current_parent_and_scan_paths() {
             .success();
         assert_eq!(
             schema["properties"]["parent"]["properties"]["kind"]["enum"],
-            json!(["page", "folder"])
+            if action == "page.create" {
+                json!(["page", "folder"])
+            } else {
+                json!(["page", "folder", "database", "whiteboard", "embed"])
+            }
         );
         assert_eq!(
             schema["properties"]["parent"]["properties"]["id"]["type"],

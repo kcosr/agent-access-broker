@@ -7,6 +7,7 @@ use agent_access_provider::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 mod imports;
 mod schema_refs;
 pub(crate) use schema_refs::relocate_local_schema_refs;
@@ -109,13 +110,14 @@ pub struct ApiActionSpec {
 
 /// An action's provider payload schemas: its success `result` and,
 /// optionally, the `result` its provider errors carry before the shared
-/// failure properties are merged in.
+/// failure properties are merged in. Catalog copies share immutable JSON
+/// storage with the provider descriptor; serialization retains plain schemas.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ApiResultSchemas {
-    pub success: Value,
+    pub success: Arc<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error: Option<Value>,
+    pub error: Option<Arc<Value>>,
 }
 
 fn required_nullable_name<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
@@ -379,8 +381,8 @@ pub(crate) fn api_action_spec(service: &str, action: &ActionDescriptor) -> Optio
             .result_schemas
             .as_ref()
             .map(|schemas| ApiResultSchemas {
-                success: schemas.success().clone(),
-                error: schemas.error().cloned(),
+                success: schemas.shared_success(),
+                error: schemas.shared_error(),
             }),
     })
 }

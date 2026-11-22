@@ -226,8 +226,11 @@ All notable changes to this project are documented in this file.
   MCP clients can opt into `outputSchema` with HTTP `outputSchemas=on` or stdio
   `--output-schemas on` (default `off`). Schemas describe selected rich-text
   bodies, failures and file receipts without changing invocation results, and
-  combine with content preferences and optional text copies. Provider authors
-  declare and test payload schemas through the SDK. See
+  combine with content preferences and optional text copies. Readiness and
+  import publication budgets include output schemas regardless of connection
+  selection; operators who lowered `mcp.max_catalog_bytes` should re-check
+  scoped readiness after upgrading. Provider authors declare and test payload
+  schemas through the SDK. See
   [output schemas](docs/mcp.md#output-schemas) and
   [provider result schemas](docs/provider-sdk.md#result-schemas).
   ([#111](https://github.com/kcosr/agent-access-broker/pull/111),

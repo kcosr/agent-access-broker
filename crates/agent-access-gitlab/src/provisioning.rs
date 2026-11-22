@@ -1115,7 +1115,7 @@ mod tests {
         );
         assert_eq!(listed["isLast"], false);
         assert!(listed["nextPageToken"].is_string());
-        // A project token's bot user is known only when GitLab reports it.
+        // The HTTP backend's revoke response has no body or bot-user identity.
         let revoked = provisioning_ok(
             &provider,
             "project.access_token.revoke",

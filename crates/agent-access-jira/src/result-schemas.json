@@ -159,7 +159,7 @@
         "isLast": {"type": ["boolean", "null"], "description": "null when Jira reported no total"},
         "nextStartAt": {
           "type": ["integer", "null"],
-          "description": "Next startAt with the same includeBodies, maxResults and orderBy; null when last or unknown"
+          "description": "Next startAt with the same includeBodies, maxResults and orderBy; null when the last page or the page is empty. Non-empty pages with no total still provide the next offset"
         },
         "orderBy": {"enum": ["+created", "-created"]},
         "includeBodies": {"type": "boolean"},
@@ -720,7 +720,7 @@
           "isLast": {"type": ["boolean", "null"], "description": "null when Jira reported no total"},
           "nextStartAt": {
             "type": ["integer", "null"],
-            "description": "Next startAt with the same includeBodies, maxResults and orderBy; null when last or unknown"
+            "description": "Next startAt with the same includeBodies, maxResults and orderBy; null when the last page or the page is empty. Non-empty pages with no total still provide the next offset"
           },
           "orderBy": {"enum": ["+created", "-created"]},
           "includeBodies": {"type": "boolean"},
@@ -899,7 +899,7 @@
           "size": {"type": "integer", "description": "Bytes"},
           "sha256": {
             "type": "string",
-            "description": "Hex SHA-256 of the bytes, when known before delivery"
+            "description": "Optional hex SHA-256 supplied by a backend before delivery; the current HTTP backend omits it"
           }
         },
         "required": ["issueKey", "project", "attachmentId", "filename", "contentType", "metadataContentType", "size"]

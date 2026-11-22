@@ -838,7 +838,7 @@
       "success": {
         "type": "object",
         "properties": {
-          "userId": {"type": "integer", "description": "Token's bot user; present when GitLab reported it."},
+          "userId": {"type": "integer", "description": "Token's bot user when supplied by the backend response; omitted by the HTTP backend."},
           "tokenId": {"type": "integer"},
           "mutationStatus": {"$ref": "#/definitions/applied"},
           "retrySafe": {"$ref": "#/definitions/notRetrySafe"}

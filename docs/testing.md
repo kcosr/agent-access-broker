@@ -947,6 +947,14 @@ every emitted field must be declared. The advertised schemas stay open.
   assembly projection test requires every advertised `outputSchema` to be at
   most 16,384 bytes and free of `$ref`.
 
+Advertised-schema validation, including captured results checked with Ajv,
+establishes envelope, receipt and failure-shape compatibility. It cannot prove
+native payload-schema accuracy: the composed result union's open, all-optional
+shared-failure alternative can accept object payloads independently of their
+success schema. Use the separate strict provider-outcome and final-result
+conformance checks above to verify native
+payload fields, with fixtures covering each emitted shape.
+
 Set `AGENT_ACCESS_TEST_MCP_CAPTURE` to an absolute file path to append tool
 definitions and results from these checks as JSON lines. Pair each result with
 the preceding definition for its `name`, `pid`, `transport`, `connection`, `view`

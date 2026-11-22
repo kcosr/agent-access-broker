@@ -187,8 +187,8 @@ fn payload_union_selects_declared_fields_and_preserves_native_errors_and_shared_
 fn generic_json_payloads_remain_generic_inside_object_envelopes() {
     let mut spec = json_action();
     spec.body_fields.clear();
-    spec.result_schemas.as_mut().unwrap().success = json!({});
-    spec.result_schemas.as_mut().unwrap().error = Some(json!({"type":"string"}));
+    spec.result_schemas.as_mut().unwrap().success = json!({}).into();
+    spec.result_schemas.as_mut().unwrap().error = Some(json!({"type":"string"}).into());
     for mode in [ProjectionMode::Http, ProjectionMode::Stdio] {
         let schema = action_output_schema(&spec, mode).unwrap();
         assert_eq!(schema["type"], "object");
@@ -476,6 +476,54 @@ fn composed_schemas_are_compact_and_reported() {
             assert!(bytes <= MAX_OUTPUT_SCHEMA_BYTES);
         }
     }
+}
+
+#[test]
+fn catalog_projection_shares_schema_storage_and_retains_plain_json_wire() {
+    use agent_access_provider::ActionResultSchemas;
+    use std::sync::Arc;
+    let mut descriptor = agent_access_fake::fake_descriptor();
+    descriptor.actions[0].result_schemas = Some(
+        ActionResultSchemas::new(json!({
+            "type":"object", "properties":{"id":{"type":"string"}}, "required":["id"]
+        }))
+        .with_error(json!({"type":"string"})),
+    );
+    let native = descriptor.actions[0].result_schemas.as_ref().unwrap();
+    let cloned_descriptor = descriptor.clone();
+    assert!(std::ptr::eq(
+        native.success(),
+        cloned_descriptor.actions[0]
+            .result_schemas
+            .as_ref()
+            .unwrap()
+            .success()
+    ));
+    let service = crate::api_service_spec(&cloned_descriptor, true).unwrap();
+    let catalog = service.actions[0].result_schemas.as_ref().unwrap();
+    assert!(std::ptr::eq(native.success(), catalog.success.as_ref()));
+    assert!(std::ptr::eq(
+        native.error().unwrap(),
+        catalog.error.as_deref().unwrap()
+    ));
+    let cloned_service = service.clone();
+    let cloned = cloned_service.actions[0].result_schemas.as_ref().unwrap();
+    assert!(Arc::ptr_eq(&catalog.success, &cloned.success));
+    assert!(Arc::ptr_eq(
+        catalog.error.as_ref().unwrap(),
+        cloned.error.as_ref().unwrap()
+    ));
+    let wire = serde_json::to_value(catalog).unwrap();
+    assert_eq!(
+        wire,
+        json!({"success":native.success(),"error":native.error().unwrap()})
+    );
+    let roundtrip: crate::api::ApiResultSchemas = serde_json::from_value(wire).unwrap();
+    assert_eq!(&roundtrip, catalog);
+    assert_eq!(
+        result_payload_schema(&service.actions[0]),
+        result_payload_schema(&cloned_service.actions[0])
+    );
 }
 
 #[test]

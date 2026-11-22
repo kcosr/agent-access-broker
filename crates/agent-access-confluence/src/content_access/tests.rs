@@ -84,6 +84,7 @@ struct EvidenceBackend {
     draft_read_failure: Mutex<Option<ConfluenceBackendError>>,
     draft_read_budget: Mutex<Option<ConfluenceMetadataBudget>>,
     draft_read_override: Mutex<Option<ConfluenceDraftContent>>,
+    page_draft_parent: Option<ConfluenceParent>,
     move_during_body: bool,
     move_during_download: bool,
     move_after_upload: bool,
@@ -137,6 +138,7 @@ impl EvidenceBackend {
             draft_read_failure: Mutex::new(None),
             draft_read_budget: Mutex::new(None),
             draft_read_override: Mutex::new(None),
+            page_draft_parent: Some(parent(ConfluenceNodeKind::Page, "200")),
             move_during_body: false,
             move_during_download: false,
             move_after_upload: false,
@@ -185,7 +187,8 @@ impl EvidenceBackend {
             space_id: "98765".into(),
             space_alias: None,
             parent: (kind == ConfluenceDraftContentType::Page)
-                .then(|| parent(ConfluenceNodeKind::Page, "200")),
+                .then(|| self.page_draft_parent.clone())
+                .flatten(),
             web_url: None,
             space_web_url: None,
             status: Some("draft".into()),
@@ -1787,6 +1790,7 @@ async fn draft_stage_accepts_only_absent_or_matching_current_probe_responses() {
     }
 }
 
+mod result_schemas;
 mod stable_identity;
 
 #[tokio::test]

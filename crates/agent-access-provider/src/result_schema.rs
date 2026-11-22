@@ -3,7 +3,7 @@
 //! typed OpenAPI responses.
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 /// The largest compact JSON size of one action's success and error schemas
 /// together, after bundle references are inlined.
@@ -64,15 +64,15 @@ pub(crate) const RESULT_SCHEMAS_MAX_BYTES: usize = 8192;
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct ActionResultSchemas {
-    success: Value,
-    error: Option<Value>,
+    success: Arc<Value>,
+    error: Option<Arc<Value>>,
 }
 
 impl ActionResultSchemas {
     /// The schema of the action's success `result`.
     pub fn new(success: Value) -> Self {
         Self {
-            success,
+            success: Arc::new(success),
             error: None,
         }
     }
@@ -81,7 +81,7 @@ impl ActionResultSchemas {
     /// without the shared receipt, retry and execution fields the host
     /// merges in.
     pub fn with_error(mut self, error: Value) -> Self {
-        self.error = Some(error);
+        self.error = Some(Arc::new(error));
         self
     }
 
@@ -90,7 +90,19 @@ impl ActionResultSchemas {
     }
 
     pub fn error(&self) -> Option<&Value> {
-        self.error.as_ref()
+        self.error.as_deref()
+    }
+
+    /// Shared immutable success schema for host catalog projections.
+    /// Cloning this handle does not copy the JSON tree.
+    pub fn shared_success(&self) -> Arc<Value> {
+        Arc::clone(&self.success)
+    }
+
+    /// Shared immutable provider error schema for host catalog projections.
+    /// Cloning this handle does not copy the JSON tree.
+    pub fn shared_error(&self) -> Option<Arc<Value>> {
+        self.error.as_ref().map(Arc::clone)
     }
 }
 
@@ -433,8 +445,8 @@ pub(crate) fn validate_action_result_schemas(
 ) {
     let mut size = 0;
     for (kind, schema) in [
-        ("success", Some(&schemas.success)),
-        ("error", schemas.error.as_ref()),
+        ("success", Some(schemas.success())),
+        ("error", schemas.error()),
     ] {
         let Some(schema) = schema else {
             continue;
@@ -456,7 +468,7 @@ pub(crate) fn validate_action_result_schemas(
             "{label} result schemas exceed {RESULT_SCHEMAS_MAX_BYTES} bytes"
         ));
     }
-    let mut success = schemas.success.clone();
+    let mut success = schemas.success().clone();
     for field in body_fields {
         if crate::presentation::inject_selected_content_schema(
             &mut success,
@@ -657,6 +669,31 @@ mod tests {
             missing.downcast_ref::<String>().unwrap(),
             "bundled result schemas declare no entry for c.view"
         );
+    }
+
+    #[test]
+    fn schema_clones_share_storage_and_copy_on_write_keeps_other_owners_unchanged() {
+        let schemas = ActionResultSchemas::new(
+            json!({"type":"object","properties":{"id":{"type":"string"}}}),
+        )
+        .with_error(json!({"type":"object","properties":{"message":{"type":"string"}}}));
+        let cloned = schemas.clone();
+        assert!(std::ptr::eq(schemas.success(), cloned.success()));
+        assert!(std::ptr::eq(
+            schemas.error().unwrap(),
+            cloned.error().unwrap()
+        ));
+        let mut shared_success = schemas.shared_success();
+        let shared_error = schemas.shared_error().unwrap();
+        assert!(std::ptr::eq(schemas.success(), shared_success.as_ref()));
+        assert!(std::ptr::eq(
+            schemas.error().unwrap(),
+            shared_error.as_ref()
+        ));
+        Arc::make_mut(&mut shared_success)["properties"]["id"]["type"] = json!("integer");
+        assert_eq!(schemas.success()["properties"]["id"]["type"], "string");
+        assert_eq!(cloned.success()["properties"]["id"]["type"], "string");
+        assert!(ActionResultSchemas::new(json!({})).shared_error().is_none());
     }
 
     fn validation_errors(schemas: ActionResultSchemas, owners: &[&str]) -> Vec<String> {
