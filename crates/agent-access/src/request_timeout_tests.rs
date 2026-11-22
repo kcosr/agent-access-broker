@@ -11,8 +11,7 @@ fn settings(url: String, request_timeout_ms: u64) -> ResolvedCliSettings {
         identity_header: "X-Agent-Access-Identity-Token".into(),
         identity_scheme: "raw".into(),
         allow_insecure_broker_http: false,
-        read_content_format: Default::default(),
-        output_format: Default::default(),
+        preferred_output_content_format: None,
     }
 }
 
@@ -110,9 +109,12 @@ async fn request_timeout_applies_to_cli_json_upload_and_download_headers_without
         "fake",
         "echo",
         serde_json::json!({}),
-        &destination,
-        None,
-        &[],
+        DownloadResponseOptions {
+            output: &destination,
+            reserved: None,
+            sensitive_outputs: &[],
+            response_options: ResponseOptions::default(),
+        },
     )
     .await
     .unwrap_err()
@@ -313,9 +315,12 @@ async fn request_timeout_includes_json_body_but_preserves_download_body_idle_bud
         "fake",
         "echo",
         serde_json::json!({}),
-        &destination,
-        None,
-        &[],
+        DownloadResponseOptions {
+            output: &destination,
+            reserved: None,
+            sensitive_outputs: &[],
+            response_options: ResponseOptions::default(),
+        },
     )
     .await
     .unwrap();

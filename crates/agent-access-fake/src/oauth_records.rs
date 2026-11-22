@@ -125,10 +125,10 @@ impl BackendConfig for OAuthStubProviderConfig {
 fn oauth_stub_descriptor() -> ServiceDescriptor {
     let collection = || json!({"type":"string","pattern":"^[a-z0-9_-]{1,64}$"});
     let schema = |required: Value, properties: Value| json!({"type":"object","required":required,"properties":properties,"additionalProperties":false});
-    // The records API's JSON is passed through verbatim: an explicit open leaf.
-    let passthrough = |description: &str| {
-        ActionResultSchemas::new(json!({"type": "object", "description": description}))
-    };
+    // The records API's JSON is passed through verbatim, including scalar,
+    // array and null roots: an explicit opaque leaf.
+    let passthrough =
+        |description: &str| ActionResultSchemas::new(json!({"description": description}));
     ServiceDescriptor::new("oauth_stub", "OAuth Test Records")
         .with_resource_scopes(BTreeMap::from([(
             "collection".into(),
@@ -526,6 +526,28 @@ mod tests {
             [("collection", "Collection"), ("id", "Record ID")]
         );
         assert!(audited("account.view").is_empty());
+    }
+
+    #[test]
+    fn passthrough_result_schemas_preserve_every_json_root_kind() {
+        let descriptor = oauth_stub_descriptor();
+        descriptor.validate().unwrap();
+        for action in &descriptor.actions {
+            for value in [
+                json!({"record": {"custom": [true, null, 7]}}),
+                json!([{"id": "record-one"}, "opaque"]),
+                json!("opaque"),
+                json!(17),
+                json!(1.5),
+                json!(false),
+                Value::Null,
+            ] {
+                agent_access_provider::test_support::assert_result_conforms(
+                    action,
+                    &Ok(ProviderResult::new(value)),
+                );
+            }
+        }
     }
 
     #[test]

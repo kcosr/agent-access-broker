@@ -1,10 +1,10 @@
 # HTTP API reference
 
-Runtime catalogs use `agent-access.catalog.v2`. Every service includes
+Runtime catalogs use `agent-access.catalog.v3`. Every service includes
 `scopedMcpReady`; every action includes `scopedMcpName` as an exact name or null.
 These fields describe service-specific MCP projection only; canonical action IDs,
 grants, invoke routes, and send envelopes are independent of that projection.
-Catalog-dependent clients must support `agent-access.catalog.v2`. Missing required
+Catalog-dependent clients must support `agent-access.catalog.v3`. Missing required
 metadata is a contract error.
 
 This document describes the Agent Access Broker's HTTP surface: the listeners
@@ -104,11 +104,17 @@ uploads, downloads and environment/file secret sources.
 `/mcp/{service}` selects one canonical service ID and exposes raw provider names.
 All routes share the same endpoint, quotas and admission machinery. Paths must
 use the exact canonical spelling: encoded aliases, trailing slashes and extra
-segments are rejected without redirects. The only accepted query is one
-`outputSchemas=on` or `outputSchemas=off`, evaluated on every request without
-session state; it selects [MCP output-schema advertisement](mcp.md#output-schemas),
-off when omitted, and never affects identity, context or authorization. Any other
-query is rejected with 400 before dispatch. Unknown, hidden,
+segments are rejected without redirects. Supported query parameters are literal
+`preferredOutputContentFormat=markdown|text|adf|storage`,
+`includeTextCopy=true|false` and `outputSchemas=on|off`, each at most once in any
+order. Empty values or segments, malformed values, encoded aliases, repeated
+keys and unknown keys return HTTP 400. Trusted-username ingress retains its
+audited `identity_assertion_invalid` admission envelope. `includeTextCopy` defaults to `true`; `false` returns tool results
+with `content: []` and complete `structuredContent`, preserving `isError` and
+`_meta`. All three settings apply per request, independently of the session.
+`outputSchemas` defaults to `off`; `on` advertises
+[MCP output schemas](mcp.md#output-schemas). See
+[MCP text copies](mcp.md#tool-result-text-copies). Unknown, hidden,
 disabled, unready and gateway targets receive the same unavailable diagnostic
 after authentication. Session bindings include the selected view; cross-view
 POST/cancellation/DELETE cannot use or close the original session. Existing
@@ -273,21 +279,38 @@ terminal audit record reports `upstream_rate_limited`.
 
 After search authorization succeeds, broker audit records include
 `searchAuthorization`, even when credential resolution fails before upstream
-dispatch. This object contains `scopeType`, `credentialMode`, `matchedGrants`, and
-`scope`. The scope is a union of clauses, each with `included` and `excluded`
-resource selectors. For example, `{"clauses":[{"included":[{"kind":"all"}],
+dispatch. Scalar search records contain `scopeType`, `credentialMode`,
+`matchedGrants`, and `scope`. The scope is a union of clauses, each with
+`included` and `excluded` resource selectors. For example, `{"clauses":[{"included":[{"kind":"all"}],
 "excluded":[{"kind":"namespace","value":"engineering/private"}]}]}` permits
 all repositories except descendants of that namespace. Exclusions apply only to
 their own clause; a separate clause can restore an exact repository. An empty
 clause list denies all resources. Selectors use `exact`, `namespace`, or `all`;
 exact and namespace selectors carry `value`.
 
-The envelope's descriptive `resourceScopes` summary is `["*"]` if any normalized
-clause has an all or namespace positive selector. Otherwise it contains sorted,
+Location search records use `scope: "location"`, `scopeType`, `resourceTypes`,
+`domain`, `evidenceLevel`, `credentialMode`, `matchedGrants`, `authorityDigest`,
+`grantBoundaries`, and `tokenBoundary` (null when unrestricted).
+Each boundary has `included` and `excluded` arrays of
+`{resourceType, selector}`. Grant boundaries form the winning band's union;
+the token boundary independently intersects that union. The protected audit
+retains complete authored boundaries, including exclusions. The digest binds
+canonical current authority, not an unrelated policy generation. Evidence level
+is `container_only` or `complete_lineage`; these fields describe authorization
+and never grant it independently. Ordinary agent discovery does not expose this
+protected audit shape.
+
+For scalar searches, the envelope's descriptive `resourceScopes` summary is
+`["*"]` if any normalized clause has an all or namespace positive selector.
+Otherwise it contains sorted,
 deduplicated exact values accepted by the complete predicate. A wildcard summary
 can still have exclusions and never authorizes a resource. Audit retains the
 complete clauses. Historical audit records remain their original stored JSON.
 Command audit authority retains its separate exact resources/any-except shape.
+Confluence location searches report positive space coverage in `space` and
+disclosable canonical content roots in `page_location` or `blog_location`,
+omitting roots provably disjoint from the token. These summaries are not a complete authorization
+predicate and do not name exclusions or hidden competing roots.
 
 Health and discovery:
 
@@ -422,8 +445,8 @@ list is shortened:
     }
   ],
   "inventoryFingerprint": "sha256:6f1c9d0e2b7a4c58e93d1f60a2b4c7e8d9f0a1b2c3d4e5f60718293a4b5c6d7e",
-  "catalogVersion": "agent-access.catalog.v2",
-  "sendSchemaVersion": "agent-access.send.v1"
+  "catalogVersion": "agent-access.catalog.v3",
+  "sendSchemaVersion": "agent-access.send.v2"
 }
 ```
 
@@ -513,27 +536,25 @@ Jira JQL and Confluence CQL syntax, unsupported fields/operators/functions, and
 query complexity limits return `input_invalid`. Scope resolution and returned
 resource containment failures remain scope errors.
 
-For provider actions, catalog entries advertise optional `readContentFormats`
-and `responseFormats` arrays. The OpenAPI invoke body and the matching
-action-specific send-schema variant always allow the explicit protocol defaults
-`readContentFormat = native` and `responseFormat = json`. Their enums add
-non-default values only when the action advertises the corresponding capability;
-the provider `inputs` schema never contains these fields. Capability discovery
-is authoritative for non-default representations. An action that advertises
-`readContentFormats` also lists `renderedBodyOwners`: JSON pointers into the
-response envelope, such as `/result` or `/result/comments/*`, to the objects
-that carry a `renderedBody` companion beside their native body. A `*` segment
-matches every element of an array. Clients inspect companions only at these
-owners; any other `renderedBody` key belongs to upstream content.
-`optionalRenderedBodyOwnerPrefixes` lists escaped prefixes at which an absent
-object property may skip the remainder of an owner path, for example
-`/result/commentPage`. The field is omitted when no prefixes are optional and
-does not change `renderedBodyOwners`. Present fields, including null values,
-still undergo normal path validation; required descendants and malformed parents
-cannot be skipped. A shared prefix is optional only when every declared owner
-path through it permits absence. The CLI uses this metadata when validating
-embedded formatted responses. Catalog actions with declared payload schemas
-also carry `resultSchemas`, from which OpenAPI types their invoke responses; see
+Configured body-capable actions advertise `outputContentFormats`,
+`nativeOutputContentFormat`, `defaultOutputContentFormat` and `bodyFields`.
+The default resolves the service preference with native fallback; CLI/MCP action
+detail applies the effective client/connection preference without changing the
+canonical catalog. The OpenAPI invoke body and action-specific send-schema
+variant expose common format controls beside `inputs`.
+
+`bodyFields` describes envelope-rooted owner paths and literal terminal fields.
+Each entry requires `ownerPath`, `optionalOwnerPrefixes`, `nullableOwnerPrefixes`,
+`field`, `optional` and `nullable`; optional `ownerEquals` contains direct string
+predicates that must all match before that body's terminal field is inspected.
+Only array elements use `*`, for example `/result/comments/*`. Missing or null
+owners are skipped only at declared prefixes. Missing/null terminal fields obey
+their flags. Arbitrary JSON fields elsewhere are not treated as rich text.
+Clients validate selected `{format,value}` objects only at these locations.
+An exact request also requires the selected tag to match; preference-selected
+responses may use a newly enabled format after a configuration reload.
+Catalog actions with declared payload schemas also carry `resultSchemas`, from
+which OpenAPI types their invoke responses; see
 [result schemas and typed responses](#result-schemas-and-typed-responses).
 
 Sensitive input metadata applies to provider actions and management routes:
@@ -1056,6 +1077,12 @@ classifies upstream effects and never grants access. `displayName`,
 `brokerHosts`, and `readOnly` describe the configured service and action, so
 they do not depend on the caller's execution context or grants. This
 effective-policy projection also backs the portal's **Your Access** page.
+
+Resources in token options contain `id`, optional `displayName`, `resourceType`,
+`selector`, `allowedExecutionContexts`, and `enabled`. Authored group exclusions
+can remain selectable even when disabled. These references omit administrative
+`browserUrl` metadata, including URL title and space paths. Personal and
+administrative token options use the same restricted resource projection.
 
 The response also contains `mcp`, where an issued token connects MCP clients:
 `{"url": "https://broker.example.com/mcp"}` with the configured
@@ -1831,7 +1858,7 @@ Resource catalog administration uses these routes:
   private attribute to a global administrator.
 - The same routes under `/v1/admin/policy/resource-groups` manage resource groups.
 
-Resource creation accepts optional `id` and `displayName`, required
+Resource creation accepts optional `id`, `displayName` and `browserUrl`, required
 `resourceType`, `selector`, and `allowedExecutionContexts`, and optional
 `enabled` (default true). Group creation accepts optional `id`, required `name`,
 and `includedResourceIds` / `excludedResourceIds`. PATCH uses `expectedVersion`
@@ -1841,6 +1868,14 @@ rows contain `kind`, `id`, and applicable `service`, `principalId`, `viaGroupId`
 and `effect` fields. Catalog mutation and full reference inspection require
 global administrator authority for changes and administrative read access
 (admin or auditor) for full reference inspection.
+
+`browserUrl` is navigation metadata for Confluence content resources. It must be
+a trimmed browser URL of at most 4096 UTF-8 bytes that normalizes to the same
+site, kind and immutable ID as the resource selector. It grants no access and
+is validated offline. PATCH omission preserves the current URL; explicit `null`
+clears it. Changing a resource's target requires a matching replacement URL or
+clearing the previous URL in the same mutation. Unsupported resource types
+reject non-null browser URLs. See [content URL entry](confluence-content-access.md#resources-and-url-entry).
 
 Resource uniqueness is the pair of resource type and selector, independent of
 display name, execution contexts, or enabled state. A create or PATCH that
@@ -1874,8 +1909,19 @@ remain. Paused tokens still count; expired and revoked tokens do not. Unlink
 references manually or revoke tokens. Resource disable removes only positive
 permission and preserves its effect in exclusions. See [resources.md](resources.md).
 
+`GET /v1/admin/policy/resource-locations` lists authorized services offering
+pure URL entry. `POST /v1/admin/policy/resource-locations/normalize` accepts
+`{service, url, coverage}` and returns canonical resource type and
+selector plus `locationKind` and
+`verification: "not_checked"`. Both require management-class policy-read access;
+normalization applies browser CSRF. Ordinary agent credentials, including an
+administrator's agent token, cannot use them. The service scope is checked before
+its settings are inspected. No network lookup, credential access or mutation
+occurs. Resource writes still require canonical selectors and write permission.
+See [content URL entry](confluence-content-access.md#resources-and-url-entry).
+
 `POST /v1/admin/policy/effective-access` previews a grant selection from
-`{service, actions, executionContexts, resources}`. `POST
+`{service, actions, executionContexts, resources, credentialMode}`. `POST
 /v1/tokens/effective-access` previews the calling principal's token caveats;
 `POST /v1/admin/principals/{principal}/agent-token-effective-access` previews
 for an administered principal. Token previews require Boolean `readOnly` and
@@ -1884,9 +1930,9 @@ for an administered principal. Token previews require Boolean `readOnly` and
 owner's issuance mode or the manager's login path. Retained selections whose
 grants or classifications changed remain valid preview inputs and show their
 current intersection; a read-only token's reclassified write contributes no
-access. Responses contain
-`policyGeneration` and `access`, with service/action/context/resource-type rows
-and separate `clauses`. Each clause contains `included` / `excluded` selectors
+access. Responses contain `policyGeneration` and `access`, discriminated by
+`scope: unscoped|resource|location`. Scalar resource entries have one
+`resourceType` and separate `clauses`. Each scalar clause contains `included` / `excluded` selectors
 and may also contain `excludedRequests`, an array of boundaries with their own
 `included` / `excluded` selectors.
 
@@ -1899,6 +1945,23 @@ preview conditions, not an additional administrator-authored deny mechanism.
 Do not flatten them into global resource exclusions or combine partial clauses.
 Search and grant-selection previews ordinarily need only included/excluded
 selectors; token previews can carry whole-request conditions.
+
+Location entries have `resourceTypes`, `domain`, `enforcement` and
+`containmentVerification: "at_invocation"`. A complete entry has
+`projectionStatus: "complete"`, indexed typed `boundaries`, and clauses whose
+`required` and `excludedRequests` indices preserve the expression with its
+`credentialMode`. If the per-entry preview budget is exceeded,
+`projectionStatus: "too_complex"` and `reasonCode: "resource_access_too_complex"`
+replace the boundary/clauses arrays; access is unknown from that preview, not
+empty or broad. Preserve explicit selections. Aggregate inspection responses are
+bounded to 16 MiB and fail as a whole with HTTP 422 rather than omit actions;
+MCP additionally observes its configured response limit. Invocation and token
+issuance evaluate policy independently of preview serialization.
+
+Authorized management location previews can also report
+`requiresRuntimeRootVisibility: true`, including on `too_complex` entries. This
+means the operation needs current, readable configured-root evidence at runtime;
+it is an offline warning, not an existence or permission check.
 
 An empty access array describes no current access. Symbolic all-except coverage
 is preserved. Grant previews describe the proposed resource selection; token
@@ -2148,145 +2211,86 @@ and `upload.markdown`. See the [complete upload contract](providers-gitlab-rest.
 
 ### Invoke response formats
 
-JSON and multipart invoke envelopes are closed objects. In addition to
-`inputs`, an action may accept these common top-level fields:
+Ordinary JSON and multipart invocation results retain the Broker JSON envelope.
+Each declared rich-text field contains exactly one `{format,value}` object at
+its existing semantic path. Format controls are optional envelope properties:
 
 ```json
 {
   "inputs": { "issue": "PROJ-123" },
-  "readContentFormat": "markdown",
-  "responseFormat": "json"
+  "outputContentFormat": "markdown"
 }
 ```
 
-`readContentFormat` is `native`, `markdown`, or `text` and defaults to
-`native`. Non-native values preserve the provider-native field and add a
-companion beside its owning entity:
+`outputContentFormat` is an exact selection. `preferredOutputContentFormat` is
+a soft preference used only when an exact selector is absent. Both accept
+`markdown`, `text`, `adf`, or `storage`; explicit null, unknown values, non-strings
+and unknown envelope fields fail with `input_invalid`/400. When both are present,
+both are validated before the exact value wins. Neither is a provider input or
+forwarded upstream.
 
-```json
-{
-  "description": { "type": "doc", "version": 1, "content": [] },
-  "renderedBody": { "format": "markdown", "value": "" }
-}
-```
+The Broker resolves the request preference, service preference, then Markdown.
+If the first present preference is unsupported, it uses the action's declared
+native format, without consulting lower preference tiers. A valid preference
+has no effect on an action without configured body support. An unsupported exact
+selection returns `response_format_unsupported`/415 with `decision = "deny"`.
 
-`responseFormat` is `json` or `markdown` and defaults to `json`. Markdown
-formats the already-produced complete result without another provider request,
-changed fields, or pagination. HTTP still returns `application/json` and the
-normal `ResponseEnvelope`; a successful formatted result is:
+Identity/token admission and action resolution precede format validation;
+policy authorization, credential selection and provider scope lookup follow it.
+This deliberately permits an authenticated caller who can name an existing
+action to distinguish unsupported configured formats from a later policy denial,
+even without an action grant. It exposes format support, not source content,
+credentials or otherwise hidden catalog entries.
+
+A shortened selected-body result is:
 
 ```json
 {
   "decision": "allow",
   "service": "jira",
   "action": "issue.view",
-  "result": { "format": "markdown", "value": "# PROJ-123 — Title\n" }
+  "result": {
+    "key": "PROJ-123",
+    "description": { "format": "markdown", "value": "Readable **description**." }
+  }
 }
 ```
 
-Explicit non-native `readContentFormat` and `responseFormat = "markdown"` are
-mutually exclusive and return `input_invalid`/400. A valid representation not
-advertised for the selected action returns
-`response_format_unsupported`/415 with `decision = "deny"`. Identity and token
-admission occur first; capability validation then occurs after action resolution
-but before policy authorization, credential selection, or provider access.
-Unknown top-level fields also return `input_invalid`/400. Neither response field
-is forwarded upstream.
+`adf` values are JSON document objects, including ADF parsed from Confluence's
+string-valued source. Markdown, text and Confluence storage values are strings.
+Surrounding metadata remains structured. Allowed missing/null fields retain
+those states; an empty valid body remains a present tagged value. Configured-out
+Confluence page/comment bodies are absent. Metadata-only lists and undeclared
+JSON fields are unchanged.
 
-Jira advertises embedded formats on `issue.view`, `issue.create`,
-`issue.update`, `comment.list`, `comment.view`, `comment.add`, `comment.reply`, and
-`comment.update`. Jira whole-result Markdown is advertised on `project.list`, `project.view`, `issue_type.list`, `issue.view`,
-`search`, `comment.list`, `comment.view`, `comment.property.list`,
-`comment.property.get`, `attachment.list`, and `verify`.
+Jira's eight declared body actions support Markdown, text and ADF. GitLab's 28
+support Markdown and text; Markdown preserves exact source bytes. Confluence's
+26 body action families support Markdown, text and the native source formats
+available for that action and configuration. See the provider guides for exact
+actions and field locations. Jira comment inclusion still requires the existing
+companion permissions and `includeComments`/`includeBodies` inputs; selecting a
+format does not fetch a body or follow pagination. Search snippets, property JSON,
+file contents and binary downloads do not become rich bodies by inference.
 
-For an issue and a chronological page of full comment/reply bodies, send
-`{"inputs":{"issue":"PROJ-123","includeComments":true}}` to
-`/v1/invoke/jira/issue.view`. The result adds `commentPage`. For
-`/v1/invoke/jira/comment.list`, `includeBodies: true` inside `inputs` includes
-full bodies; omission or false preserves metadata-only listing. Both use Broker
-page-size and ordering defaults, with `nextStartAt` for continuation through
-`comment.list`. Included bodies require the existing same-project comment-read
-authority in the primary action's winning credential mode. Selecting a format
-alone never fetches bodies. See [comment reads](providers-jira.md#reading-comment-bodies).
+For Confluence Markdown/text, valid available ADF takes precedence over storage.
+All fetched configured sources are validated before unselected sources are
+removed. A missing explicitly selected native source on an optional page/blog
+omits `body`; it does not substitute another source. Required draft/comment
+sources still fail when missing. Malformed content, conversion errors and size
+exhaustion never trigger format fallback. All source, aggregate and final-result
+bounds apply. A read whose default Markdown exceeds an output cap can be issued
+again explicitly in a supported native format; source limits still apply.
 
-Confluence advertises embedded formats on these 26 actions:
+If a body-bearing mutation completes but presentation or final-size validation
+fails, the compact result contains `mutationStatus: "applied"` and
+`retrySafe: false`. The original failure `reasonCode` is preserved. Both `reason`
+and `error.message` say: "The mutation completed, but its response could not be
+produced. Do not repeat the operation." No rejected body is returned. Existing
+uncertain/unverified mutation receipts retain their distinct meanings.
 
-- `page.view`, `blog.view`, `page.draft.view`, and `blog.draft.view`;
-- each `{page,blog}.{footer_comment,inline_comment}.list` and `.reply.list`;
-- each `{page,blog}.{footer_comment,inline_comment}.view`;
-- `page.footer_comment.add` and `blog.footer_comment.add`;
-- each `{page,blog}.{footer_comment,inline_comment}.update`; and
-- each `{page,blog}.{footer_comment,inline_comment}.reply.add`.
-
-The companion is beside the owning entity's `body`, not inside its native
-representation map. For a current page body containing both formats, the
-selected source is present `atlas_doc_format` first, otherwise present
-`storage`; malformed selected ADF fails without storage fallback. Draft and
-comment reads convert the representation selected by native input
-`inputs.bodyFormat`, and `blog.view` handles its current bare
-`body.storage` string shape.
-
-Confluence advertises whole-result Markdown on these 27 retrievals:
-
-- `space.list`;
-- `page.view`, `search`, `verify`, `blog.view`, `blog.search`, and
-  `blog.verify`;
-- `{page,blog}.draft.view` and `{page,blog}.draft.verify`;
-- `attachment.list`, `blog.attachment.list`,
-  `page.draft.attachment.list`, and `blog.draft.attachment.list`; and
-- each `{page,blog}.{footer_comment,inline_comment}.{list,view,reply.list}`.
-
-Search and attachment-list results remain body-free. Comment and reply lists
-convert only bodies already present in the result, with no additional upstream
-request. Raw downloads advertise neither feature.
-
-GitLab advertises embedded formats on these action families:
-
-- `issue.view`, `issue.search`, `issue.create`, and `issue.update`;
-- `issue.note.list`, `issue.note.add`, and `issue.note.update`;
-- `merge_request.view`, `merge_request.search`, `merge_request.create`, and
-  `merge_request.update`;
-- `merge_request.note.list`, `merge_request.note.add`, and
-  `merge_request.note.update`; and
-- `merge_request.discussion.list`, `merge_request.discussion.add`,
-  `merge_request.discussion.view`,
-  `merge_request.discussion.inline.add`,
-  `merge_request.discussion.note.add`,
-  `merge_request.discussion.note.update`, `merge_request.discussion.resolve`,
-  and `merge_request.discussion.reopen`; and
-- `merge_request.draft_note.list/view/add/update`.
-
-Issue and merge-request owners use `description`, note owners use `body`, and
-discussion results normalize every returned nested note body. Embedded
-Markdown preserves GitLab's native string byte-for-byte; embedded `text` is a
-bounded readable rendering that suppresses active raw HTML.
-
-GitLab advertises whole-result Markdown on these retrieval families:
-
-- `project.view`;
-- issue view, search, and note list;
-- merge-request view, search, note list, discussion list/view, reviewer list,
-  MR commit list, MR pipeline list, current structured diff list, and diff
-  version list/view, draft-note list/view, approval summary/state, and
-  approval-rule list/view;
-- branch list/view and protected-branch list/view/verify;
-- file view and commit list/view; and
-- pipeline list/view and job list/view.
-
-The semantic templates render the already-produced result rather than dumping
-JSON. They preserve meaningful present metadata, collection order, opaque
-pagination tokens, file-view content status and included literal text, and
-literal commit messages.
-Issue/MR search and note/discussion collections include only native bodies that
-were already returned. Raw file and job-trace downloads advertise neither
-feature; raw MR diff is also a stream and advertises neither feature. Mutation
-results never advertise whole-result Markdown.
-
-Every GitLab review collection uses the same signed opaque `nextPageToken`
-contract as existing GitLab searches and note lists. The token is bound to the
-action, caller, credential mode, project/MR identity, page size, filters, and
-`unidiff` choice where applicable. Direct HTTP callers must preserve those
-inputs when sending `pageToken` on the next request.
+Selector-less HTTP and HTTP MCP callers also receive tagged bodies and the
+Markdown preference. Upgrade parsers with the Broker and refresh MCP discovery;
+see [output-content upgrade](operator-guide.md#output-content-contract-upgrade).
 
 ### Jira normalized write inputs
 
@@ -2344,8 +2348,8 @@ action with no effective format is omitted from the caller-filtered catalog.
 }
 ```
 
-Read-side body representation selectors and response fields named `bodyFormat`
-are provider-native read behavior and are distinct from write `contentFormat`.
+Read-side `inputs.bodyFormat` selects the provider-native source independently
+of write `contentFormat` and common output-content controls.
 Clients detect write support from the exact action's catalog enum.
 
 The Broker validates and source-limits input, validates native content or
@@ -2630,7 +2634,7 @@ inputs against the action's published input schema. If they break it,
 example:
 
 ```text
-jira.comment.list inputs are invalid: inputs.readContentFormat is not allowed; allowed: includeBodies, issue, maxResults, orderBy, startAt, url
+jira.comment.list inputs are invalid: inputs.outputContentFormat is not allowed; allowed: includeBodies, issue, maxResults, orderBy, startAt, url
 confluence.search inputs are invalid: inputs.maxResults must be an integer; inputs.query.value is required
 jira.comment.list inputs are invalid: inputs.orderBy must be one of: created, -created, +created
 ```
@@ -2839,7 +2843,7 @@ so missing credentials are explained when `access` is empty:
 {"service":"jira","executionContext":"default","availability":{"state":"available","requirements":[],"message":"Required credentials are locally available; upstream access has not been verified."},"coverageSemantics":"single_target","access":[{"action":"issue.view","scope":"resource","enforcement":"request","resourceType":"jira_project","coverage":[{"selector":{"kind":"exact","value":"ENG"},"restricted":false}]}],"registeredResources":{"source":"broker_configuration","items":[{"id":"jira-eng","type":"jira_project","value":"ENG","displayName":"Engineering"}],"nextCursor":null}}
 ```
 
-A scoped `access` entry has `action`, `scope: "resource"`, `resourceType`,
+A scalar `access` entry has `action`, `scope: "resource"`, `resourceType`,
 `enforcement`, and `coverage`. `enforcement` is `request` for Broker checks of
 resolved request targets, `results` for native query/result containment, or
 `command` for grants handed to the approved command, which must check and filter
@@ -2849,7 +2853,22 @@ optional `inputs`, and `restricted`. Exact and namespace selectors carry `value`
 identities are never named. Restricted broad entries retain useful exact/narrower
 granted entries; containment removes an entry only under unrestricted coverage.
 Unscoped entries are `{action,scope:"unscoped"}`.
-MCP and OpenAPI imports currently use this form. Local credential checks filter
+Location entries instead have `action`, `scope: "location"`, `resourceTypes`,
+`domain`, `enforcement`, `containmentVerification: "at_invocation"`, and
+`coverage`. Each positive coverage entry carries `resourceType`, `selector`,
+`restricted`, and `conditional`; Confluence content selectors are `exact` or
+`subtree`. Conditional coverage needs current location evidence at invocation.
+Confluence content values such as `https://example.atlassian.net/wiki/content/page/12345`
+are stable policy identities, not action browser URLs. Use the selected action's
+documented ID input (`pageId`, `blogId` or typed parent as appropriate); action
+schemas and examples define the mapping. Point audit keeps observed space in
+protected `locationProof.space`/`spaceId`, separate from stable `resourceScopes`.
+Excluded and competing private roots are withheld; useful token roots can appear
+under broader grant coverage. Authorized management projections separately
+retain full conditions, as described under
+[admin policy management](#admin-policy-management).
+MCP and OpenAPI imports currently use the scalar or unscoped forms. Local
+credential checks filter
 all access; discovery does not contact the backend or refresh OAuth. This is a
 single-target summary, not full-request authorization. A compound-only action
 can have empty singleton coverage while a complete request is permitted. Native
@@ -2917,8 +2936,12 @@ the service does not use is rejected, as is an `action`/`resourceType` combinati
 whose action is not bound to that type. Service/action detail and
 unqualified action listing remain available.
 
-The original service capability endpoints retain their full response shapes;
-compact CLI/MCP service lists are projections of those canonical definitions.
+Service capability endpoints return the canonical definitions; compact CLI/MCP
+service lists are projections of those definitions. Each `resourceScopes` entry
+declares `matching: "scalar"` with `resourceType` and `selectors`, or
+`matching: "containment"` with `domain`, `selectorsByType`, `containerTypes`,
+`targetKinds`, `ancestorKinds` and `effects`. This describes a scope's matching
+contract, independently of the caller's granted coverage.
 
 
 Ordinary visible service entries report `surface: "invoke"`. Management
@@ -3003,12 +3026,14 @@ selector. `displayName` remains null and the snapshot's name field shows
 | `membership` | Group changes only: `includedAdded`, `includedRemoved`, `excludedAdded`, and `excludedRemoved` |
 
 Each revision is `{generation, updatedAt, updatedBy}`. `changedFields` uses
-`displayName`, `resourceType`, `selector`, `enabled`,
+`displayName`, `browserUrl`, `resourceType`, `selector`, `enabled`,
 `allowedExecutionContexts`, `privateAttributes`, `name`, `includedResourceIds`,
 and `excludedResourceIds` as applicable. `privateAttributes` indicates that
 private configuration changed; no attribute values are included. The HTTP
 success `result` remains `{record, previousRevision, revision}`; `change` is
 audit metadata, not a new mutation-response field.
+`browserUrl` changes record only the field name; browser URLs and their title
+segments are omitted from audit entities and snapshots.
 
 Snapshots include the entity-reference fields above. Resource snapshots add
 `enabled`, `allowedExecutionContexts`, `allowedExecutionContextsCount`, and
@@ -3230,14 +3255,14 @@ JSON Schemas of the action's `result` payloads:
 | `success` | `result` on success; for a raw download, the metadata envelope's `result` |
 | `error` | Optional: the `result` the action's provider failures carry, before the shared failure fields are added |
 
-They describe the provider payload before presentation: `renderedBody`
-companions and whole-result Markdown are not part of them. A schema covers
+They describe the provider payload before presentation. Rich-text fields in
+these schemas retain their native types; the composed OpenAPI and MCP schemas
+describe the selected `{format,value}` objects callers receive. A schema covers
 every supported configuration and input of the action, lists as `required` only
 fields that are always present, and leaves objects open, so clients must accept
 fields it does not declare. The field is omitted for actions that declare none;
 every built-in provider action and imported action declares it. The catalog
-version remains
-`agent-access.catalog.v2`, and service capabilities from `/v1/services` and
+version is `agent-access.catalog.v3`, and service capabilities from `/v1/services` and
 service detail do not include it. On an MCP connection that selects output
 schemas, action detail replaces it with the composed
 [`mcpTool.outputSchema`](mcp.md#output-schemas) when the action is a tool on that
@@ -3245,17 +3270,26 @@ connection; a connection that omits them returns neither.
 
 For an action with result schemas, `GET /v1/spec/openapi.json` types the invoke
 operation's JSON `200` envelope. Its `result` is the union of the success
-payload (with an optional `renderedBody` at each declared body owner), the
-whole-result Markdown `{format, value}` when the action supports it, the
-provider failure payload merged with the shared failure fields, and the shared
-failure fields alone: the [mutation receipt](#mutation-receipts) fields,
+payload with selected `{format,value}` objects at the declared `bodyFields`,
+the provider failure payload merged with the shared failure fields in its native
+or selected form as applicable, and the shared failure fields alone: the [mutation receipt](#mutation-receipts) fields,
 `executionState`, `deadlineKind`, the upstream rate-limit details (`limitScope`,
 `service`, `retryAfterSeconds`, `retryAt`) and `hints.upstreamResourceOwnership`.
 A `default` response describes error envelopes with the same schema. A raw
 download's `X-Agent-Access-Result-Metadata` header schema adds
 `contentEncoding: base64`, `contentMediaType: application/json` and a
 `contentSchema` for the decoded envelope, and its `4XX` error envelope uses the
-same typed schema. Actions without result schemas keep the untyped envelope.
+same typed schema. Selected-body composition preserves optional and nullable
+owners/fields and `ownerEquals` predicates, so fields on nonmatching owners
+keep their native types. It covers all four concrete formats across supported
+configurations, including valid preference-selected responses after reload;
+`outputContentFormats` still constrains exact per-call requests. Actions without
+result schemas keep the untyped envelope.
+
+Use an action's `inputSchema` to construct its `inputs`, then the composed
+OpenAPI response schema to locate delivered result fields. Check `decision`,
+`reasonCode` and `error` before reading `result`; the result union also describes
+failure receipts and does not by itself prove that an invocation succeeded.
 
 ## Reason-code table
 
@@ -3400,11 +3434,16 @@ whose kind leaves no room for a name within 64 bytes, or whose prefix starts
 | --- | --- | --- | --- |
 | `cloudbees_ci_log_chunk_exceeded` | CloudBees CI | deny | 413 |
 | `cloudbees_ci_log_scan_exceeded` | CloudBees CI | deny | 413 |
+| `confluence_update_conflict` | Confluence | error | 409 |
 | `jira_custom_field_not_allowed` | Jira | deny | 403 |
 | `jira_custom_field_rejected` | Jira | deny | 400 |
+| `jira_transition_unavailable` | Jira | deny | 409 |
+| `jira_transition_rejected` | Jira | deny | 400 |
 
-See [CloudBees CI errors](providers-cloudbees-ci.md#errors) and
-[Jira custom-field updates](providers-jira.md#issuecustom_fieldset) for when
+See [Confluence page updates](providers-confluence.md#pagecreate-pageupdate-and-pagemove),
+[CloudBees CI errors](providers-cloudbees-ci.md#errors),
+[Jira custom-field updates](providers-jira.md#issuecustom_fieldset), and
+[Jira workflow transitions](providers-jira.md#issue-workflow-transitions) for when
 they occur.
 
 `upstream_rate_limited` means the upstream service throttled the request; the
@@ -4339,9 +4378,12 @@ linking uses `/v1/oauth/callback/google` for a registration named `google`. Call
 parsing tolerates bounded provider extension fields but rejects duplicate parameters;
 a supplied Google issuer must match. See [Gmail](providers-gmail.md).
 
-Agent-token action options and effective-access previews use `resourceType: null` for actions that have no
-resource selector (including Gmail). Their `executionContexts` describe explicit
-action grants; their resource-clause lists are empty. Caller-filtered discovery
+Agent-token action options and effective-access previews use `scope: "unscoped"`
+for actions without a resource selector (including Gmail), omitting resource fields.
+Scalar options use `scope: "resource"` and `resourceType`; containment options use
+`scope: "location"`, `resourceTypes` and `domain`. Their `executionContexts`
+describe explicit action grants. Location options retain complete or too-complex
+entries per execution context without inventing scalar clause arrays. Caller-filtered discovery
 uses ordinary grant selection for these actions and excludes them when a token
 tries to impose a resource restriction on that service.
 

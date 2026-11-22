@@ -3,6 +3,47 @@
 use super::*;
 use agent_access_provider::test_support::check_result_conforms;
 
+#[test]
+fn result_schemas_cover_every_action_in_every_configuration() {
+    let mut published = BTreeSet::new();
+    for comments in [false, true] {
+        for custom_fields in [false, true] {
+            for format in [
+                None,
+                Some(OutputContentFormat::Markdown),
+                Some(OutputContentFormat::Text),
+                Some(OutputContentFormat::Adf),
+                Some(OutputContentFormat::Storage),
+            ] {
+                let mut config = jira_config();
+                config.content.comment_formats = if comments { vec!["adf".into()] } else { vec![] };
+                config.content.preferred_output_format = format;
+                config.custom_fields.allowed_field_ids = if custom_fields {
+                    vec!["customfield_12345".into()]
+                } else {
+                    vec![]
+                };
+                let descriptor = jira_descriptor(&config);
+                descriptor.validate().unwrap_or_else(|problems| {
+                    panic!("comments={comments}, custom_fields={custom_fields}, format={format:?}: {problems:?}")
+                });
+                for action in &descriptor.actions {
+                    assert!(action.result_schemas.is_some(), "{}", action.action);
+                    published.insert(action.action.clone());
+                }
+            }
+        }
+    }
+    assert_eq!(
+        published,
+        RESULT_SCHEMAS
+            .actions()
+            .into_iter()
+            .map(ToString::to_string)
+            .collect()
+    );
+}
+
 fn comment_backend() -> Arc<StubJiraBackend> {
     let mut backend = StubJiraBackend::default();
     backend.issues.insert("PROJ-1".into(), visible_issue());
@@ -73,6 +114,25 @@ async fn eligible_views_with_a_byte_limited_comment_page_conform() {
     assert_eq!(page["count"], 1);
     assert_eq!(page["nextStartAt"], 1);
     assert_eq!(page["isLast"], false);
+    let descriptor = jira_descriptor(&one_body_config());
+    let action = descriptor.action("issue.view").unwrap();
+    for format in action.presentation.unwrap().output_content_formats() {
+        let options = agent_access_provider::presentation::resolve_response_options(
+            action.presentation,
+            None,
+            agent_access_provider::presentation::ResponseOptions::new(Some(*format), None),
+        )
+        .unwrap();
+        let mut selected = view.result.clone();
+        agent_access_provider::presentation::present_result(&options, &mut selected, 4096, 65536)
+            .unwrap();
+        crate::result_conformance::assert_selected_conforms(action, *format, &selected);
+        assert_eq!(selected["description"]["format"], format.as_str());
+        assert_eq!(
+            selected["commentPage"]["comments"][0]["body"]["format"],
+            format.as_str()
+        );
+    }
 
     let withheld = provider
         .invoke_checked(comment_invocation(
@@ -136,6 +196,77 @@ async fn comment_lists_with_and_without_bodies_conform() {
 }
 
 #[tokio::test]
+async fn custom_field_selected_schemas_preserve_conditional_and_empty_values() {
+    let mut backend = StubJiraBackend::default();
+    backend.issues.insert("PROJ-1".into(), visible_issue());
+    let schema = |kind: &str, value_type: &str| {
+        json!({
+            "type":value_type,
+            "custom":format!("com.atlassian.jira.plugin.system.customfieldtypes:{kind}")
+        })
+    };
+    *backend.issue_view_custom_fields.lock().unwrap() =
+        crate::custom_fields::custom_fields_from_value(&json!({
+            "fields": {
+                "customfield_1":adf_text("Selected custom body"),
+                "customfield_2":null,
+                "customfield_3":[],
+                "customfield_4":"Native text",
+                "customfield_5":{"id":"10", "value":"Native option"},
+                "customfield_6":{"accountId":"account-a"},
+                "customfield_7":[],
+                "customfield_8":{"private":"unsupported"}
+            },
+            "schema": {
+                "customfield_1":schema("textarea","string"),
+                "customfield_2":schema("textarea","string"),
+                "customfield_3":schema("textarea","string"),
+                "customfield_4":schema("textfield","string"),
+                "customfield_5":schema("select","option"),
+                "customfield_6":schema("userpicker","user")
+            }
+        }))
+        .unwrap();
+    let config = jira_config();
+    let descriptor = jira_descriptor(&config);
+    let action = descriptor.action("issue.view").unwrap();
+    let provider = JiraProvider::with_backend(config, ProviderLimits::default(), Arc::new(backend));
+    let outcome = provider
+        .invoke_checked(comment_invocation(
+            "issue.view",
+            json!({"issue":"PROJ-1"}),
+            false,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(outcome.result["customFields"][2]["status"], "withheld");
+    assert_eq!(outcome.result["customFields"][6]["status"], "unsupported");
+    assert!(outcome.result["customFields"][7].get("value").is_none());
+    for format in action.presentation.unwrap().output_content_formats() {
+        let options = agent_access_provider::presentation::resolve_response_options(
+            action.presentation,
+            None,
+            agent_access_provider::presentation::ResponseOptions::new(Some(*format), None),
+        )
+        .unwrap();
+        let mut selected = outcome.result.clone();
+        agent_access_provider::presentation::present_result(&options, &mut selected, 4096, 65536)
+            .unwrap();
+        crate::result_conformance::assert_selected_conforms(action, *format, &selected);
+        assert_eq!(
+            selected["customFields"][0]["value"]["format"],
+            format.as_str()
+        );
+        for index in 1..8 {
+            assert_eq!(
+                selected["customFields"][index],
+                outcome.result["customFields"][index]
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn strict_conformance_rejects_undocumented_fields_and_wrong_constants() {
     let config = one_body_config();
     let descriptor = jira_descriptor(&config);
@@ -158,7 +289,7 @@ async fn strict_conformance_rejects_undocumented_fields_and_wrong_constants() {
     let mut epic = view.clone();
     epic["epic"] = Value::Null;
     assert!(conforms("issue.view", epic).is_err());
-    // Presentation, not the provider, adds rendered bodies.
+    // Selected presentation replaces the declared body; sidecars are undeclared.
     let mut rendered = view.clone();
     rendered["commentPage"]["comments"][0]["renderedBody"] =
         json!({"format": "text", "value": "collected body"});

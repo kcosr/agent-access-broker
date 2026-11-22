@@ -17,7 +17,7 @@ use rmcp::{
     },
     service::{QuitReason, RequestContext},
 };
-use serde_json::Value;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 const PAGE_SIZE: usize = 100;
@@ -31,14 +31,21 @@ struct BrokerMcp {
     /// Selected at launch and fixed for the process lifetime, including
     /// across configuration and token rotation.
     output_schemas: OutputSchemas,
+    include_text_copy: bool,
 }
 
 impl BrokerMcp {
     fn settings(&self) -> Result<crate::ResolvedCliSettings> {
         // Resolve for every request: token files and config may rotate while the
         // client keeps this subprocess alive. Never cache an identity or grants.
-        let settings = crate::resolve_cli_settings(&self.cli, &self.config)
-            .map_err(|_| anyhow::anyhow!(CONFIG_ERROR))?;
+        let settings = crate::resolve_cli_settings(&self.cli, &self.config).map_err(|error| {
+            anyhow::anyhow!(
+                error
+                    .downcast_ref::<agent_access_core::ConfigError>()
+                    .and_then(crate::retired_cli_default_message)
+                    .unwrap_or(CONFIG_ERROR)
+            )
+        })?;
         validate_broker_transport(&settings)?;
         Ok(settings)
     }
@@ -110,26 +117,31 @@ impl ServerHandler for BrokerMcp {
     ) -> Result<CallToolResponse, ErrorData> {
         let settings = match self.settings() {
             Ok(settings) => settings,
-            Err(error) => return Ok(tool_error(error.to_string()).into()),
+            Err(error) => return Ok(tool_error(error.to_string(), self.include_text_copy).into()),
         };
         let result = tokio::select! {
             biased;
             _ = context.ct.cancelled() => tool_error(
-                "Request cancelled. An upstream mutation may already have completed; inspect its state before retrying."
+                "Request cancelled. An upstream mutation may already have completed; inspect its state before retrying.",
+                self.include_text_copy,
             ),
-            result = tools::call_tool(&settings, &self.view, self.output_schemas, &request.name, request.arguments.unwrap_or_default()) => {
+            result = tools::call_tool(&settings, &self.view, self.output_schemas, &request.name, request.arguments.unwrap_or_default(), self.include_text_copy) => {
                 match result {
                     Ok(result) => result,
                     Err(error) if error.is::<tools::UnknownToolError>() => {
                         return Err(ErrorData::invalid_params(error.to_string(), None));
                     }
+                    Err(error) if error.is::<crate::output::ResponseContentFailure>() => {
+                        let failure = error.downcast_ref::<crate::output::ResponseContentFailure>().expect("matched content failure");
+                        serde_json::from_value(tools::envelope_result(200, failure.details.clone(), true, self.include_text_copy).expect("content failure is serializable")).expect("content failure is a tool result")
+                    }
                     Err(error) if error.is::<crate::output::LocalOutputFailure>() => {
                         let failure = error.downcast_ref::<crate::output::LocalOutputFailure>().expect("matched local output failure");
-                        serde_json::from_value(tools::envelope_result(200, failure.details.clone(), true)
+                        serde_json::from_value(tools::envelope_result(200, failure.details.clone(), true, self.include_text_copy)
                             .expect("local failure is serializable"))
                             .expect("local failure is a tool result")
                     }
-                    Err(error) => tool_error(error.to_string()),
+                    Err(error) => tool_error(error.to_string(), self.include_text_copy),
                 }
             }
         };
@@ -137,8 +149,16 @@ impl ServerHandler for BrokerMcp {
     }
 }
 
-fn tool_error(message: impl Into<String>) -> CallToolResult {
-    CallToolResult::error(vec![ContentBlock::text(message)])
+fn tool_error(message: impl Into<String>, include_text_copy: bool) -> CallToolResult {
+    let message = message.into();
+    let content = if include_text_copy {
+        vec![ContentBlock::text(message.clone())]
+    } else {
+        Vec::new()
+    };
+    let mut result = CallToolResult::error(content);
+    result.structured_content = Some(json!({"error":{"message":message}}));
+    result
 }
 
 fn paginate(
@@ -186,14 +206,16 @@ pub async fn serve(
     config: PathBuf,
     view: McpView,
     output_schemas: OutputSchemas,
+    include_text_copy: bool,
 ) -> Result<()> {
     let server = BrokerMcp {
         cli,
         config,
         view,
         output_schemas,
+        include_text_copy,
     };
-    server.settings()?;
+    crate::require_cli_input(server.settings());
     // No CLI rendering or stdout logging is allowed here: stdout is exclusively
     // newline-delimited MCP JSON-RPC, including during authentication failures.
     let (input, oversized) = transport::BoundedStdioRead::new(tokio::io::stdin());
@@ -221,6 +243,138 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn include_text_copy_is_an_explicit_strict_startup_boolean() {
+        for (extra, expected) in [
+            (vec![], true),
+            (vec!["--include-text-copy=true"], true),
+            (vec!["--include-text-copy=false"], false),
+            (
+                vec![
+                    "--include-text-copy",
+                    "false",
+                    "--preferred-output-content-format",
+                    "text",
+                    "--output-schemas",
+                    "on",
+                ],
+                false,
+            ),
+        ] {
+            let mut args = vec!["agent-access", "mcp", "serve"];
+            args.extend(extra);
+            let cli = crate::Cli::try_parse_from(args).unwrap();
+            assert!(matches!(cli.command,
+                crate::Command::Mcp { command: crate::McpCommand::Serve { include_text_copy, .. } }
+                    if include_text_copy == expected));
+        }
+        for extra in [
+            vec!["--include-text-copy"],
+            vec!["--include-text-copy="],
+            vec!["--include-text-copy=TRUE"],
+            vec!["--include-text-copy=0"],
+            vec!["--include-text-copy=yes"],
+            vec!["--include-text-copy=false", "--include-text-copy=true"],
+        ] {
+            let mut args = vec!["agent-access", "mcp", "serve"];
+            args.extend(extra);
+            assert!(crate::Cli::try_parse_from(args).is_err());
+        }
+    }
+
+    #[test]
+    fn local_tool_errors_preserve_the_complete_message_without_a_text_copy() {
+        let message = "Request cancelled. A mutation may already have completed.";
+        for include_text_copy in [true, false] {
+            let result = serde_json::to_value(tool_error(message, include_text_copy)).unwrap();
+            assert_eq!(result["isError"], true);
+            assert_eq!(
+                result["structuredContent"],
+                json!({"error":{"message":message}})
+            );
+            for definition in agent_access_core::mcp::helper_definitions(
+                agent_access_core::mcp::ProjectionMode::Stdio,
+                OutputSchemas::On,
+            ) {
+                let validator = jsonschema::validator_for(&definition["outputSchema"]).unwrap();
+                assert!(
+                    validator.is_valid(&result["structuredContent"]),
+                    "{}: {result}",
+                    definition["name"]
+                );
+            }
+            assert_eq!(
+                result["content"],
+                if include_text_copy {
+                    json!([{"type":"text","text":message}])
+                } else {
+                    json!([])
+                }
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn cancelled_handler_preserves_structured_warning_without_text_copy() {
+        let config = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(config.path(), "[identity]\ndisabled=true\n").unwrap();
+        let server = BrokerMcp {
+            cli: crate::Cli::try_parse_from([
+                "agent-access",
+                "--url",
+                "http://127.0.0.1:9",
+                "mcp",
+                "serve",
+                "--include-text-copy=false",
+            ])
+            .unwrap(),
+            config: config.path().to_path_buf(),
+            view: McpView::Aggregate,
+            output_schemas: OutputSchemas::On,
+            include_text_copy: false,
+        };
+        // rmcp suppresses wire replies after notifications/cancelled. Call the
+        // actual handler with its cancelled request context to inspect the
+        // result it constructs before the SDK discards it.
+        let (transport, _remote) = tokio::io::duplex(4096);
+        let running = rmcp::service::serve_directly(server, transport, None);
+        let context = RequestContext::new(
+            rmcp::model::NumberOrString::Number(1),
+            running.peer().clone(),
+        );
+        context.ct.cancel();
+        let result = running
+            .service()
+            .call_tool(CallToolRequestParams::new("services_list"), context)
+            .await
+            .unwrap();
+        let CallToolResponse::Complete(result) = result else {
+            panic!("cancelled handler must return a complete tool result");
+        };
+        let result = serde_json::to_value(result).unwrap();
+        assert_eq!(result["content"], json!([]));
+        assert_eq!(result["isError"], true);
+        assert_eq!(
+            result["structuredContent"],
+            json!({
+                "error":{"message":"Request cancelled. An upstream mutation may already have completed; inspect its state before retrying."}
+            })
+        );
+        let definition = agent_access_core::mcp::helper_definitions(
+            agent_access_core::mcp::ProjectionMode::Stdio,
+            OutputSchemas::On,
+        )
+        .into_iter()
+        .find(|tool| tool["name"] == "services_list")
+        .unwrap();
+        assert!(
+            jsonschema::validator_for(&definition["outputSchema"])
+                .unwrap()
+                .is_valid(&result["structuredContent"])
+        );
+        running.cancel().await.unwrap();
+    }
+
+    #[test]
     fn instructions_put_the_calling_rule_first_in_every_view() {
         for service in [None, Some("synthetic-service")] {
             let server = BrokerMcp {
@@ -230,6 +384,7 @@ mod tests {
                     McpView::Service(service.into())
                 }),
                 output_schemas: OutputSchemas::Off,
+                include_text_copy: true,
             };
             let info = server.get_info();
             let instructions = info.instructions.unwrap();
@@ -448,6 +603,7 @@ mod tests {
             config: file.path().to_path_buf(),
             view: McpView::Aggregate,
             output_schemas: OutputSchemas::Off,
+            include_text_copy: true,
         };
         let error = server.settings().unwrap_err();
         assert_eq!(format!("{error:#}"), CONFIG_ERROR);
@@ -464,8 +620,7 @@ mod tests {
             identity_header: "X-Agent-Access-Identity-Token".into(),
             identity_scheme: "raw".into(),
             allow_insecure_broker_http: false,
-            read_content_format: Default::default(),
-            output_format: Default::default(),
+            preferred_output_content_format: None,
         };
         // Rejected regardless of the ambient production setting; no process
         // environment mutation is needed to exercise the transport policy.
@@ -477,5 +632,63 @@ mod tests {
         assert!(message.contains("AGENT_ACCESS_ENVIRONMENT=production"));
         assert!(!message.contains("private-token-marker"));
         assert!(!message.contains("broker.example.test"));
+    }
+    #[test]
+    fn content_preferences_reload_and_process_override_stays_authoritative() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("client.toml");
+        let source = |format: &str| {
+            format!(
+                "[identity]\ndisabled=true\n[defaults]\npreferred_output_content_format={format:?}\n"
+            )
+        };
+        std::fs::write(&path, source("text")).unwrap();
+        let make = |extra: &[&str]| {
+            let mut args = vec![
+                "agent-access",
+                "--config",
+                path.to_str().unwrap(),
+                "mcp",
+                "serve",
+            ];
+            args.extend_from_slice(extra);
+            BrokerMcp {
+                cli: crate::Cli::try_parse_from(args).unwrap(),
+                config: path.clone(),
+                view: McpView::Aggregate,
+                output_schemas: OutputSchemas::Off,
+                include_text_copy: true,
+            }
+        };
+        let ambient = make(&[]);
+        let pinned = make(&["--preferred-output-content-format", "storage"]);
+        use agent_access_provider::presentation::OutputContentFormat;
+        assert_eq!(
+            ambient.settings().unwrap().preferred_output_content_format,
+            Some(OutputContentFormat::Text)
+        );
+        std::fs::write(&path, source("adf")).unwrap();
+        assert_eq!(
+            ambient.settings().unwrap().preferred_output_content_format,
+            Some(OutputContentFormat::Adf)
+        );
+        assert_eq!(
+            pinned.settings().unwrap().preferred_output_content_format,
+            Some(OutputContentFormat::Storage)
+        );
+        std::fs::write(&path, "[defaults]\nread_content_format=\"native\"").unwrap();
+        let retired = ambient.settings().unwrap_err().to_string();
+        assert!(retired.contains("[defaults].read_content_format"));
+        assert!(retired.contains("[defaults].preferred_output_content_format"));
+        // An invalid live configuration does not destroy the process or its override.
+        std::fs::write(&path, source("markdown")).unwrap();
+        assert_eq!(
+            ambient.settings().unwrap().preferred_output_content_format,
+            Some(OutputContentFormat::Markdown)
+        );
+        assert_eq!(
+            pinned.settings().unwrap().preferred_output_content_format,
+            Some(OutputContentFormat::Storage)
+        );
     }
 }

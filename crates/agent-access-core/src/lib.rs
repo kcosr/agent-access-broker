@@ -3,8 +3,7 @@ use agent_access_provider::{
     OAuthScopeMode, ProviderLimits, ReasonCodeId, ResourceScopes, ResourceSelector,
     ResourceTypeRegistry, ServiceCredentialKinds, ServiceDescriptor, ValidationContext,
     default_download_max_bytes, is_action_name, is_env_name, is_loopback_or_localhost,
-    is_secret_ref, is_service_name,
-    presentation::{ReadContentFormat, ResponseFormat},
+    is_secret_ref, is_service_name, presentation::OutputContentFormat,
     validate_egress_proxy_config, validate_upstream_allowlist,
 };
 use attribution::validate_attribution_config;
@@ -18,6 +17,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use thiserror::Error;
 use url::Url;
+
+/// Maximum serialized bytes of a resource-access inspection or token preview.
+/// This ceiling does not restrict policy publication or ordinary invocation.
+pub const RESOURCE_ACCESS_MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 
 mod api;
 mod applications_config;
@@ -1463,9 +1466,7 @@ pub struct CliConfig {
 #[serde(deny_unknown_fields)]
 pub struct CliDefaultsConfig {
     #[serde(default)]
-    pub read_content_format: ReadContentFormat,
-    #[serde(default)]
-    pub output_format: ResponseFormat,
+    pub preferred_output_content_format: Option<OutputContentFormat>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -3803,13 +3804,59 @@ struct PolicyValidationContainmentGrant {
     service: String,
     action: String,
     scope_type: String,
-    boundary: ResourceBoundary,
+    boundary: PolicyValidationBoundary,
+    native_collection: bool,
     execution_contexts: Vec<String>,
     credential_mode: String,
     priority: i32,
     lookup_required: bool,
     /// Overlapping modes are passed together, not ambiguous.
     command_enforced: bool,
+}
+
+#[derive(Debug)]
+enum PolicyValidationBoundary {
+    Scalar(ResourceBoundary),
+    Location {
+        boundary: agent_access_provider::ContainmentBoundary,
+        contract: agent_access_provider::ContainmentScopeCapabilities,
+        site_origin: String,
+    },
+}
+
+impl PolicyValidationBoundary {
+    fn is_universe(&self) -> bool {
+        match self {
+            Self::Scalar(boundary) => boundary.is_universe(),
+            Self::Location {
+                boundary,
+                contract,
+                site_origin,
+            } => boundary.is_universe(contract, site_origin),
+        }
+    }
+    fn proven_overlap(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Scalar(left), Self::Scalar(right)) => left.intersects(right),
+            (
+                Self::Location {
+                    boundary: left,
+                    contract,
+                    site_origin,
+                },
+                Self::Location {
+                    boundary: right, ..
+                },
+            ) => {
+                // Stable content identities do not identify their current
+                // container. Conditional space/content overlap may publish;
+                // concrete whole-operation matching diagnoses tied modes.
+                left.prove_intersection(right, contract, site_origin)
+                    == agent_access_provider::OfflineContainmentProof::Covered
+            }
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -4099,10 +4146,44 @@ pub(crate) fn normalized_policy_grant_validation_issues(
                 priority: grant.priority.unwrap_or(0),
             });
             if let Some((scope_type, binding)) = service.action_resource_scope(action) {
-                let resource_type = &binding.resource_type;
                 for context in &grant.execution_contexts {
-                    let boundary =
-                        resource_catalog.resolve(grant.resources, resource_type, context);
+                    let boundary = if let Some((resource_type, _)) = binding.as_scalar() {
+                        resource_catalog
+                            .resolve(grant.resources, resource_type, context)
+                            .map(PolicyValidationBoundary::Scalar)
+                    } else if let Some(contract) = binding.as_containment() {
+                        match service.upstream_authority.as_ref() {
+                            Some(authority) => resource_catalog
+                                .resolve_containment(
+                                    grant.resources,
+                                    contract,
+                                    authority.origin(),
+                                    resource_types,
+                                    context,
+                                )
+                                .map(|boundary| PolicyValidationBoundary::Location {
+                                    boundary,
+                                    contract: contract.clone(),
+                                    site_origin: authority.origin().to_owned(),
+                                }),
+                            None => {
+                                Err("content location scope requires an upstream authority".into())
+                            }
+                        }
+                    } else {
+                        Err("unsupported resource scope contract".into())
+                    };
+                    let boundary = match boundary {
+                        Ok(boundary) => boundary,
+                        Err(message) => {
+                            issues.push(normalized_policy_issue(
+                                NormalizedPolicyGrantIssueField::Resources,
+                                "resource_selection_invalid",
+                                message,
+                            ));
+                            continue;
+                        }
+                    };
                     containment_grants.push(PolicyValidationContainmentGrant {
                         label: grant.label.clone(),
                         subject_field: grant.subject_field.clone(),
@@ -4111,6 +4192,7 @@ pub(crate) fn normalized_policy_grant_validation_issues(
                         action: action.clone(),
                         scope_type: scope_type.to_string(),
                         boundary,
+                        native_collection: action_spec.native_search.is_some(),
                         execution_contexts: vec![context.clone()],
                         credential_mode: grant.credential_mode.to_string(),
                         priority: grant.priority.unwrap_or(0),
@@ -4259,13 +4341,15 @@ fn validate_policy_containment_overlaps(
             }
             let left_is_wildcard = left.boundary.is_universe();
             let right_is_wildcard = right.boundary.is_universe();
-            if left.lookup_required
+            if !left.native_collection
+                && !right.native_collection
+                && left.lookup_required
                 && right.lookup_required
                 && left_is_wildcard != right_is_wildcard
             {
                 continue;
             }
-            if left.boundary.intersects(&right.boundary) {
+            if left.boundary.proven_overlap(&right.boundary) {
                 issues.push(normalized_policy_subject_issue(
                     right.subject_field.clone(),
                     "credential_mode_ambiguous",
@@ -4571,7 +4655,8 @@ fn validate_private_resource_consumers(
                 .resource_scope
                 .as_ref()
                 .and_then(|scope| service.resource_scopes.get(scope))
-                .map(|scope| &scope.resource_type);
+                .and_then(|scope| scope.as_scalar())
+                .map(|(resource_type, _)| resource_type);
             if !resource_type.is_some_and(|resource_type| {
                 resource_types.defining_service(resource_type) == Some(service.service.as_str())
                     && resource_types

@@ -275,8 +275,11 @@ max_control_requests_per_principal = 8
 
 These are defaults, except `public_url`, which must be supplied when enabled.
 The URL must use HTTPS and exact path `/mcp`, without credentials, query or
-fragment. Clients append the per-connection
-[`outputSchemas`](mcp.md#output-schemas) query to their own endpoint URLs.
+fragment. Clients append optional
+[`outputSchemas`](mcp.md#output-schemas),
+[`preferredOutputContentFormat`](mcp.md#output-content-formats) and
+[`includeTextCopy`](mcp.md#tool-result-text-copies) query parameters to their own
+endpoint URLs. Output schemas default to `off`; text copies default to `true`.
 Loopback HTTP is permitted only in development/test deployments.
 Enable an `Authorization` identity source with canonical `scheme = "Bearer"` and
 type `static_principals` or `broker_tokens`, or a named trusted caller with
@@ -294,9 +297,9 @@ requests that supply it. This is Origin validation, not a browser CORS or OAuth
 onboarding implementation. Host and session checks also apply to native clients.
 
 The request cap cannot exceed `limits.max_http_body_bytes`. Response size counts
-the serialized MCP result, including escaped text and structured copies, with
-space reserved for protocol framing. It must be at least 64 KiB. Catalog work
-must allow at least one response cap. Tool pages contain at most 100 definitions
+the serialized MCP result, including structured content and any emitted escaped
+text copy, with space reserved for protocol framing. It must be at least 64 KiB.
+Catalog work must allow at least one response cap. Tool pages contain at most 100 definitions
 and may be shorter to stay within the response cap.
 
 Aggregate and service connections share session and control pools. Two clients
@@ -330,13 +333,20 @@ Memory planning must account for concurrent work, not only a single wire cap.
 At most `max_control_requests` incoming bodies and control operations can be
 admitted globally, with separate native response leases capped by
 `limits.max_concurrent_requests`. Each admitted discovery may project up to
-`max_catalog_bytes`; each response has structured JSON, escaped text, capped
-serialization buffers, and bounded SDK queues. Provider work retains its own
-upstream/result allocation limits. These byte budgets bound serialized work;
+`max_catalog_bytes`; each response has structured JSON, an optional escaped text
+copy, capped serialization buffers, and bounded SDK queues. Provider work retains
+its own upstream/result allocation limits. These byte budgets bound serialized work;
 Rust JSON object overhead and provider allocations mean they are not a resident
 memory limit. Size concurrency and byte budgets together. Expired sessions and
 completed SDK response caches are discarded; there is no result retention.
-See [MCP client setup](mcp.md#http-endpoint).
+
+Clients may append `includeTextCopy=false` to `/mcp` or `/mcp/<service>` to omit
+the top-level text copy while retaining the complete structured result. This
+per-request URL option defaults to `true` and composes with
+`preferredOutputContentFormat`; keep `public_url` query-free. Local stdio uses
+`mcp serve --include-text-copy=false` for the process. There is no TOML or
+environment setting for this control. See [MCP text copies](mcp.md#tool-result-text-copies)
+and [MCP client setup](mcp.md#http-endpoint).
 
 ## `[identity]`
 
@@ -1208,11 +1218,13 @@ priority = 0                  # optional
 ### Resource catalog and selections
 
 `[[policy.resources]]` fields are `id`, `resource_type`, `selector`, optional
-`display_name`, nonempty `allowed_execution_contexts`, and `enabled`.
+`display_name`, optional `browser_url`, nonempty `allowed_execution_contexts`,
+and `enabled`.
 
 - `resource_type` must name a registered resource type (see
   [resources.md](resources.md#resource-entries)); this build registers
-  `git_repository`, `jira_project`, `confluence_space`, `cloudbees_ci_job`,
+  `git_repository`, `jira_project`, `confluence_space`, `confluence_content`,
+  `cloudbees_ci_job`,
   `fake_project`, `teams_notification_destination`, and the development
   `oauth_collection`.
 - Exact selectors are `{ kind = "exact", value = "engineering/payments" }`.
@@ -1220,10 +1232,20 @@ priority = 0                  # optional
   `{ kind = "namespace", value = "engineering/platform" }` for a repository group.
   Matching uses complete path segments. OAuth collections support exact/all only.
 - All selectors are `{ kind = "all" }`. They have no value and cover new,
-  unregistered upstream objects. All resource types support them.
+  unregistered upstream objects. Only types advertising `all` accept it;
+  `confluence_content` does not.
 - The type and selector combination must be unique, independent of name,
   contexts, and enabled state. Unknown fields and invalid combinations are
-  rejected. There is no Jira issue or Confluence page policy scope.
+  rejected. Confluence content uses strict identity values
+  `https://<site>/wiki/content/{page|folder|blog}/<ID>` with exact page/blog or
+  page/folder subtree coverage. These values have no space coordinate and are
+  not browser URLs; see [content access](confluence-content-access.md).
+  Jira issues have no separate policy scope.
+- `browser_url` is optional navigation metadata for Confluence content entries.
+  Supply a trimmed browser URL of at most 4096 UTF-8 bytes that normalizes to the
+  same site, content kind and ID as the selector. It does not change coverage,
+  verify upstream access or contact Confluence. Other resource types reject this
+  field when set. See [saved browser links](confluence-content-access.md#resources-and-url-entry).
 
 `[[policy.resource_groups]]` fields are `id`, `name`, `included_resource_ids`,
 and `excluded_resource_ids`. Groups can mix types, but cannot contain other
@@ -1392,6 +1414,7 @@ upload_media_types = ["text/plain", "application/json", "image/png", "text/html"
 download_media_types = { allow = ["*/*"], deny = [] } # default; independent of uploads
 
 [providers.jira.content]
+# preferred_output_format = "markdown"  # optional; markdown | text | adf | storage
 comment_formats = ["adf"]   # native formats only; [] disables comment writes
 max_body_bytes = 1048576    # 1 MiB; default
 
@@ -1514,8 +1537,8 @@ allowed_field_ids = [] # default: no writable custom fields
   guards and `limits.max_upstream_response_bytes` (default 512 MiB) still apply
   to the complete response. HTTP MCP has the separate configurable
   `mcp.max_response_bytes` limit (default 16 MiB), counting structured content
-  and its text copy; the local stdio MCP adapter caps Broker-JSON receipt at
-  16 MiB. There is no additional custom-field count or aggregate byte cap. See
+  and any emitted text copy; the local stdio MCP adapter caps Broker-JSON receipt
+  at 16 MiB. There is no additional custom-field count or aggregate byte cap. See
   [Jira custom fields](providers-jira.md#custom-fields).
 - Normalized write format remains explicit caller input with no write default.
   Read response defaults are separate client presentation settings under
@@ -1593,6 +1616,7 @@ upload_media_types = ["text/plain", "application/json", "image/png", "text/html"
 download_media_types = { allow = ["*/*"], deny = [] } # default; all attachment download variants
 
 [providers.confluence.content]
+# preferred_output_format = "markdown"  # optional; markdown | text | adf | storage
 page_formats = ["atlas_doc_format", "storage"]   # supported formats
 blog_formats = ["storage"]                       # supported blog formats
 comment_formats = ["storage"]                    # supported comment body formats
@@ -1600,6 +1624,17 @@ max_body_bytes = 2097152                          # 2 MiB; default
 
 [providers.confluence.search]
 max_results = 50                    # default
+
+[providers.confluence.content_access]
+max_metadata_requests = 1024       # default; 1..4096
+max_metadata_bytes = 33554432      # default; 1..268435456
+
+[providers.confluence.content_search]
+max_candidate_pages = 4            # default; 1..64
+max_candidates = 100               # default; 1..1000
+max_upstream_requests = 1024        # default; 1..4096
+max_scan_bytes = 33554432           # default; 1..268435456
+max_encoded_request_target_bytes = 4096 # default; 512..65534
 
 [providers.confluence.listing]
 max_results = 50                    # default
@@ -1620,8 +1655,9 @@ max_scan_bytes = 16777216            # default
   allowlist containing only `atlas_doc_format` and/or `storage`. Current page
   create/update advertise their enabled native formats and advertise
   `markdown`/`plain_text` only when `storage` is enabled. Returned current page
-  bodies expose the configured representations; normalized reads select present
-  ADF first, otherwise present storage. It defaults to empty.
+  bodies use one selected representation; Markdown/text selection uses present
+  ADF first, otherwise present storage. An empty list omits the current page
+  body and its output-body capability. The list defaults to empty.
 - `[providers.confluence.content].blog_formats` and `comment_formats` are native
   allowlists containing only `storage`. Current blog writes, blog drafts, and
   comment writes advertise `storage`, `markdown`, and `plain_text` when storage
@@ -1637,8 +1673,8 @@ max_scan_bytes = 16777216            # default
 - `max_body_bytes` defaults to 2 MiB and must be non-zero. On writes it
   independently bounds the source and complete serialized native body after
   conversion and attribution; overflow returns `body_size_denied`/413. On
-  reads it bounds every declared returned storage or ADF body in native,
-  embedded, and whole-result modes; malformed or oversized upstream content
+  reads it bounds every declared storage or ADF source and selected output body;
+  malformed or oversized upstream content
   returns sanitized `upstream_protocol_failed`/502. Conversion never truncates
   or falls back to native content. Unsupported write formats return
   `body_format_unsupported`/415.
@@ -1661,11 +1697,48 @@ max_scan_bytes = 16777216            # default
   The broker uses that stable key to sign draft handles so they survive process
   restarts and service-mode handoff.
 
+`content_access` budgets current location metadata across the whole operation.
+`content_search` separately bounds candidates, pages, requests and bytes including
+proofs and final checks. Neither budget resets per ancestor or retry. The encoded
+request-target limit includes path, authority, caller query, fixed parameters and
+cursor; the HTTP client absolute-URI cap also applies. The 4096-byte default is
+an operator ceiling, not a measurement of a particular tenant or gateway. Qualify
+the chosen setting on each deployed route; overflow or an upstream length rejection
+fails without dropping constraints. See [content access](confluence-content-access.md).
+
 `providers.confluence.listing` bounds live `space.list` scans: `max_results`
 (default 50, 1..100), `max_candidate_pages` (4), `max_upstream_requests` (8),
 and `max_scan_bytes` (16 MiB). All limits are positive. Attempts include the
 invocation's shared OAuth replay; consumed bodies share the byte budget.
 Per-response and result caps still apply. See [space listing](providers-confluence.md#live-space-listing).
+
+### Output content preferences
+
+`[providers.jira.content]`, `[providers.confluence.content]`, and
+`[providers.gitlab.content]` each accept optional `preferred_output_format`.
+The client-side key has a different scope and spelling:
+`[defaults].preferred_output_content_format`. Every preference accepts
+`markdown`, `text`, `adf`, or `storage`; the service may be unable to produce a
+particular value on some or all actions, which is handled as native fallback.
+
+Resolution uses an exact invocation `outputContentFormat` first. Otherwise it
+selects the first present request/connection preference, service preference, then
+Markdown. If that preference is unsupported, the action's declared native format
+wins; lower preference tiers are not tried. An unsupported exact format fails
+before provider lookup. No-body actions ignore soft preferences. Preferences,
+configured body capabilities and native defaults are published together on reload.
+
+Jira's native format is ADF, GitLab's is Markdown, and Confluence uses configured
+ADF for current pages when available or storage for its storage-backed actions.
+Confluence `blog_formats=[]` gates writes without removing the existing storage
+read support for blogs/drafts. Missing optional source bodies remain absent and
+malformed/over-limit content never causes output-format fallback. These settings
+do not affect explicit write `contentFormat` or upstream `bodyFormat` inputs.
+
+HTTP MCP supplies a connection preference using the literal query parameter
+`preferredOutputContentFormat` on `/mcp` or `/mcp/<service>`. It is evaluated per
+HTTP request. `mcp.public_url` remains query-free; configure the preference on the
+client's endpoint URL. See [MCP output formats](mcp.md#output-content-formats).
 
 ### `[providers.gitlab]`
 
@@ -1684,6 +1757,7 @@ max_total_bytes = 52428800   # 50 MiB; default aggregate cap
 media_types = []            # unrestricted; include text/html in any explicit allowlist
 
 [providers.gitlab.content]
+# preferred_output_format = "markdown"  # optional; markdown | text | adf | storage
 max_body_bytes = 1048576      # 1 MiB; default
 max_commit_actions = 25       # default
 max_file_bytes = 10485760     # 10 MiB; default
@@ -1736,8 +1810,7 @@ allow_disable_ssl_verification = false
 - `[providers.gitlab.content].max_body_bytes` defaults to 1 MiB and independently
   bounds caller-supplied normalized rich-content source bytes, the complete
   native Markdown body after conversion and attribution, and every declared
-  issue/MR description or note/discussion body returned in native, embedded, or
-  whole-result read mode. It also bounds `project.view` descriptions, merge
+  issue/MR description or note/discussion source and selected output body. It also bounds `project.view` descriptions, merge
   messages, and commit messages under their existing contracts. It must not
   exceed `limits.max_http_body_bytes`.
   Oversized write input returns `body_size_denied`/413; malformed or oversized
@@ -1748,10 +1821,8 @@ allow_disable_ssl_verification = false
   is escaped into literal GitLab Markdown. There is no content-format config,
   environment override, filename inference, or client default. Callers supply
   the format explicitly and inspect the exact action catalog enum for support.
-- Read-response defaults are client-wide, not GitLab provider configuration.
-  Use `[defaults].read_content_format`/`output_format` or their environment
-  variables described below; only actions advertising the matching capability
-  receive a non-default ambient value.
+- `[providers.gitlab.content].preferred_output_format` is the optional service
+  preference described under [output content preferences](#output-content-preferences).
 - `[providers.gitlab.content].max_commit_actions` defaults to `25`, must be
   non-zero, and may not exceed `100`.
 - `[providers.gitlab.content].max_file_bytes` defaults to 10 MiB and bounds
@@ -1769,9 +1840,9 @@ allow_disable_ssl_verification = false
   This setting does not change file-write or diff limits. Metadata-only views
   remain available for files above every content-transfer cap. The ceiling must
   be non-zero, and six times the ceiling plus a 64 KiB metadata/envelope
-  allowance must fit `limits.max_upstream_response_bytes`. Actual JSON,
-  Markdown and MCP output limits also apply: HTTP MCP includes text and
-  structured result copies, and JSON escaping adds bytes. Raising the inline
+  allowance must fit `limits.max_upstream_response_bytes`. Actual JSON and
+  MCP serialization limits also apply: HTTP MCP includes structured content and
+  any emitted text copy, and JSON escaping adds bytes. Raising the inline
   ceiling or lowering `mcp.max_response_bytes` can produce a delivery-limit
   error even when the file fits its byte budget. See
   [repository file reads](providers-gitlab-rest.md#repository-file-reads).
@@ -2606,9 +2677,12 @@ scheme = "raw"                             # default; raw | Bearer
 disabled = false                           # default
 
 [defaults]
-read_content_format = "native"             # native | markdown | text
-output_format = "json"                     # json | markdown
+# preferred_output_content_format = "markdown" # optional; markdown | text | adf | storage
 ```
+
+Provider invocation requires authenticated runtime catalog access. Configure a
+token source or authenticated ingress; anonymous direct HTTP permission does not
+enable CLI or local stdio provider calls. See the [CLI reference](cli.md).
 
 `validate_cli_config` enforces:
 
@@ -2641,18 +2715,25 @@ output_format = "json"                     # json | markdown
 - `identity.token_env`, if set, must be a valid environment variable name.
 - `identity.token_file`, if set, must be non-empty. `agent-access config
   validate` does not expand `~` or require the referenced file to exist.
-- `defaults.read_content_format` must be `native`, `markdown`, or `text`.
-- `defaults.output_format` must be `json` or `markdown`.
+- `defaults.preferred_output_content_format`, when present, must be `markdown`,
+  `text`, `adf`, or `storage`. It is a soft preference for declared output bodies.
 
-The corresponding environment variables are
-`AGENT_ACCESS_READ_CONTENT_FORMAT` and `AGENT_ACCESS_OUTPUT_FORMAT`. Resolution
-uses command flag, then client config, then environment, then the built-in
-`native`/`json` defaults. The CLI determines config-key presence from the parsed
-TOML document, so an explicitly present default still occupies the config tier.
-Invalid config or environment values fail locally.
-Valid non-default ambient values are omitted for commands whose actions do not
-advertise the capability. `send` is file-driven and never injects these ambient
-defaults.
+The environment equivalent is `AGENT_ACCESS_PREFERRED_OUTPUT_CONTENT_FORMAT`.
+An explicitly present config value takes precedence over environment. Omission
+preserves the service preference and built-in Markdown fallback. A stdio process
+`--preferred-output-content-format` overrides the client preference; typed/generic
+`--output-content-format` is a strict exact selection. JSON send carries its own
+exact selector and optional preference; an explicit request preference takes
+precedence over the client's ambient value. The Broker resolves preferences
+against the admitted action, including native fallback for unsupported values.
+
+Invalid output settings fail locally before dispatch. Retired format settings
+are rejected by every operational CLI command at startup with exit 3 on stderr,
+before network/protocol output; help/version remain config-independent. Stdio
+validates at startup and
+reloads configuration per call; a later invalid setting produces a tool error
+without ending the process. See the [upgrade note](operator-guide.md#output-content-contract-upgrade)
+for replacing earlier presentation settings.
 
 `agent-access config validate` runs `validate_cli_config_file` locally with no
 broker call, using the same core config and closed-format contract as command

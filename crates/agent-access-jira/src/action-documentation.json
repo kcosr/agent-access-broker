@@ -14,7 +14,7 @@
   },
   "attachment.download": {
     "scope": "Authorization is by Jira project. Use the issue key, not a policy resource ID; an issue locator does not introduce a separate issue grant.",
-    "workflow": "Use the issue key and an attachmentId returned by attachment.list. Download returns bounded raw bytes under its own action authority; it does not advertise embedded or whole-result Markdown. Attachment delete is not exposed.",
+    "workflow": "Use the issue key and an attachmentId returned by attachment.list. Download returns bounded raw bytes under its own action authority; its byte stream has no rich-body output selector. Attachment delete is not exposed.",
     "inputExamples": [
       {
         "label": "Canonical inputs",
@@ -37,12 +37,10 @@
         }
       }
     ],
-    "resultPresentation": "When advertised, whole-result Markdown preserves returned identifiers/timestamps as code spans and safe URLs as autolinks, neutralizes metadata controls/newlines and uses only the existing result. Selecting a format does not fetch bodies or add requests.",
     "typedCommand": "Typed CLI wrapper: agent-access jira issue attachment list [OPTIONS] [ISSUE]; run agent-access jira issue attachment list --help for flags and input alternatives."
   },
   "comment.add": {
     "scope": "Authorization is by Jira project. Use the issue key or accepted browser URL, not a policy resource ID; an issue locator does not introduce a separate issue grant.",
-    "readPresentation": "When advertised, non-native readContentFormat adds a Markdown/text renderedBody to the owning comment while preserving its native ADF. It formats the returned body without an additional provider fetch; write contentFormat remains a separate control.",
     "content": "Supply content with explicit contentFormat for the comment body. Both fields are required. When advertised, adf is a JSON document object; markdown and plain_text are strings converted to ADF. Format is never inferred; read this action's contentFormat enum. This comment action is absent when its native ADF target is disabled. Do not append your own attribution footer; configured attribution is applied in native ADF when content is written. Oversize content returns body_size_denied/413 and an unsupported format returns body_format_unsupported/415; source and converted content are omitted from audit and diagnostics.",
     "commentKind": "Creates a top-level issue comment. Use jira.comment.reply with parentCommentId for a reply.",
     "inputExamples": [
@@ -55,7 +53,8 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access jira issue comment add [OPTIONS]; run agent-access jira issue comment add --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access jira issue comment add [OPTIONS]; run agent-access jira issue comment add --help for flags and input alternatives.",
+    "outputContent": "The common outputContentFormat selects each declared rich body as {format,value}; metadata remains structured JSON. Jira supports markdown, text, and adf, with Markdown as the built-in preference. No extra provider fetch occurs; inputs.contentFormat controls writes independently."
   },
   "comment.delete": {
     "scope": "Authorization is by Jira project. Use the issue key or accepted browser URL, not a policy resource ID; an issue locator does not introduce a separate issue grant.",
@@ -89,7 +88,6 @@
         }
       }
     ],
-    "resultPresentation": "When advertised, whole-result Markdown preserves returned identifiers/timestamps as code spans and safe URLs as autolinks, neutralizes metadata controls/newlines and uses only the existing result. Selecting a format does not fetch bodies or add requests.",
     "typedCommand": "Typed CLI wrapper: agent-access jira issue comment list [OPTIONS]; run agent-access jira issue comment list --help for flags and input alternatives."
   },
   "comment.property.delete": {
@@ -98,12 +96,12 @@
   },
   "comment.property.get": {
     "scope": "Authorization is by Jira project. Use the issue key or accepted browser URL, not a policy resource ID; an issue locator does not introduce a separate issue grant.",
-    "presentation": "Whole-result Markdown renders copyable identifiers and timestamps as code spans, safe URLs as autolinks and arbitrary comment-property JSON, including null, in a fenced block. Metadata controls and newlines are neutralized.",
+    "presentation": "The JSON result preserves identifiers, timestamps, URLs and arbitrary comment-property JSON, including null. Property values are not rich bodies.",
     "typedCommand": "Typed CLI wrapper: agent-access jira issue comment property get [OPTIONS] <COMMENT_ID> <PROPERTY_KEY>; run agent-access jira issue comment property get --help for flags and input alternatives."
   },
   "comment.property.list": {
     "scope": "Authorization is by Jira project. Use the issue key or accepted browser URL, not a policy resource ID; an issue locator does not introduce a separate issue grant.",
-    "presentation": "Whole-result Markdown renders copyable identifiers and timestamps as code spans, safe URLs as autolinks and arbitrary comment-property JSON, including null, in a fenced block. Metadata controls and newlines are neutralized.",
+    "presentation": "The JSON result preserves identifiers, timestamps, URLs and arbitrary comment-property JSON, including null. Property values are not rich bodies.",
     "typedCommand": "Typed CLI wrapper: agent-access jira issue comment property list [OPTIONS] <COMMENT_ID>; run agent-access jira issue comment property list --help for flags and input alternatives."
   },
   "comment.property.set": {
@@ -112,7 +110,6 @@
   },
   "comment.reply": {
     "scope": "Authorization is by Jira project. Use the issue key or accepted browser URL, not a policy resource ID; an issue locator does not introduce a separate issue grant.",
-    "readPresentation": "When advertised, non-native readContentFormat adds a Markdown/text renderedBody to the owning comment while preserving its native ADF. It formats the returned body without an additional provider fetch; write contentFormat remains a separate control.",
     "content": "Supply content with explicit contentFormat for the comment body. Both fields are required. When advertised, adf is a JSON document object; markdown and plain_text are strings converted to ADF. Format is never inferred; read this action's contentFormat enum. This comment action is absent when its native ADF target is disabled. Do not append your own attribution footer; configured attribution is applied in native ADF when content is written. Oversize content returns body_size_denied/413 and an unsupported format returns body_format_unsupported/415; source and converted content are omitted from audit and diagnostics.",
     "thread": "Give parentCommentId with the issue locator. Replies use Jira's one-level thread model; selecting an existing reply resolves its top-level thread root. The returned parentCommentId confirms that root.",
     "inputExamples": [
@@ -126,11 +123,11 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access jira issue comment reply [OPTIONS] <PARENT_COMMENT_ID>; run agent-access jira issue comment reply --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access jira issue comment reply [OPTIONS] <PARENT_COMMENT_ID>; run agent-access jira issue comment reply --help for flags and input alternatives.",
+    "outputContent": "The common outputContentFormat selects each declared rich body as {format,value}; metadata remains structured JSON. Jira supports markdown, text, and adf, with Markdown as the built-in preference. No extra provider fetch occurs; inputs.contentFormat controls writes independently."
   },
   "comment.update": {
     "scope": "Authorization is by Jira project. Use the issue key or accepted browser URL, not a policy resource ID; an issue locator does not introduce a separate issue grant.",
-    "readPresentation": "When advertised, non-native readContentFormat adds a Markdown/text renderedBody to the owning comment while preserving its native ADF. It formats the returned body without an additional provider fetch; write contentFormat remains a separate control.",
     "content": "Supply content with explicit contentFormat for the comment body. Both fields are required. When advertised, adf is a JSON document object; markdown and plain_text are strings converted to ADF. Format is never inferred; read this action's contentFormat enum. This comment action is absent when its native ADF target is disabled. Do not append your own attribution footer; configured attribution is applied in native ADF when content is written. Oversize content returns body_size_denied/413 and an unsupported format returns body_format_unsupported/415; source and converted content are omitted from audit and diagnostics.",
     "update": "commentId selects a full-body edit. notifyUsers defaults to false. Omitted visibilityMode preserves the existing restriction; preserve must omit visibility, while set requires visibility. Failure to read or determine current visibility prevents the update.",
     "inputExamples": [
@@ -159,11 +156,12 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access jira issue comment update [OPTIONS] <COMMENT_ID>; run agent-access jira issue comment update --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access jira issue comment update [OPTIONS] <COMMENT_ID>; run agent-access jira issue comment update --help for flags and input alternatives.",
+    "outputContent": "The common outputContentFormat selects each declared rich body as {format,value}; metadata remains structured JSON. Jira supports markdown, text, and adf, with Markdown as the built-in preference. No extra provider fetch occurs; inputs.contentFormat controls writes independently."
   },
   "comment.view": {
     "scope": "Authorization is by Jira project. Use the issue key or accepted browser URL, not a policy resource ID; an issue locator does not introduce a separate issue grant.",
-    "selection": "Read one selected commentId from jira.comment.list with the issue locator. The comment body is full, validated and bounded ADF. parentCommentId identifies a reply's parent, which may have appeared on another page. This action is independently authorized and can be used for selected IDs in any order.",
+    "selection": "Read one selected commentId from jira.comment.list with the issue locator. The full comment body is validated and bounded as ADF, then returned in the selected {format,value} representation. parentCommentId identifies a reply's parent, which may have appeared on another page. This action is independently authorized and can be used for selected IDs in any order.",
     "inputExamples": [
       {
         "label": "Canonical inputs",
@@ -173,9 +171,8 @@
         }
       }
     ],
-    "readPresentation": "When advertised, non-native readContentFormat adds a Markdown/text renderedBody to the owning comment while preserving its native ADF. It formats the returned body without an additional provider fetch; write contentFormat remains a separate control.",
-    "resultPresentation": "When advertised, whole-result Markdown preserves returned identifiers/timestamps as code spans and safe URLs as autolinks, neutralizes metadata controls/newlines and uses only the existing result. Selecting a format does not fetch bodies or add requests.",
-    "typedCommand": "Typed CLI wrapper: agent-access jira issue comment view [OPTIONS] <COMMENT_ID>; run agent-access jira issue comment view --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access jira issue comment view [OPTIONS] <COMMENT_ID>; run agent-access jira issue comment view --help for flags and input alternatives.",
+    "outputContent": "The common outputContentFormat selects each declared rich body as {format,value}; metadata remains structured JSON. Jira supports markdown, text, and adf, with Markdown as the built-in preference. No extra provider fetch occurs; inputs.contentFormat controls writes independently."
   },
   "issue.child.create": {
     "content": "Supply content with explicit contentFormat for the description. The pair is optional; omit both for no description. When advertised, adf is a JSON document object; markdown and plain_text are strings converted to ADF. Format is never inferred; read this action's contentFormat enum. Do not append your own attribution footer; configured attribution is applied in native ADF when content is written. Oversize content returns body_size_denied/413 and an unsupported format returns body_format_unsupported/415; source and converted content are omitted from audit and diagnostics.",
@@ -195,7 +192,6 @@
   },
   "issue.create": {
     "scope": "Authorization is by Jira project. Use the Jira project key, not a policy resource ID; an issue locator does not introduce a separate issue grant.",
-    "readPresentation": "When advertised, non-native readContentFormat adds a Markdown/text renderedBody to the owning issue while preserving its native ADF. It formats the returned body without an additional provider fetch; write contentFormat remains a separate control.",
     "content": "Supply content with explicit contentFormat for the description. The pair is optional; omit both for no description. When advertised, adf is a JSON document object; markdown and plain_text are strings converted to ADF. Format is never inferred; read this action's contentFormat enum. Do not append your own attribution footer; configured attribution is applied in native ADF when content is written. Oversize content returns body_size_denied/413 and an unsupported format returns body_format_unsupported/415; source and converted content are omitted from audit and diagnostics.",
     "workflow": "Discover issueTypeId with jira.issue_type.list using the intended credential context and pass its decimal-string ID unchanged. Only project, issueTypeId, summary and the optional content pair are writable; arbitrary custom fields are unsupported. Creating an Epic, creating children and adding dependencies are separate authorized mutations without a multi-call rollback. Use issue.child.create for a new child or issue.parent.set for an existing issue.",
     "inputExamples": [
@@ -218,7 +214,8 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access jira issue create [OPTIONS] --project <PROJECT> --issue-type-id <ISSUE_TYPE_ID> --summary <SUMMARY>; run agent-access jira issue create --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access jira issue create [OPTIONS] --project <PROJECT> --issue-type-id <ISSUE_TYPE_ID> --summary <SUMMARY>; run agent-access jira issue create --help for flags and input alternatives.",
+    "outputContent": "The common outputContentFormat selects each declared rich body as {format,value}; metadata remains structured JSON. Jira supports markdown, text, and adf, with Markdown as the built-in preference. No extra provider fetch occurs; inputs.contentFormat controls writes independently."
   },
   "issue.dependency.add": {
     "workflow": "blockingIssue/blockingUrl names the issue that blocks blockedIssue/blockedUrl. Give exactly one locator per side; the issues must differ and both projects must be authorized. The configured dependency link is verified in that direction by readback. This call is independently authorized and does not roll back earlier Epic/child/parent mutations.",
@@ -248,7 +245,6 @@
   },
   "issue.update": {
     "scope": "Authorization is by Jira project. Use the issue key or accepted browser URL, not a policy resource ID; an issue locator does not introduce a separate issue grant.",
-    "readPresentation": "When advertised, non-native readContentFormat adds a Markdown/text renderedBody to the owning issue while preserving its native ADF. It formats the returned body without an additional provider fetch; write contentFormat remains a separate control.",
     "content": "Supply content with explicit contentFormat for the description. The pair is optional when summary is supplied; give at least summary or a complete content pair. When advertised, adf is a JSON document object; markdown and plain_text are strings converted to ADF. Format is never inferred; read this action's contentFormat enum. Do not append your own attribution footer; configured attribution is applied in native ADF when content is written. Oversize content returns body_size_denied/413 and an unsupported format returns body_format_unsupported/415; source and converted content are omitted from audit and diagnostics.",
     "update": "Updates only summary and description. Give at least summary or a complete content/contentFormat pair; omitted content leaves the description unchanged. notifyUsers is optional: omission leaves Jira's default, while true/false are sent explicitly. Jira may require additional upstream permission to suppress notifications. Returned changedFields is ordered summary then description.",
     "inputExamples": [
@@ -269,7 +265,8 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access jira issue update [OPTIONS] [ISSUE]; run agent-access jira issue update --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access jira issue update [OPTIONS] [ISSUE]; run agent-access jira issue update --help for flags and input alternatives.",
+    "outputContent": "The common outputContentFormat selects each declared rich body as {format,value}; metadata remains structured JSON. Jira supports markdown, text, and adf, with Markdown as the built-in preference. No extra provider fetch occurs; inputs.contentFormat controls writes independently."
   },
   "issue.custom_field.set": {
     "scope": "Authorization is by Jira project; a grant for issue.update alone does not grant this action. The operator must allow fieldId in providers.jira.custom_fields.allowed_field_ids; the default empty list permits no custom-field writes. The provider-wide allowlist applies to every caller with matching action and project authority, allowing each caller to write every listed field. Use the issue key or accepted browser URL, not a policy resource ID.",
@@ -310,7 +307,7 @@
   },
   "issue.view": {
     "scope": "Authorization is by Jira project. Use the issue key or accepted browser URL, not a policy resource ID; an issue locator does not introduce a separate issue grant.",
-    "presentation": "Whole-result Markdown omits null standard context and shows None. for empty collections. Named values keep their IDs even when names are unavailable. Custom fields use readable names and IDs with explicit unsupported/withheld markers; custom-field nulls and empty arrays display as not set. An empty customFields array means no custom fields were returned, not that the project defines none. A returned null parent displays No parent returned. Embedded formatting retains native ADF and adds renderedBody beside the owning issue, comment or supported ADF custom-field value.",
+    "presentation": "The description and included comment bodies use selected {format,value} representations. Supported non-null ADF custom fields wrap only value; their type remains adf. Nulls, missing fields, and unsupported or withheld custom values preserve their meaning. An empty customFields array means no custom fields were returned, not that the project defines none.",
     "discussionPaging": "With includeComments=true, continue commentPage.nextStartAt through jira.comment.list with includeBodies=true. Keep chosen list size/order settings. isLast=true establishes completion of the visible page stream; null means unknown. Pages are independently authorized and are not a snapshot; a reply's parentCommentId may refer to another page. A byte-limited page contains fewer whole comments, never shortened bodies. Omitting includeComments or setting it false needs no comment companions, and selecting a presentation format alone never fetches comments.",
     "resultMetadata": "Issue metadata includes timestamps, small user summaries, priority and labels when Jira returns them. Detailed context, custom fields and eligible embedded references are exclusive to issue.view and are absent from search and mutation readbacks.",
     "inputExamples": [
@@ -353,7 +350,6 @@
         }
       }
     ],
-    "resultPresentation": "When advertised, whole-result Markdown preserves returned identifiers/timestamps as code spans and safe URLs as autolinks, neutralizes metadata controls/newlines and uses only the existing result. Selecting a format does not fetch bodies or add requests.",
     "typedCommand": "Typed CLI wrapper: agent-access jira issue-type list [OPTIONS] --project <PROJECT>; run agent-access jira issue-type list --help for flags and input alternatives."
   },
   "project.list": {
@@ -366,12 +362,10 @@
         }
       }
     ],
-    "resultPresentation": "When advertised, whole-result Markdown preserves returned identifiers/timestamps as code spans and safe URLs as autolinks, neutralizes metadata controls/newlines and uses only the existing result. Selecting a format does not fetch bodies or add requests.",
     "typedCommand": "Typed CLI wrapper: agent-access jira project list [OPTIONS]; run agent-access jira project list --help for flags and input alternatives."
   },
   "project.view": {
     "searchWorkflow": "Use each returned jqlReference in a separately authorized search, for example cf[12345]. Do not substitute a display name or customfield_12345. Custom-field functions and sorting are unsupported; discovery does not establish creation requirements or field options.",
-    "resultPresentation": "When advertised, whole-result Markdown preserves returned identifiers/timestamps as code spans and safe URLs as autolinks, neutralizes metadata controls/newlines and uses only the existing result. Selecting a format does not fetch bodies or add requests.",
     "inputExamples": [
       {
         "label": "Read project identity only",
@@ -385,15 +379,19 @@
   },
   "search": {
     "parentFilters": "Use parent = PROJ-100 for direct children, or parent IN (PROJ-100, 10001) for keys and positive decimal IDs. Also supports != and NOT IN. Projects narrow children; parent references may name inaccessible projects and reveal relationships without parent lookups or parent metadata. Search permission suffices. Embedded issue.view hierarchy remains gated by effective all-project access. No parentEpic, recursion, EMPTY, functions or parent sorting. Negative parent filters alone require finite projects or an additional filter.",
-    "resultMetadata": "Search results contain issue timestamps, small user summaries, priority and labels when supplied. They omit description bodies, detailed issue context, customFields, parent, subtasks and issueLinks. Whole-result formatting does not fetch those fields; use a separately authorized issue.view when needed.",
+    "resultMetadata": "Search results contain issue timestamps, small user summaries, priority and labels when supplied. They omit description bodies, detailed issue context, customFields, parent, subtasks and issueLinks. The Broker does not fetch those fields; use a separately authorized issue.view when needed.",
     "fieldDiscovery": "Use jira.project.view to discover a project's searchable fields and supported operators. Exclusions and text negation are advertised only when Jira reports the operator and Broker supports it. Insert the returned jqlReference such as cf[12345]; do not use the display name or customfield_12345. Text ~ and !~ use Jira text-search semantics rather than whole-value comparisons. Jira validates each custom field's configured type and searcher when searching; discovery is not a prerequisite. Field/operator combinations rejected by Jira return the existing generic upstream_failed response.",
-    "resultPresentation": "When advertised, whole-result Markdown preserves returned identifiers/timestamps as code spans and safe URLs as autolinks, neutralizes metadata controls/newlines and uses only the existing result. Selecting a format does not fetch bodies or add requests.",
     "inputExamples": [
       {
         "label": "Find direct children by parent key or numeric ID",
         "inputs": {
-          "query": {"type": "jql", "value": "parent IN (PROJ-100, 10001) ORDER BY key"},
-          "projects": ["PROJ"]
+          "query": {
+            "type": "jql",
+            "value": "parent IN (PROJ-100, 10001) ORDER BY key"
+          },
+          "projects": [
+            "PROJ"
+          ]
         }
       },
       {
@@ -486,7 +484,7 @@
   },
   "verify": {
     "scope": "Authorization is by Jira project. Use the issue key, not a policy resource ID; an issue locator does not introduce a separate issue grant.",
-    "expectations": "Give at least expectCommentId or expectAttachmentId with the issue key. Use returned comment/attachment IDs from the preceding operation. Read verification.status to distinguish matched from mismatch; verification has its own project authorization and is available as whole-result Markdown when advertised.",
+    "expectations": "Give at least expectCommentId or expectAttachmentId with the issue key. Use returned comment/attachment IDs from the preceding operation. Read verification.status to distinguish matched from mismatch; verification has its own project authorization and retains structured JSON results.",
     "inputExamples": [
       {
         "label": "Canonical inputs",
@@ -496,7 +494,65 @@
         }
       }
     ],
-    "resultPresentation": "When advertised, whole-result Markdown preserves returned identifiers/timestamps as code spans and safe URLs as autolinks, neutralizes metadata controls/newlines and uses only the existing result. Selecting a format does not fetch bodies or add requests.",
     "typedCommand": "Typed CLI wrapper: agent-access jira issue verify [OPTIONS] <ISSUE>; run agent-access jira issue verify --help for flags and input alternatives."
+  },
+  "issue.transition.list": {
+    "workflow": "Discover the next transitions on this issue, then select a transitionId and its to.id for issue.transition.apply. Different projects and issue types may have different workflows. Keep list and apply grants in the same credential mode when possible; apply independently rechecks with its own selected execution credential. No workflow bypass flags are exposed.",
+    "result": "Returns issue identity, currentStatus with id/name/statusCategory, and transitions with id/name/to/hasScreen. Each collection contains at most 100 entries and reports count and truncated. includeFields adds fields.items with id/name/required/hasDefaultValue/brokerInput; only resolution advertises brokerInput=resolutionId and bounded allowedValues, and is projected first so it survives field truncation. Other field values, defaults, URLs and arbitrary schema objects are withheld. A missing fields value is null, meaning Jira did not supply metadata. Names are limited to 1024 UTF-8 bytes, numeric IDs to 64 bytes; malformed or oversized entries fail. Each upstream response is capped at the smaller of 1 MiB and the configured upstream response limit.",
+    "requirements": "The list describes Jira availability under this action's credential, not authority or guaranteed success for apply. An empty list may reflect permissions or current state. Field requirements are informative; existing values, defaults and workflow validators remain Jira-controlled. Unsupported submitted fields require a separately designed operation; apply never chains field or comment writes.",
+    "typedCommand": "Typed CLI wrapper: agent-access jira issue transition list [OPTIONS] [ISSUE]; run agent-access jira issue transition list --help for flags and input alternatives.",
+    "inputExamples": [
+      {
+        "label": "Available transitions",
+        "inputs": {
+          "issue": "PROJ-123"
+        }
+      },
+      {
+        "label": "Include screen requirements",
+        "inputs": {
+          "url": "https://example.atlassian.net/browse/PROJ-123",
+          "includeFields": true
+        }
+      }
+    ],
+    "scope": "Authorization is by Jira project. Use an issue key or accepted browser URL; the current project is resolved and reconfirmed through issue metadata."
+  },
+  "issue.transition.apply": {
+    "workflow": "Apply exactly one transitionId discovered for this issue and its toStatusId. The issue is resolved for project authorization and reconfirmed; current status and selected transition are checked with the execution credential, and the POST targets the confirmed immutable issue ID. expectedIssueId and expectedStatusId are optional pre-send guards. Destination/current-state checks are not atomic with the POST and cannot establish safe replay.",
+    "fields": "Only optional resolutionId is submitted as fields.resolution.id. No custom fields, comments, descriptions, arbitrary fields/update, history metadata, properties or notification controls are accepted. Jira validates resolution and other workflow requirements. The action delegates the selected workflow transition, including Jira-controlled post-functions, automation and notifications. Existing issue-edit or custom-field grants do not grant this action.",
+    "result": "Jira acceptance returns status=transitioned and transitionId/fromStatusId/toStatusId. A compact readback yields verification.status=matched or differs and verification.observedStatus. A difference is a successful observation, not a failed mutation; neither value proves this request caused the observed state. If the readback fails, the error carries applied_unverified with post_transition_readback. A timeout, disconnect or ambiguous upstream failure may leave an unknown outcome; never automatically replay. The ordinary one-time Atlassian OAuth 401 renewal remains supported.",
+    "errors": "jira_transition_unavailable means the transition or expected state/destination did not match before sending, or Jira rejected the POST with HTTP 409. A POST conflict has no mutation receipt; rediscover before selecting a transition. jira_transition_rejected means Jira rejected the submitted transition; check permissions, workflow requirements and resolution. Errors do not enumerate other transitions or expose raw Jira validation messages. A read-only caller cannot apply transitions. List and apply grants are independent and can select different credentials; discovery is advisory.",
+    "typedCommand": "Typed CLI wrapper: agent-access jira issue transition apply [OPTIONS] --transition-id <TRANSITION_ID> --to-status-id <TO_STATUS_ID> [ISSUE]; run agent-access jira issue transition apply --help for flags and input alternatives.",
+    "inputExamples": [
+      {
+        "label": "Transition to the discovered destination",
+        "inputs": {
+          "issue": "PROJ-123",
+          "transitionId": "31",
+          "toStatusId": "10002"
+        }
+      },
+      {
+        "label": "Guard issue identity and current status",
+        "inputs": {
+          "issue": "PROJ-123",
+          "transitionId": "31",
+          "toStatusId": "10002",
+          "expectedIssueId": "10001",
+          "expectedStatusId": "10000"
+        }
+      },
+      {
+        "label": "Transition with a permitted resolution",
+        "inputs": {
+          "issue": "PROJ-123",
+          "transitionId": "41",
+          "toStatusId": "10003",
+          "resolutionId": "1"
+        }
+      }
+    ],
+    "scope": "Authorization is by Jira project. Use an issue key or accepted browser URL; the current project is resolved and reconfirmed through issue metadata."
   }
 }

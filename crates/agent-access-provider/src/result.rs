@@ -1,5 +1,5 @@
 use crate::host::HostPort;
-use crate::{Decision, ProviderReason, ProviderReasonDefinition, ReasonCode};
+use crate::{Decision, MutationReceipt, ProviderReason, ProviderReasonDefinition, ReasonCode};
 use bytes::Bytes;
 use futures_util::{Stream, StreamExt, stream};
 use serde::{Deserialize, Serialize};
@@ -32,6 +32,9 @@ pub struct ProviderResult {
     pub result: Value,
     #[serde(skip)]
     pub stream: Option<ProviderResultStream>,
+    /// Provider-confirmed completion retained only if result presentation fails.
+    #[serde(skip)]
+    pub presentation_recovery_receipt: Option<MutationReceipt>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audit: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -49,11 +52,19 @@ impl ProviderResult {
         Self {
             result,
             stream: None,
+            presentation_recovery_receipt: None,
             audit: None,
             upstream_status: None,
             upstream_duration_ms: None,
             object_ids: None,
         }
+    }
+
+    /// Retains a provider-authored completed mutation receipt independently of
+    /// presentation. This metadata is never part of the serialized result.
+    pub fn with_presentation_recovery_receipt(mut self, receipt: MutationReceipt) -> Self {
+        self.presentation_recovery_receipt = Some(receipt);
+        self
     }
 
     /// Streams `stream` as the response body; `result` becomes its metadata.
@@ -561,6 +572,24 @@ impl ProviderCredentialVerification {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn completed_presentation_receipt_is_never_serialized_or_reconstructed() {
+        let result = super::ProviderResult::new(serde_json::json!({"id": 42}))
+            .with_presentation_recovery_receipt(crate::MutationReceipt::applied());
+        assert_eq!(
+            result
+                .presentation_recovery_receipt
+                .as_ref()
+                .unwrap()
+                .status(),
+            crate::MutationStatus::Applied
+        );
+        let wire = serde_json::to_value(&result).unwrap();
+        assert_eq!(wire, serde_json::json!({"result": {"id": 42}}));
+        let decoded: super::ProviderResult = serde_json::from_value(wire).unwrap();
+        assert!(decoded.presentation_recovery_receipt.is_none());
+    }
+
     use super::*;
     use wiremock::matchers::path;
     use wiremock::{Mock, MockServer, ResponseTemplate};

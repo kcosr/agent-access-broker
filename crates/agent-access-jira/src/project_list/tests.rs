@@ -22,8 +22,8 @@ fn provider(
 }
 fn scope() -> SearchAuthorizationScope {
     SearchAuthorizationScope::from_selectors(
-        vec![ResourceSelector::All],
-        vec![ResourceSelector::Exact {
+        vec![ScalarResourceSelector::All],
+        vec![ScalarResourceSelector::Exact {
             value: "DENIED".into(),
         }],
     )
@@ -185,7 +185,7 @@ async fn independent_allow_preserves_an_excluded_project_and_previews_are_bounde
     candidate["name"] = json!("界".repeat(2000));
     mount(&server, 0, 50, true, json!([candidate])).await;
     let authority = scope().union(&SearchAuthorizationScope::from_selectors(
-        vec![ResourceSelector::Exact {
+        vec![ScalarResourceSelector::Exact {
             value: "DENIED".into(),
         }],
         vec![],
@@ -216,7 +216,7 @@ async fn continuations_reject_changed_authority_inputs_config_and_identity_befor
         invocation(json!({"maxResults":1,"pageToken":token}), scope()),
         invocation(
             json!({"maxResults":2,"pageToken":token}),
-            SearchAuthorizationScope::from_selectors(vec![ResourceSelector::All], vec![]),
+            SearchAuthorizationScope::from_selectors(vec![ScalarResourceSelector::All], vec![]),
         ),
         InvocationBuilder::from(base.clone())
             .principal("another")

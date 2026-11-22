@@ -11,6 +11,8 @@ const CLOUD: &str = "11111111-2222-4333-8444-555555555555";
 const ROUTE: &str =
     "/ex/confluence/11111111-2222-4333-8444-555555555555/wiki/rest/api/content/search";
 const QUERY: &str = "space != PRIVATE AND space NOT IN (ARCHIVE, SANDBOX) AND id != 999 AND content.id NOT IN (888, 777) AND title !~ \"obsolete\" AND text !~ \"deprecated\"";
+const FINITE: &str = r#"(((space = "ENG" OR space = "OPS")))"#;
+const NARROW: &str = r#"((space = "ENG"))"#;
 const CANONICAL: &str = "space != PRIVATE AND space NOT IN (ARCHIVE, SANDBOX) AND id != 999 AND id NOT IN (888, 777) AND title !~ \"obsolete\" AND text !~ \"deprecated\"";
 
 async fn start(server: &MockServer, shape: GrantShape) -> (RunningBroker, Tokens) {
@@ -160,7 +162,7 @@ async fn confluence_exclusions_keep_token_scope_across_cli_send_http_and_mcp() {
         );
         assert_eq!(server.received_requests().await.unwrap().len(), before);
         let qualified = format!("confluence.{action}");
-        let expected = format!("type = {kind} AND space IN (ENG) AND ({CANONICAL})");
+        let expected = format!("type = {kind} AND ({FINITE} AND {NARROW}) AND ({CANONICAL})");
         for value in [
             access::run(
                 &broker,
@@ -250,7 +252,7 @@ async fn confluence_exclusions_keep_token_scope_across_cli_send_http_and_mcp() {
         );
         last_query(
             &server,
-            &format!("type = {kind} AND space IN (ENG) AND ({grouped})"),
+            &format!("type = {kind} AND ({FINITE} AND {NARROW}) AND ({grouped})"),
         )
         .await;
         allowed(
@@ -265,7 +267,7 @@ async fn confluence_exclusions_keep_token_scope_across_cli_send_http_and_mcp() {
         );
         last_query(
             &server,
-            &format!("type = {kind} AND space IN (ENG) AND (title ~ \"*\")"),
+            &format!("type = {kind} AND ({FINITE} AND {NARROW}) AND (title ~ \"*\")"),
         )
         .await;
         allowed(
@@ -280,7 +282,7 @@ async fn confluence_exclusions_keep_token_scope_across_cli_send_http_and_mcp() {
         );
         last_query(
             &server,
-            &format!("type = {kind} AND space IN (ENG, OPS) AND ({CANONICAL})"),
+            &format!("type = {kind} AND ({FINITE}) AND ({CANONICAL})"),
         )
         .await;
 
@@ -321,10 +323,11 @@ async fn confluence_exclusions_keep_token_scope_across_cli_send_http_and_mcp() {
         }
         assert_eq!(server.received_requests().await.unwrap().len(), before);
         *returned.lock().unwrap() = "OPS".into();
-        access::denied(
-            &access::invoke(&broker, &tokens.narrowed, &qualified, &inputs(QUERY), false),
-            "scope_unresolved",
-        );
+        let filtered = access::invoke(&broker, &tokens.narrowed, &qualified, &inputs(QUERY), true);
+        allowed(&filtered, action);
+        let collection = if action == "search" { "pages" } else { "blogs" };
+        assert_eq!(filtered["result"][collection].as_array().unwrap().len(), 1);
+        assert!(!filtered.to_string().contains("DENIED_CONTENT"));
         assert_eq!(server.received_requests().await.unwrap().len(), before + 1);
         *returned.lock().unwrap() = "ENG".into();
     }
@@ -358,7 +361,7 @@ async fn confluence_exclusions_keep_all_except_policy_for_pages_and_blogs() {
         );
         last_query(
             &server,
-            &format!("type = {kind} AND space NOT IN (PRIVATE) AND ({CANONICAL})"),
+            &format!("type = {kind} AND ((((type = {kind}) AND NOT (space = \"PRIVATE\")))) AND ({CANONICAL})"),
         )
         .await;
         let grouped = "space = PRIVATE OR (title !~ \"obsolete\" AND text !~ \"deprecated\")";
@@ -374,7 +377,7 @@ async fn confluence_exclusions_keep_all_except_policy_for_pages_and_blogs() {
         );
         last_query(
             &server,
-            &format!("type = {kind} AND space NOT IN (PRIVATE) AND ({grouped})"),
+            &format!("type = {kind} AND ((((type = {kind}) AND NOT (space = \"PRIVATE\")))) AND ({grouped})"),
         )
         .await;
         allowed(
@@ -383,21 +386,22 @@ async fn confluence_exclusions_keep_all_except_policy_for_pages_and_blogs() {
         );
         last_query(
             &server,
-            &format!("type = {kind} AND space IN (ENG) AND ({CANONICAL})"),
+            &format!("type = {kind} AND ((((type = {kind}) AND NOT (space = \"PRIVATE\"))) AND {NARROW}) AND ({CANONICAL})"),
         )
         .await;
         *returned.lock().unwrap() = "PRIVATE".into();
-        access::denied(
-            &access::http(
-                &broker,
-                &tokens.unrestricted,
-                "confluence",
-                action,
-                &inputs(QUERY),
-            )
-            .await,
-            "scope_unresolved",
-        );
+        let filtered = access::http(
+            &broker,
+            &tokens.unrestricted,
+            "confluence",
+            action,
+            &inputs(QUERY),
+        )
+        .await;
+        allowed(&filtered, action);
+        let collection = if action == "search" { "pages" } else { "blogs" };
+        assert_eq!(filtered["result"][collection].as_array().unwrap().len(), 1);
+        assert!(!filtered.to_string().contains("DENIED_CONTENT"));
         *returned.lock().unwrap() = "ENG".into();
     }
     stop(broker).await;

@@ -76,7 +76,7 @@ async fn download(
         );
     }
     let result = provider
-        .invoke_checked(draft_invocation(action, inputs))
+        .invoke_fixture(draft_invocation(action, inputs))
         .await;
     (
         result,

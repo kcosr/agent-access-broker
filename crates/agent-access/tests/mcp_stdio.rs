@@ -12,8 +12,12 @@ mod imports;
 mod mcp_output;
 #[path = "mcp_stdio/names.rs"]
 mod names;
+#[path = "mcp_stdio/output_content.rs"]
+mod output_content;
 #[path = "mcp_stdio/rate_wait.rs"]
 mod rate_wait;
+#[path = "mcp_stdio/text_copy.rs"]
+mod text_copy;
 
 use agent_access_broker_host::test_support::{FixtureDir, IsolatedBroker, RunningBroker};
 use agent_access_core::mcp::OutputSchemas;
@@ -51,7 +55,7 @@ impl McpProcess {
     }
 
     fn start_view(config: &Path, service: Option<&str>) -> Self {
-        Self::start_selecting(config, service, Some(OutputSchemas::On))
+        Self::start_options(config, service, Some(OutputSchemas::On), None)
     }
 
     /// `selection` is the `--output-schemas` value; `None` omits the option.
@@ -59,6 +63,23 @@ impl McpProcess {
         config: &Path,
         service: Option<&str>,
         selection: Option<OutputSchemas>,
+    ) -> Self {
+        Self::start_options(config, service, selection, None)
+    }
+
+    fn start_with_text_copy(
+        config: &Path,
+        service: Option<&str>,
+        include_text_copy: Option<bool>,
+    ) -> Self {
+        Self::start_options(config, service, Some(OutputSchemas::On), include_text_copy)
+    }
+
+    fn start_options(
+        config: &Path,
+        service: Option<&str>,
+        selection: Option<OutputSchemas>,
+        include_text_copy: Option<bool>,
     ) -> Self {
         let mut command = Command::new(env!("CARGO_BIN_EXE_agent-access"));
         // A developer's ambient broker/token configuration must never change
@@ -73,6 +94,9 @@ impl McpProcess {
             command.args(["--service", service]);
         }
         command.args(mcp_output::output_schema_arguments(selection));
+        if let Some(include_text_copy) = include_text_copy {
+            command.arg(format!("--include-text-copy={include_text_copy}"));
+        }
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -105,7 +129,8 @@ impl McpProcess {
             stderr,
             next_id: 1,
             service: service.map(str::to_owned),
-            tools: mcp_output::AdvertisedTools::new(selection, service),
+            tools: mcp_output::AdvertisedTools::new(selection, service)
+                .with_text_copy(include_text_copy.unwrap_or(true)),
         }
     }
 
@@ -1028,8 +1053,8 @@ async fn mutation_output_failure_is_structured_and_does_not_repeat_the_operation
     let server = MockServer::start().await;
     // A deterministic broker response isolates a completed mutation from local output failure.
     let catalog = json!({
-        "version":"agent-access.catalog.v2","identity":{},"routes":[],
-        "send":{"version":"agent-access.send.v1","catalogRequired":true},
+        "version":"agent-access.catalog.v3","identity":{},"routes":[],
+        "send":{"version":"agent-access.send.v2","catalogRequired":true},
         "services":[{"service":"jira","displayName":"Jira","surface":"invoke", "scopedMcpReady":true,"availability":{"state":"available","requirements":[],"message":"Locally available"},"scopeTypes":[],"actions":[{
             "action":"issue.update", "scopedMcpName":"issue.update","readOnly":false,"description":"Update an issue","requiredScopeTypes":[],"credentialModes":[],
             "inputSchema":{"type":"object"},"io":{"type":"json"},"responseKind":"response_envelope","exitPolicy":"invoke_decision",

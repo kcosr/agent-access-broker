@@ -143,6 +143,7 @@ fn create(
     runtime.create_managed_resource(CreateResourceRequest {
         id: Some(id.into()),
         display_name: None,
+        browser_url: None,
         resource_type: TYPE.id().clone(),
         selector,
         attributes: values,
@@ -207,6 +208,7 @@ fn patch(id: &str, version: i64) -> PatchResourceRequest {
         expected_version: version,
         attributes: Default::default(),
         display_name: None,
+        browser_url: None,
         resource_type: None,
         selector: None,
         allowed_execution_contexts: None,

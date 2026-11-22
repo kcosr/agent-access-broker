@@ -245,8 +245,12 @@ pub(crate) async fn action_describe(
     {
         bail!("unsupported broker catalog version");
     }
-    let catalog: ApiCatalog = serde_json::from_value(catalog_value.clone())
+    let mut catalog: ApiCatalog = crate::parse_runtime_catalog(catalog_value.clone())
         .map_err(|_| anyhow::anyhow!("invalid broker catalog"))?;
+    agent_access_core::mcp::apply_output_content_preference(
+        &mut catalog,
+        settings.preferred_output_content_format,
+    );
     let entry = catalog.services.iter().find(|candidate| candidate.service == service && candidate.surface == "invoke")
         .and_then(|service| service.actions.iter().find(|candidate| candidate.action == action))
         .ok_or_else(|| InputError("action detail is unavailable in the caller-visible catalog; request service capabilities or refresh discovery".into()))?;
@@ -258,13 +262,14 @@ pub(crate) async fn action_describe(
         );
     }
     // Preserve public action details, excluding MCP projection source metadata.
-    let detail = catalog_value["services"]
+    let mut detail = catalog_value["services"]
         .as_array()
         .and_then(|services| services.iter().find(|value| value["service"] == service))
         .and_then(|service| service["actions"].as_array())
         .and_then(|actions| actions.iter().find(|value| value["action"] == action))
         .cloned()
         .context("invalid broker catalog action")?;
+    agent_access_core::mcp::merge_action_content_detail(&mut detail, entry);
     // A helper can perform several broker reads. Rebuild from this fresh
     // catalog so the selected name and schema share one snapshot.
     let registry = agent_access_core::mcp::ToolRegistry::build(
@@ -296,8 +301,7 @@ mod tests {
             identity_header: "X-Agent-Access-Identity-Token".into(),
             identity_scheme: "raw".into(),
             allow_insecure_broker_http: false,
-            read_content_format: Default::default(),
-            output_format: Default::default(),
+            preferred_output_content_format: None,
         }
     }
     fn service(surface: &str) -> Value {
@@ -315,7 +319,7 @@ mod tests {
         action["responseKind"] = json!("response_envelope");
         action["exitPolicy"] = json!("invoke_decision");
         action["sensitiveOutputPointers"] = json!(["/result/token"]);
-        action["responseFormats"] = json!(["json"]);
+        action["outputContentFormats"] = json!([]);
         let mut catalog =
             serde_json::to_value(agent_access_core::empty_catalog(json!({}))).unwrap();
         catalog["services"] = json!([{"scopedMcpReady":true,"service":raw["service"],"displayName":"GitLab","surface":"invoke","availability":{"state":"available","requirements":[],"message":"Locally available"},"scopeTypes":["repository"],"actions":[action]}]);
@@ -419,6 +423,48 @@ mod tests {
                 .remove("outputSchema");
             assert_eq!(off, stripped);
         }
+    }
+
+    #[tokio::test]
+    async fn describe_reports_connection_preference_without_changing_canonical_capabilities() {
+        use agent_access_provider::presentation::{BodyField, OutputContentFormat};
+        let server = MockServer::start().await;
+        let raw = service("invoke");
+        let mut canonical = catalog(&raw);
+        let action = &mut canonical["services"][0]["actions"][0];
+        action["outputContentFormats"] = json!(["markdown", "text"]);
+        action["nativeOutputContentFormat"] = json!("markdown");
+        action["defaultOutputContentFormat"] = json!("text");
+        action["bodyFields"] = json!([BodyField::new("/result", "description").nullable()]);
+        mount(&server, "/v1/services/gitlab", 200, raw).await;
+        mount(&server, "/v1/spec/catalog", 200, canonical.clone()).await;
+        for (preference, expected) in [
+            (None, "text"),
+            (Some(OutputContentFormat::Storage), "markdown"),
+            (Some(OutputContentFormat::Text), "text"),
+        ] {
+            let mut connection = settings(&server);
+            connection.preferred_output_content_format = preference;
+            let detail = action_describe(
+                &connection,
+                &agent_access_core::mcp::McpView::Aggregate,
+                agent_access_core::mcp::OutputSchemas::On,
+                "gitlab",
+                "repo.fetch",
+            )
+            .await
+            .unwrap();
+            assert_eq!(detail["defaultOutputContentFormat"], expected);
+            assert_eq!(detail["nativeOutputContentFormat"], "markdown");
+            assert_eq!(detail["outputContentFormats"], json!(["markdown", "text"]));
+            let exact = &detail["mcpTool"]["inputSchema"]["properties"]["outputContentFormat"];
+            assert!(exact.get("default").is_none());
+            assert!(exact["description"].as_str().unwrap().contains(expected));
+        }
+        assert_eq!(
+            canonical["services"][0]["actions"][0]["defaultOutputContentFormat"],
+            "text"
+        );
     }
 
     #[tokio::test]
@@ -713,6 +759,42 @@ mod tests {
             .unwrap(),
             page
         );
+    }
+
+    #[tokio::test]
+    async fn resource_access_preserves_conditional_location_coverage_without_scalar_aliases() {
+        let server = MockServer::start().await;
+        let page = json!({
+            "service":"confluence", "executionContext":"default",
+            "availability":{"state":"available","requirements":[],"message":"Locally available"},
+            "coverageSemantics":"single_target",
+            "access":[{"action":"page.view","scope":"location","resourceTypes":["confluence_space","confluence_content"],
+                "domain":"page","enforcement":"request","containmentVerification":"at_invocation",
+                "coverage":[{"resourceType":"confluence_content","selector":{"kind":"subtree","value":"https://example.atlassian.net/wiki/content/folder/12"},"restricted":true,"conditional":true}]}],
+            "registeredResources":{"source":"broker_configuration","items":[],"nextCursor":null},"liveListings":[]
+        });
+        Mock::given(method("GET"))
+            .and(path("/v1/services/confluence/resource-access"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&page))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let actual = resource_access_describe(
+            &settings(&server),
+            "confluence",
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(actual, page);
+        assert!(actual["access"][0].get("resourceType").is_none());
+        assert!(actual["access"][0].get("boundaries").is_none());
+        assert!(actual["access"][0].get("clauses").is_none());
+        server.verify().await;
     }
 
     #[tokio::test]

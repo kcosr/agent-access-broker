@@ -119,6 +119,7 @@ impl BrokerRuntime {
         let fallback = FinalizeContext {
             admission: context.admission,
             search_authorization: None,
+            location_authorization: None,
             command: None,
             agent_request_id: context.operation.agent_request_id.clone(),
             broker_request_id: context.operation.broker_request_id.clone(),

@@ -6,6 +6,41 @@ All notable changes to this project are documented in this file.
 
 ### Breaking Changes
 
+- **Rich bodies now use one `{format, value}` representation, with Markdown
+  preferred by default on HTTP, CLI and both MCP transports.** This changes
+  responses even for callers that send no format selector. Ordinary results
+  remain JSON; update consumers of native body fields and `renderedBody`.
+  Replace `readContentFormat`/`--read-content-format` with the strict
+  `outputContentFormat`/`--output-content-format`; remove `responseFormat`,
+  invocation `--output-format` and retired client settings. Upgrade the Broker,
+  CLI/stdio and SDK consumers together for `agent-access.catalog.v3`,
+  `agent-access.send.v2`, typed `bodyFields` and the new selected-content codec
+  contracts. CLI invocation now requires an authenticated discovery identity,
+  including against Brokers that permit anonymous direct HTTP invocation.
+  Refresh MCP discovery and saved request files. Binary transfers
+  and `spec --output-format json` retain their behavior. See the
+  [upgrade instructions](docs/operator-guide.md#upgrade-and-rollback) and
+  [response formats](docs/http-api.md).
+  ([#123](https://github.com/kcosr/agent-access-broker/pull/123))
+
+- **Confluence content grants add migrations `038_confluence_content_resources`
+  and `039_resource_browser_urls`.**
+  Back up first and upgrade Broker, CLI and portal together; rollback needs the
+  matching pre-migration database. Resolve existing drafts before upgrading to
+  typed-parent v5 handles. Page creation takes `parent: {kind, id}` or `parentUrl`,
+  and the CLI uses `--parent-kind` with `--parent-id`. Access previews/options now
+  distinguish unscoped, scalar and location authority; grant-selection previews
+  require `credentialMode`. Service scope metadata declares
+  `matching: "scalar"` or `"containment"`. SDK consumers must use the explicit scalar and
+  containment contracts. See [content access](docs/confluence-content-access.md).
+  Configure proof and scan limits under `[providers.confluence.content_access]`
+  and `[providers.confluence.content_search]`. The latter's
+  `max_encoded_request_target_bytes` defaults to 4096 for the complete composed
+  search request, so previously accepted large queries or grant sets may now
+  fail with `scope_unresolved`. Raise it only after qualifying the selected
+  upstream route; the independent absolute-URI ceiling still applies.
+  ([#122](https://github.com/kcosr/agent-access-broker/pull/122))
+
 - **Application access adds managed-store migration `037_application_access`.**
   Back up first and upgrade Broker and CLI together; rollback requires the
   matching pre-migration database and binary. The migration changes no existing
@@ -113,10 +148,9 @@ All notable changes to this project are documented in this file.
   constructing `AdmittedRequestParts` must supply `companion_reads_authorized`.
   Set it to `false` unless the host proves every declared direct companion read
   for the admitted resources in the selected credential mode. `ApiActionSpec`
-  literals also require `companion_read_actions` and
-  `optional_rendered_body_owner_prefixes`; use empty vectors when the respective
-  declarations are absent. Upgrade the CLI with the Broker for embedded formatted
-  issue reads: older clients cannot interpret optional body-owner prefixes.
+  literals also require `companion_read_actions`; use an empty vector when the
+  declaration is absent. Upgrade the CLI with the Broker for optional included
+  comment bodies; their declared presence is now expressed by `bodyFields`.
   See [the provider SDK](docs/provider-sdk.md#companion-reads) and
   [presentation metadata](docs/http-api.md).
   ([#84](https://github.com/kcosr/agent-access-broker/pull/84))
@@ -187,39 +221,66 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
-- **MCP connections can advertise output schemas.** The choice is made per
-  connection and is off by default: HTTP MCP accepts `outputSchemas=on|off` as
-  the only query on `/mcp` and `/mcp/{service}`, evaluated on every request,
-  and stdio takes `agent-access mcp serve --output-schemas on|off`. With `on`,
-  native and imported action tools and the five discovery helpers publish an
-  `outputSchema` describing the `structuredContent` they already return,
-  including denials, failures, stdio file receipts and HTTP MCP delivery
-  failures; the action payload is `structuredContent.result`. With `off`, MCP
-  output-schema metadata is omitted. Tool names, inputs, results and the
-  catalog version are the same either way. See
-  [output schemas](docs/mcp.md#output-schemas).
+- **Action output schemas make result fields discoverable.** Catalog actions
+  expose provider `resultSchemas`; OpenAPI types their response envelopes, and
+  MCP clients can opt into `outputSchema` with HTTP `outputSchemas=on` or stdio
+  `--output-schemas on` (default `off`). Schemas describe selected rich-text
+  bodies, failures and file receipts without changing invocation results, and
+  combine with content preferences and optional text copies. Provider authors
+  declare and test payload schemas through the SDK. See
+  [output schemas](docs/mcp.md#output-schemas) and
+  [provider result schemas](docs/provider-sdk.md#result-schemas).
   ([#111](https://github.com/kcosr/agent-access-broker/pull/111),
   [#112](https://github.com/kcosr/agent-access-broker/pull/112),
   [#119](https://github.com/kcosr/agent-access-broker/pull/119))
 
-- **Catalog result schemas and typed OpenAPI responses.** Catalog actions add
-  optional `resultSchemas` (`success`, optional `error`), and OpenAPI invoke
-  operations type the envelope's `result` with a `default` error response.
-  On an MCP connection that advertises output schemas, action detail returns
-  `mcpTool.outputSchema` in their place for an action that is a tool there; a
-  connection that omits output schemas returns neither. See
-  [result schemas](docs/http-api.md#result-schemas-and-typed-responses).
-  ([#111](https://github.com/kcosr/agent-access-broker/pull/111),
-  [#112](https://github.com/kcosr/agent-access-broker/pull/112),
-  [#119](https://github.com/kcosr/agent-access-broker/pull/119))
+- **MCP clients can omit the duplicate text copy** with HTTP
+  `includeTextCopy=false` or stdio `mcp serve --include-text-copy=false`.
+  Both default to `true`. Tool results retain complete `structuredContent`,
+  error flags and metadata, including helpers, failures and file receipts.
+  Stdio local tool errors now also report their message at
+  `structuredContent.error.message` in both modes.
+  HTTP combines the option with `preferredOutputContentFormat` per request;
+  response limits count only the content emitted. See
+  [MCP text copies](docs/mcp.md#tool-result-text-copies).
+  ([#124](https://github.com/kcosr/agent-access-broker/pull/124))
 
-- **Provider SDK result schemas.** Providers declare payload schemas with
-  `ActionDescriptor::result_schemas`, `ActionResultSchemas` and bundled
-  `ResultSchemaBundle` files; descriptor validation enforces an authoring
-  profile and an 8 KiB budget, and `test_support::assert_result_conforms`
-  checks outcomes strictly. See [result schemas](docs/provider-sdk.md#result-schemas).
-  ([#111](https://github.com/kcosr/agent-access-broker/pull/111),
-  [#119](https://github.com/kcosr/agent-access-broker/pull/119))
+- **Output-content preferences** can be set per native service, client or MCP
+  connection. The first applicable preference selects a supported concrete
+  format or the action's declared native format; an explicit per-call selector
+  is strict. HTTP MCP accepts `preferredOutputContentFormat` on each request,
+  and stdio accepts `--preferred-output-content-format`. See
+  [configuration](docs/configuration.md) and [MCP](docs/mcp.md).
+  ([#123](https://github.com/kcosr/agent-access-broker/pull/123))
+
+- **Confluence grants and token restrictions cover exact pages/blogs and page or
+  folder subtrees.** Content identities bind site, kind and ID and follow external
+  cross-space moves; subtree membership uses current ancestry. The portal infers
+  content type/service from a URL, defaults new page locations to page-and-descendant
+  coverage in a two-option dropdown and normalizes on Save. Cancel discards the
+  whole resource edit; existing resources retain their saved coverage. Folder URLs
+  accept their optional title suffix. Content resources
+  retain the browser URL as optional navigation metadata, linked beneath the name
+  and coverage in the grant builder and correctable offline without changing the
+  target. HTTP `browserUrl`, TOML
+  `browser_url` and CLI `--browser-url` preserve it; URLs stay out of audit
+  snapshots, agent discovery and token options. Standalone space-key
+  and all-spaces editing remain available. Bounded location checks apply across
+  reads, writes, creation, moves, drafts, comments,
+  attachments and content-constrained search. Such searches add current metadata
+  reads and can fail while a restricted/deleted index candidate remains visible;
+  pure scalar-space searches retain their indexed path. Search preserves every
+  policy exclusion upstream and checks results before release. Conditional
+  space/content mixed-mode overlap is resolved at invocation, and protected move
+  diagnostics identify the required configured root or proof-budget exhaustion. See [content access](docs/confluence-content-access.md).
+  ([#122](https://github.com/kcosr/agent-access-broker/pull/122))
+
+- **Jira issue workflow transitions.** Discover available transitions and apply
+  one selected transition with independent project grants and typed CLI commands.
+  Optional issue/status guards and resolution IDs support basic workflow changes;
+  readback reports the observed status and uncertain writes remain unsafe to retry.
+  See [Jira transitions](docs/providers-jira.md#issue-workflow-transitions).
+  ([#121](https://github.com/kcosr/agent-access-broker/pull/121))
 
 - **Administrators can inspect and disconnect personal OAuth connections.**
   Administrators and auditors see current status and nonsecret connected-account
@@ -480,6 +541,13 @@ All notable changes to this project are documented in this file.
 
 ### Changed
 
+- **Confluence page writes use the v2 API and validate typed placement.**
+  `page.update` accepts `baseVersion` from 1 through 2147483646; a measured stale
+  version remains `version_conflict`, while an upstream 409 returns
+  `confluence_update_conflict` without claiming a current version. See
+  [page writes](docs/providers-confluence.md#pagecreate-pageupdate-and-pagemove).
+  ([#122](https://github.com/kcosr/agent-access-broker/pull/122))
+
 - **Portal pages are served with `Referrer-Policy: no-referrer`.** Requests a
   portal page makes no longer send the page's address.
   ([#113](https://github.com/kcosr/agent-access-broker/pull/113))
@@ -598,6 +666,14 @@ All notable changes to this project are documented in this file.
   ([#53](https://github.com/kcosr/agent-access-broker/pull/53))
 
 ### Fixed
+
+- **Completed mutations retain their outcome when response formatting fails.**
+  Body-bearing native writes provide a nonserialized recovery receipt; failed
+  selection or result-size enforcement returns `mutationStatus: "applied"` and
+  `retrySafe: false`. Invalid successful content received by CLI or stdio
+  produces a bounded `response_content_invalid` receipt without returning the
+  rejected body or replaying the operation. See [output handling](docs/cli.md).
+  ([#123](https://github.com/kcosr/agent-access-broker/pull/123))
 
 - A browser session that expires while a portal page is open now shows the
   sign-in choices again, instead of "No browser sign-in method is enabled" until

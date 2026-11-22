@@ -435,3 +435,633 @@ async fn token_options_offer_no_mcp_endpoint_when_tokens_are_not_bearer_credenti
         assert_token_option_metadata(&options);
     }
 }
+
+/// The service has no stored execution or lookup credentials. Location entry
+/// must remain usable for onboarding, without contacting the synthetic tenant.
+async fn resource_location_fixture() -> MetadataFixture {
+    metadata_fixture_with(|config| {
+        config.policy.authority = "managed".into();
+        config.policy.resources.clear();
+        config.policy.grants.clear();
+        config.providers.insert(
+            serde_json::from_value::<agent_access_confluence::ConfluenceProviderConfig>(json!({
+                "tenant_host": "docs.example.test",
+                "allowed_upstream_hosts": ["https://docs.example.test/wiki/**"]
+            }))
+            .unwrap(),
+        );
+        super::use_token_connection(config, "confluence", "atlassian-api-token", &["confluence"]);
+    })
+    .await
+}
+
+async fn location_request(
+    fixture: &MetadataFixture,
+    token: &str,
+    method: Method,
+    path: &str,
+    body: Option<Value>,
+) -> axum::response::Response {
+    authed_json_request(
+        fixture.app.clone(),
+        method,
+        path,
+        "resource-location",
+        "Authorization",
+        format!("Bearer {token}"),
+        body.as_ref().map(Value::to_string).as_deref(),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn resource_locations_are_offline_normalization_for_admins_and_auditors() {
+    let fixture = resource_location_fixture().await;
+    let runtime = fixture._broker.runtime();
+    let audit_path = Path::new(&runtime.config().audit.as_ref().unwrap().path);
+    let audit_before = read_audit_records(audit_path);
+    let revision = runtime.managed_store().unwrap().policy_revision().unwrap();
+    for token in [&fixture.admin_token, &fixture.auditor_token] {
+        let locations =
+            management_result(&fixture.app, token, "/v1/admin/policy/resource-locations").await;
+        assert_eq!(locations["services"].as_array().unwrap().len(), 1);
+        let service = &locations["services"][0];
+        assert_eq!(service["service"], "confluence");
+        assert_eq!(service["siteHost"], "docs.example.test");
+        assert!(
+            service["resourceTypes"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("confluence_content"))
+        );
+        assert_eq!(
+            service["normalizationRoute"],
+            "/v1/admin/policy/resource-locations/normalize"
+        );
+        for (coverage, path, resource_type, kind, value) in [
+            (
+                "space",
+                "/wiki/spaces/ENG/overview",
+                "confluence_space",
+                "space",
+                "ENG",
+            ),
+            (
+                "exact",
+                "/wiki/spaces/ENG/pages/123/Discarded-title",
+                "confluence_content",
+                "page",
+                "https://docs.example.test/wiki/content/page/123",
+            ),
+            (
+                "subtree",
+                "/wiki/spaces/ENG/folder/456",
+                "confluence_content",
+                "folder",
+                "https://docs.example.test/wiki/content/folder/456",
+            ),
+            (
+                "subtree",
+                "/wiki/spaces/ENG/folder/456/Operations+Runbooks",
+                "confluence_content",
+                "folder",
+                "https://docs.example.test/wiki/content/folder/456",
+            ),
+            (
+                "exact",
+                "/wiki/spaces/OtherAlias/pages/123/Another-title",
+                "confluence_content",
+                "page",
+                "https://docs.example.test/wiki/content/page/123",
+            ),
+            (
+                "subtree",
+                "/wiki/spaces/OtherAlias/pages/123",
+                "confluence_content",
+                "page",
+                "https://docs.example.test/wiki/content/page/123",
+            ),
+            (
+                "exact",
+                "/wiki/spaces/~Alex/blog/2026/01/02/789/Title",
+                "confluence_content",
+                "blog",
+                "https://docs.example.test/wiki/content/blog/789",
+            ),
+        ] {
+            let response = location_request(&fixture, token, Method::POST,
+                "/v1/admin/policy/resource-locations/normalize", Some(json!({
+                    "service":"confluence", "url":format!("https://docs.example.test{path}"), "coverage":coverage
+                }))).await;
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = response_json(response).await;
+            assert_eq!(body["result"]["resourceType"], resource_type);
+            assert_eq!(body["result"]["selector"]["value"], value);
+            assert_eq!(
+                body["result"]["selector"]["kind"],
+                if coverage == "space" {
+                    "exact"
+                } else {
+                    coverage
+                }
+            );
+            assert_eq!(body["result"]["locationKind"], kind);
+            assert!(body["result"].get("configuredSpaceKey").is_none());
+            assert_eq!(body["result"]["verification"], "not_checked");
+        }
+    }
+    assert_eq!(
+        runtime.managed_store().unwrap().policy_revision().unwrap(),
+        revision
+    );
+    assert!(
+        runtime
+            .managed_store()
+            .unwrap()
+            .resources()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(read_audit_records(audit_path), audit_before);
+
+    let created = location_request(
+        &fixture,
+        &fixture.auditor_token,
+        Method::POST,
+        "/v1/admin/policy/resources",
+        Some(json!({"resourceType":"confluence_content",
+            "selector":{"kind":"exact","value":"https://docs.example.test/wiki/content/page/123"},
+            "allowedExecutionContexts":["internal"]})),
+    )
+    .await;
+    assert_eq!(
+        created.status(),
+        StatusCode::FORBIDDEN,
+        "normalization grants no resource-write authority"
+    );
+
+    let discovery = location_request(
+        &fixture,
+        &fixture.admin_token,
+        Method::GET,
+        "/v1/resource-types",
+        None,
+    )
+    .await;
+    assert_eq!(discovery.status(), StatusCode::OK);
+    let discovery = response_json(discovery).await;
+    assert!(!discovery.to_string().contains("docs.example.test"));
+    assert!(!discovery.to_string().contains("normalizationRoute"));
+}
+
+#[tokio::test]
+async fn resource_location_scope_is_checked_before_service_settings_and_agent_tokens_are_denied() {
+    let fixture = resource_location_fixture().await;
+    let designate = location_request(
+        &fixture,
+        &fixture.admin_token,
+        Method::PATCH,
+        "/v1/admin/principals/alice/access",
+        Some(json!({"role":"service_policy_manager"})),
+    )
+    .await;
+    assert_eq!(designate.status(), StatusCode::OK);
+    let assign = location_request(
+        &fixture,
+        &fixture.admin_token,
+        Method::PUT,
+        "/v1/admin/policy/services/fake/managers/alice",
+        None,
+    )
+    .await;
+    assert_eq!(assign.status(), StatusCode::OK);
+    let locations = management_result(
+        &fixture.app,
+        &fixture.alice_user_token,
+        "/v1/admin/policy/resource-locations",
+    )
+    .await;
+    assert_eq!(locations, json!({"services":[]}));
+    for service in ["confluence", "does-not-exist"] {
+        let denied = location_request(&fixture, &fixture.alice_user_token, Method::POST,
+            "/v1/admin/policy/resource-locations/normalize", Some(json!({
+                "service":service,"url":"https://docs.example.test/wiki/spaces/ENG/pages/123","coverage":"exact"
+            }))).await;
+        assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+        let denied = response_json(denied).await;
+        assert_eq!(denied["reasonCode"], "management_denied");
+        assert!(!denied.to_string().contains("docs.example.test"));
+    }
+    let assign = location_request(
+        &fixture,
+        &fixture.admin_token,
+        Method::PUT,
+        "/v1/admin/policy/services/confluence/managers/alice",
+        None,
+    )
+    .await;
+    assert_eq!(assign.status(), StatusCode::OK);
+    let locations = management_result(
+        &fixture.app,
+        &fixture.alice_user_token,
+        "/v1/admin/policy/resource-locations",
+    )
+    .await;
+    assert_eq!(locations["services"].as_array().unwrap().len(), 1);
+    let normalized = location_request(&fixture, &fixture.alice_user_token, Method::POST,
+        "/v1/admin/policy/resource-locations/normalize", Some(json!({
+            "service":"confluence","url":"https://docs.example.test/wiki/spaces/BrowserAlias/pages/123","coverage":"exact"
+        }))).await;
+    assert_eq!(normalized.status(), StatusCode::OK);
+    assert_eq!(
+        response_json(normalized).await["result"]["selector"]["value"],
+        "https://docs.example.test/wiki/content/page/123"
+    );
+
+    let runtime = fixture._broker.runtime();
+    let token = runtime
+        .managed_store()
+        .unwrap()
+        .issue_broker_token(
+            runtime.broker_token_hasher().unwrap(),
+            agent_access_core::BrokerTokenIssueRequest {
+                principal_id: "admin".into(),
+                name: "agent token".into(),
+                token_class: agent_access_core::BrokerTokenClass::AgentInvoke,
+                scopes: json!({"readOnly":false,"allowedExecutionContexts":["internal"]}),
+                expires_at: None,
+                created_by: "test".into(),
+            },
+        )
+        .unwrap()
+        .token;
+    for (method, path, body) in [
+        (Method::GET, "/v1/admin/policy/resource-locations", None),
+        (
+            Method::POST,
+            "/v1/admin/policy/resource-locations/normalize",
+            Some(json!({
+                "service":"confluence","url":"https://docs.example.test/wiki/spaces/ENG/pages/123","coverage":"exact"
+            })),
+        ),
+    ] {
+        let response = location_request(&fixture, &token, method, path, body).await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            response_json(response).await["reasonCode"],
+            "broker_token_class_denied"
+        );
+    }
+}
+
+#[tokio::test]
+async fn resource_location_normalization_rejects_removed_fields_without_echoing_values() {
+    let fixture = resource_location_fixture().await;
+    for value in [json!("private-space-marker"), Value::Null] {
+        let response = location_request(
+            &fixture,
+            &fixture.admin_token,
+            Method::POST,
+            "/v1/admin/policy/resource-locations/normalize",
+            Some(json!({
+                "service":"confluence",
+                "url":"https://docs.example.test/wiki/spaces/ENG/pages/123/private-title-marker",
+                "coverage":"exact", "spaceKey":value
+            })),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = response_json(response).await;
+        assert_eq!(body["reasonCode"], "input_invalid");
+        assert!(!body.to_string().contains("private-space-marker"));
+        assert!(!body.to_string().contains("private-title-marker"));
+        assert!(!body.to_string().contains("spaceKey"));
+    }
+    let runtime = fixture._broker.runtime();
+    assert!(
+        runtime
+            .managed_store()
+            .unwrap()
+            .resources()
+            .unwrap()
+            .is_empty()
+    );
+    let audit = read_audit_text(Path::new(&runtime.config().audit.as_ref().unwrap().path));
+    assert!(!audit.contains("private-space-marker"));
+    assert!(!audit.contains("private-title-marker"));
+    assert!(!audit.contains("spaceKey"));
+}
+
+#[tokio::test]
+async fn resource_location_normalization_errors_never_echo_pasted_values() {
+    let fixture = resource_location_fixture().await;
+    for url in [
+        "https://docs.example.test/wiki/spaces/ENG/pages/123?private-marker=secret",
+        "https://private-marker:secret@docs.example.test/wiki/spaces/ENG/pages/123",
+        "https://private-marker.example.test/wiki/spaces/ENG/pages/123",
+    ] {
+        let response = location_request(
+            &fixture,
+            &fixture.admin_token,
+            Method::POST,
+            "/v1/admin/policy/resource-locations/normalize",
+            Some(json!({
+                "service":"confluence","url":url,"coverage":"exact"
+            })),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = response_json(response).await;
+        assert_eq!(body["reasonCode"], "input_invalid");
+        assert!(!body.to_string().contains("private-marker"));
+        assert!(!body.to_string().contains("secret"));
+    }
+    let runtime = fixture._broker.runtime();
+    let audit = read_audit_text(Path::new(&runtime.config().audit.as_ref().unwrap().path));
+    assert!(audit.contains("admin.policy.resource_locations.normalize"));
+    assert!(!audit.contains("private-marker"));
+    assert!(!audit.contains("secret"));
+}
+
+#[tokio::test]
+async fn resource_browser_urls_persist_as_versioned_navigation_metadata() {
+    let fixture = resource_location_fixture().await;
+    let original = "https://docs.example.test/wiki/spaces/ENG/folder/67890/Private-title-fixture";
+    let moved = "https://docs.example.test/wiki/spaces/OPS/folder/67890/Private-renamed-fixture";
+    let selector =
+        json!({"kind":"subtree","value":"https://docs.example.test/wiki/content/folder/67890"});
+    let path = "/v1/admin/policy/resources/browser-link";
+    let created = location_request(
+        &fixture,
+        &fixture.admin_token,
+        Method::POST,
+        "/v1/admin/policy/resources",
+        Some(
+            json!({"id":"browser-link", "resourceType":"confluence_content",
+            "selector":selector, "browserUrl":original,
+            "allowedExecutionContexts":["internal"]}),
+        ),
+    )
+    .await;
+    assert_eq!(created.status(), StatusCode::OK);
+    let created = response_json(created).await;
+    assert_eq!(created["result"]["record"]["browserUrl"], original);
+    assert_eq!(created["result"]["record"]["selector"], selector);
+    assert_eq!(created["result"]["record"]["version"], 1);
+
+    let read = location_request(&fixture, &fixture.auditor_token, Method::GET, path, None).await;
+    assert_eq!(read.status(), StatusCode::OK);
+    assert_eq!(response_json(read).await["result"]["browserUrl"], original);
+
+    for (version, patch, expected_url) in [
+        (
+            1,
+            json!({"displayName":"Operations documentation"}),
+            Some(original),
+        ),
+        (2, json!({"browserUrl":moved}), Some(moved)),
+        (3, json!({"browserUrl":null}), None),
+        (4, json!({"browserUrl":original}), Some(original)),
+    ] {
+        let mut body = patch;
+        body["expectedVersion"] = json!(version);
+        let response = location_request(
+            &fixture,
+            &fixture.admin_token,
+            Method::PATCH,
+            path,
+            Some(body),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_json(response).await;
+        let record = &body["result"]["record"];
+        assert_eq!(record["version"], version + 1);
+        assert_eq!(record["selector"], selector);
+        assert_eq!(
+            record.get("browserUrl").and_then(Value::as_str),
+            expected_url
+        );
+        let read = location_request(&fixture, &fixture.admin_token, Method::GET, path, None).await;
+        assert_eq!(read.status(), StatusCode::OK);
+        assert_eq!(
+            response_json(read).await["result"]
+                .get("browserUrl")
+                .and_then(Value::as_str),
+            expected_url
+        );
+    }
+
+    let stale = location_request(
+        &fixture,
+        &fixture.admin_token,
+        Method::PATCH,
+        path,
+        Some(json!({"expectedVersion":4,"browserUrl":moved})),
+    )
+    .await;
+    assert_eq!(stale.status(), StatusCode::CONFLICT);
+    assert!(!response_json(stale).await.to_string().contains("Private-"));
+    let read = location_request(&fixture, &fixture.admin_token, Method::GET, path, None).await;
+    let read = response_json(read).await;
+    assert_eq!(read["result"]["version"], 5);
+    assert_eq!(read["result"]["browserUrl"], original);
+
+    let runtime = fixture._broker.runtime();
+    let stored = runtime
+        .managed_store()
+        .unwrap()
+        .resource("browser-link")
+        .unwrap();
+    assert_eq!(stored.definition.browser_url.as_deref(), Some(original));
+    let audit = read_audit_text(Path::new(&runtime.config().audit.as_ref().unwrap().path));
+    assert!(audit.contains("browserUrl"));
+    assert!(!audit.contains("Private-title-fixture"));
+    assert!(!audit.contains("Private-renamed-fixture"));
+    assert!(!audit.contains("/wiki/spaces/"));
+}
+
+#[tokio::test]
+async fn token_options_omit_browser_urls_for_included_and_disabled_excluded_resources() {
+    let fixture = resource_location_fixture().await;
+    let resources = [
+        (
+            "included-content",
+            "Engineering documentation",
+            "https://docs.example.test/wiki/content/page/123",
+            "https://docs.example.test/wiki/spaces/ENG/pages/123/Private-included-title",
+            true,
+        ),
+        (
+            "excluded-content",
+            "Restricted documentation",
+            "https://docs.example.test/wiki/content/folder/456",
+            "https://docs.example.test/wiki/spaces/ENG/folder/456/Private-excluded-title",
+            false,
+        ),
+    ];
+    for (id, name, value, browser_url, enabled) in resources {
+        let response = location_request(
+            &fixture,
+            &fixture.admin_token,
+            Method::POST,
+            "/v1/admin/policy/resources",
+            Some(json!({
+                "id":id,"displayName":name,"resourceType":"confluence_content",
+                "selector":{"kind":"subtree","value":value},"browserUrl":browser_url,
+                "enabled":enabled,"allowedExecutionContexts":["internal"]
+            })),
+        )
+        .await;
+        let status = response.status();
+        let body = response_json(response).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["result"]["record"]["browserUrl"], browser_url);
+    }
+    for (method, path, body) in [
+        (
+            Method::POST,
+            "/v1/admin/groups",
+            Some(json!({"groupId":"documentation-readers"})),
+        ),
+        (
+            Method::PUT,
+            "/v1/admin/groups/documentation-readers/members/alice",
+            None,
+        ),
+        (
+            Method::POST,
+            "/v1/admin/policy/resource-groups",
+            Some(json!({
+                "id":"documentation","name":"Documentation access",
+                "includedResourceIds":["included-content"],
+                "excludedResourceIds":["excluded-content"]
+            })),
+        ),
+        (
+            Method::POST,
+            "/v1/admin/policy/grants",
+            Some(json!({
+                "subjects":["group:documentation-readers"],"executionContexts":["internal"],
+                "service":"confluence","actions":["page.view"],"credentialMode":"per_user",
+                "resources":{"resourceIds":[],"resourceGroupIds":["documentation"]}
+            })),
+        ),
+    ] {
+        let response = location_request(&fixture, &fixture.admin_token, method, path, body).await;
+        let status = response.status();
+        let body = response_json(response).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {body}");
+    }
+
+    let options = management_result(
+        &fixture.app,
+        &fixture.alice_user_token,
+        "/v1/tokens/options",
+    )
+    .await;
+    assert_eq!(options["resources"].as_array().unwrap().len(), 2);
+    for (id, name, value, browser_url, enabled) in resources {
+        let option = entry(&options["resources"], "id", id);
+        assert_eq!(option["displayName"], name);
+        assert_eq!(option["resourceType"], "confluence_content");
+        assert_eq!(option["selector"], json!({"kind":"subtree","value":value}));
+        assert_eq!(option["allowedExecutionContexts"], json!(["internal"]));
+        assert_eq!(option["enabled"], enabled);
+        assert!(option.get("browserUrl").is_none());
+
+        let record = management_result(
+            &fixture.app,
+            &fixture.admin_token,
+            &format!("/v1/admin/policy/resources/{id}"),
+        )
+        .await;
+        assert_eq!(record["browserUrl"], browser_url);
+    }
+    let group = entry(&options["resourceGroups"], "id", "documentation");
+    assert_eq!(group["name"], "Documentation access");
+    let serialized = options.to_string();
+    assert!(!serialized.contains("browserUrl"));
+    assert!(!serialized.contains("Private-included-title"));
+    assert!(!serialized.contains("Private-excluded-title"));
+}
+
+#[tokio::test]
+async fn resource_browser_url_validation_rejects_retargeting_and_does_not_echo_values() {
+    let fixture = resource_location_fixture().await;
+    let selector =
+        json!({"kind":"subtree","value":"https://docs.example.test/wiki/content/folder/67890"});
+    let original = "https://docs.example.test/wiki/spaces/ENG/folder/67890/Private-title-fixture";
+    let created = location_request(
+        &fixture,
+        &fixture.admin_token,
+        Method::POST,
+        "/v1/admin/policy/resources",
+        Some(
+            json!({"id":"fixed-target", "resourceType":"confluence_content",
+            "selector":selector,"browserUrl":original,"allowedExecutionContexts":["internal"]}),
+        ),
+    )
+    .await;
+    assert_eq!(created.status(), StatusCode::OK);
+    for browser_url in [
+        json!("https://else.example.test/wiki/spaces/ENG/folder/67890/Private-title-fixture"),
+        json!("https://docs.example.test/wiki/spaces/ENG/folder/67891/Private-title-fixture"),
+        json!("https://docs.example.test/wiki/spaces/ENG/pages/67890/Private-title-fixture"),
+        json!("https://docs.example.test/wiki/spaces/ENG/folder/67890?private-marker=secret"),
+        json!("https://private-marker:secret@docs.example.test/wiki/spaces/ENG/folder/67890"),
+        json!(format!("{original}/{}", "x".repeat(4096))),
+        json!(""),
+        json!({"private-marker":"secret"}),
+    ] {
+        let response = location_request(
+            &fixture,
+            &fixture.admin_token,
+            Method::PATCH,
+            "/v1/admin/policy/resources/fixed-target",
+            Some(json!({"expectedVersion":1,"browserUrl":browser_url})),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = response_json(response).await.to_string();
+        assert!(!body.contains("Private-title-fixture"));
+        assert!(!body.contains("private-marker"));
+        assert!(!body.contains("secret"));
+    }
+    let retarget = location_request(
+        &fixture, &fixture.admin_token, Method::PATCH,
+        "/v1/admin/policy/resources/fixed-target",
+        Some(json!({"expectedVersion":1,"selector":{"kind":"subtree","value":"https://docs.example.test/wiki/content/folder/67891"}})),
+    ).await;
+    assert_eq!(retarget.status(), StatusCode::BAD_REQUEST);
+    let unsupported = location_request(
+        &fixture,
+        &fixture.admin_token,
+        Method::POST,
+        "/v1/admin/policy/resources",
+        Some(
+            json!({"id":"unsupported-link", "resourceType":"git_repository",
+            "selector":{"kind":"exact","value":"engineering/runbooks"},
+            "browserUrl":original,"allowedExecutionContexts":["internal"]}),
+        ),
+    )
+    .await;
+    assert_eq!(unsupported.status(), StatusCode::BAD_REQUEST);
+    let read = location_request(
+        &fixture,
+        &fixture.admin_token,
+        Method::GET,
+        "/v1/admin/policy/resources/fixed-target",
+        None,
+    )
+    .await;
+    let body = response_json(read).await;
+    assert_eq!(body["result"]["version"], 1);
+    assert_eq!(body["result"]["browserUrl"], original);
+    assert_eq!(body["result"]["selector"], selector);
+    let runtime = fixture._broker.runtime();
+    let audit = read_audit_text(Path::new(&runtime.config().audit.as_ref().unwrap().path));
+    assert!(!audit.contains("Private-title-fixture"));
+    assert!(!audit.contains("private-marker"));
+    assert!(!audit.contains("secret"));
+}

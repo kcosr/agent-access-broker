@@ -634,17 +634,16 @@ actions authorized by their project/space boundaries, GitLab REST actions
 authorized by canonical repository boundaries, and CloudBees CI actions
 authorized by controller alias and full job name. Git HTTP gateways use those
 same repository resources.
-Read-result presentation is also capability-scoped. Common invoke and send
-requests may carry top-level `readContentFormat` (`native`, `markdown`, or
-`text`) and `responseFormat` (`json` or `markdown`) fields, but only actions
-whose caller-filtered catalog entries advertise `readContentFormats` or
-`responseFormats` accept the corresponding non-default request. These fields
-are protocol controls beside `inputs`; they are never provider input. An
-unsupported representation fails before authorization, credential selection,
-or provider access, but only after normal identity and token admission. Jira,
-Confluence, and GitLab advertise normalized read results only for declared
-rich-content owners and whole-result Markdown only for eligible non-streaming
-retrievals.
+Output content selection is capability-scoped. Common invoke/send envelopes
+accept exact `outputContentFormat` and soft `preferredOutputContentFormat` beside
+`inputs`; each accepts only `markdown`, `text`, `adf` or `storage`. These controls
+are never forwarded upstream. Unsupported exact selection fails after normal
+identity/token admission and action resolution, but before policy authorization,
+credential selection or provider lookup. This permits a caller who can name an
+existing action to distinguish its configured format support from a later policy
+denial, without exposing source content or credentials. Valid preferences on
+body-free actions have no effect. Declared rich bodies use one selected tagged
+value while ordinary results and metadata stay structured JSON.
 This inventory is not an approval list: actual access is filtered at runtime by
 identity, token class, optional token service/action/resource caveats,
 deny-by-default policy, resolved resource scope, and configured credential
@@ -792,17 +791,14 @@ Agent Access Broker applies these controls in the request path:
   final structural validation, and a second serialized native-body size check.
   Conversion is deterministic, offline, and bounded by source bytes, parse
   depth/events/work, and incremental output; it neither truncates nor trusts raw
-  Markdown HTML. Jira and Confluence normalized reads preserve native ADF or
-  storage/ADF bodies, while GitLab preserves native Markdown. Each may add a
-  deterministic Markdown or plain-text `renderedBody` companion, or render an
-  eligible complete result as bounded Markdown. Whole-result GitLab bodies are
-  parsed and safely re-emitted before trusted result metadata is appended.
-  Confluence storage conversion uses a bounded tree parser,
-  suppresses active content, scripts, unsafe macros, and macro parameters, and
-  never calls Atlassian's network conversion endpoint. Native and rendered
-  bodies are subject to the corresponding provider `max_body_bytes` cap even when
-  `readContentFormat` is omitted or explicitly `native`; aggregate rendering,
-  whole-result Markdown, and final serialized results are also bounded. The
+  Markdown HTML. Jira, Confluence and GitLab output bodies contain one selected
+  representation at their declared field. ADF values are objects; Markdown,
+  text and storage values are strings. Confluence storage conversion uses a
+  bounded tree parser, suppresses active content, scripts, unsafe macros and
+  macro parameters, and never calls a network conversion endpoint. Native
+  sources and selected bodies remain subject to provider `max_body_bytes`,
+  parser/aggregate budgets and final serialized-result and transport caps.
+  Preferences fall back only when unsupported by the declared capability; the
   renderer uses safe fallbacks for valid unsupported ADF/storage/Markdown
   constructs and
   fails closed without truncation or native-content fallback for malformed or
@@ -834,17 +830,24 @@ Agent Access Broker applies these controls in the request path:
   authentication, permission, existence, scope, conflict, throttling, and
   server-error bodies remain hidden. Git smart HTTP is an unchanged, separately
   bounded protocol passthrough and does not use this REST error projection.
-  Unknown response-control fields or mutually exclusive response requests fail
-  as `input_invalid`/400. A non-default representation not advertised by the
-  resolved action fails as `response_format_unsupported`/415. Malformed or
+  Unknown response-control fields, malformed values and explicit null fail as
+  `input_invalid`/400. An exact representation unsupported by the admitted action
+  fails as `response_format_unsupported`/415. Malformed or
   oversized upstream/native read content, rendering-limit exhaustion, and
   rendered-result overflow use the fixed sanitized
   `upstream_protocol_failed`/502 response. Write-input overflow retains its
   caller-input semantics.
+- **Completion-preserving presentation failures**: successful body-bearing native
+  writes carry a provider-authored completed receipt independently of the body.
+  Presentation or final-size failure preserves `mutationStatus: "applied"`,
+  `retrySafe: false` and the original failure code, with a fixed message that the
+  operation completed and must not be repeated. Client selected-body validation
+  similarly withholds malformed received content while retaining known completion
+  in a `response_content_invalid` receipt. No failure triggers automatic replay.
 - **Audit and redaction**: allow, deny, and error outcomes are audited with
   identity, service, action, scope, decision, reason, and sanitized provider
-  metadata; caller rich content, provider-native read content, rendered-body
-  companions, whole-result Markdown, arbitrary property values, pagination
+  metadata; caller rich content, provider-native read content, selected rich-text
+  values, arbitrary property values, pagination
   tokens, converted provider-native content, mutation readback bodies, parser
   excerpts, extracted links, raw credentials, payload bytes, draft handles,
   draft body/title values, attachment filenames, and attachment hashes are

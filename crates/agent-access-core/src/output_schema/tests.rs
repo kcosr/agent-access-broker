@@ -7,9 +7,13 @@ fn action(io: Value, result_schemas: Option<Value>) -> ApiActionSpec {
         "readOnly": true, "requiredScopeTypes": [], "credentialModes": ["service"],
         "inputSchema": {"type": "object"}, "io": io,
         "responseKind": "response_envelope", "exitPolicy": "invoke_decision",
-        "readContentFormats": ["native", "markdown", "text"], "responseFormats": ["json", "markdown"],
-        "renderedBodyOwners": ["/result", "/result/comments/*", "/result/parent"],
-        "optionalRenderedBodyOwnerPrefixes": ["/result/parent"]
+        "outputContentFormats": ["markdown", "text"], "nativeOutputContentFormat":"markdown",
+        "defaultOutputContentFormat":"markdown",
+        "bodyFields":[
+            {"ownerPath":"/result","field":"body","optional":true,"nullable":true,"optionalOwnerPrefixes":[],"nullableOwnerPrefixes":[]},
+            {"ownerPath":"/result/comments/*","field":"body","optional":true,"nullable":true,"optionalOwnerPrefixes":["/result/comments"],"nullableOwnerPrefixes":[]},
+            {"ownerPath":"/result/parent","field":"body","optional":true,"nullable":true,"optionalOwnerPrefixes":["/result/parent"],"nullableOwnerPrefixes":["/result/parent"]}
+        ]
     });
     if let Some(schemas) = result_schemas {
         spec["resultSchemas"] = schemas;
@@ -21,13 +25,13 @@ fn schemas() -> Value {
     json!({
         "success": {"type": "object", "properties": {
             "key": {"type": "string"},
-            "body": {"type": "object"},
-            "comments": {"type": "array", "items": {"type": "object", "properties": {"id": {"type": "string"}, "body": {}}}},
-            "parent": {"type": ["object", "null"], "properties": {"key": {"type": "string"}}}
+            "body": {"type": ["string","null"]},
+            "comments": {"type": "array", "items": {"type": "object", "properties": {"id": {"type": "string"}, "body": {"type":"string"}}}},
+            "parent": {"type": ["object", "null"], "properties": {"key": {"type": "string"},"body":{"type":"string"}}}
         }, "required": ["key"]},
         "error": {"type": "object", "properties": {
             "conflict": {"type": "boolean"},
-            "comments": {"type": "array", "items": {"type": "object", "properties": {"id": {"type": "string"}}}}
+            "comments": {"type": "array", "items": {"type": "object", "properties": {"id": {"type": "string"},"body":{"type":"string"}}}}
         }}
     })
 }
@@ -43,10 +47,10 @@ fn download_action() -> ApiActionSpec {
             "filename": {"type": "string"}, "size": {"type": "integer"}
         }, "required": ["filename", "size"]}})),
     );
-    action.read_content_formats.clear();
-    action.response_formats.clear();
-    action.rendered_body_owners.clear();
-    action.optional_rendered_body_owner_prefixes.clear();
+    action.output_content_formats.clear();
+    action.native_output_content_format = None;
+    action.default_output_content_format = None;
+    action.body_fields.clear();
     action
 }
 
@@ -68,16 +72,17 @@ fn actions_without_result_schemas_publish_no_output_schema() {
     for mode in [ProjectionMode::Http, ProjectionMode::Stdio] {
         assert!(action_output_schema(&action, mode).is_none());
     }
-    // A download has no HTTP MCP tool at all.
     assert!(action_output_schema(&download_action(), ProjectionMode::Http).is_none());
     assert!(action_output_schema(&download_action(), ProjectionMode::Stdio).is_some());
 }
 
 #[test]
-fn the_payload_union_injects_rendered_bodies_markdown_and_shared_failures() {
-    let payload = result_payload_schema(&json_action()).unwrap();
+fn payload_union_selects_declared_fields_and_preserves_native_errors_and_shared_failures() {
+    let action = json_action();
+    let raw_schema = action.result_schemas.as_ref().unwrap().success.clone();
+    let payload = result_payload_schema(&action).unwrap();
     assert_no_refs(&payload);
-    assert_eq!(payload["type"], "object");
+    assert_eq!(action.result_schemas.as_ref().unwrap().success, raw_schema);
     let branches = payload["anyOf"].as_array().unwrap();
     assert_eq!(branches.len(), 4);
     let success = &branches[0];
@@ -86,90 +91,118 @@ fn the_payload_union_injects_rendered_bodies_markdown_and_shared_failures() {
         &success["properties"]["comments"]["items"]["properties"],
         &success["properties"]["parent"]["properties"],
     ] {
-        assert_eq!(
-            owner["renderedBody"]["required"],
-            json!(["format", "value"])
-        );
+        assert!(owner["body"]["anyOf"].is_array());
     }
-    assert_eq!(branches[1], markdown_result_schema());
-    // The error schema gains rendered bodies where its owners resolve, and
-    // every shared failure property it does not declare.
-    let error = &branches[2];
-    assert!(error["properties"]["renderedBody"].is_object());
-    assert!(error["properties"]["comments"]["items"]["properties"]["renderedBody"].is_object());
-    assert!(error["properties"].get("parent").is_none());
-    assert_eq!(error["properties"]["conflict"], json!({"type": "boolean"}));
-    assert_eq!(error["properties"]["mutationStatus"]["type"], "string");
+    assert_eq!(
+        branches[1]["properties"]["comments"]["items"]["properties"]["body"]["type"],
+        "string"
+    );
+    assert!(
+        branches[2]["properties"]["comments"]["items"]["properties"]["body"]["anyOf"].is_array()
+    );
     assert_eq!(branches[3], shared_failure_result_schema());
 
     for (value, accepted) in [
         (
-            json!({"key": "ABC-1", "renderedBody": {"format": "markdown", "value": "x"}}),
+            json!({"key":"ABC-1","body":{"format":"markdown","value":"x"}}),
             true,
         ),
         (
-            json!({"key": "ABC-1", "comments": [{"id": "1", "renderedBody": {"format": "text", "value": "y"}}], "parent": null}),
+            json!({"key":"ABC-1","comments":[{"id":"1","body":{"format":"text","value":"y"}}],"parent":null}),
             true,
         ),
-        (json!({"format": "markdown", "value": "# ABC-1\n"}), true),
+        // A soft preference may select a newly enabled native source after
+        // discovery advertised only Markdown and text.
         (
-            json!({"conflict": true, "mutationStatus": "unknown", "retrySafe": false}),
-            true,
-        ),
-        (
-            json!({"executionState": "not_dispatched", "retrySafe": true, "deadlineKind": "operation"}),
+            json!({"key":"ABC-1","body":{"format":"adf","value":{"type":"doc","content":[]}}}),
             true,
         ),
         (
-            json!({"limitScope": "upstream", "service": "jira", "retryAfterSeconds": 3,
-                "retryAt": "2026-11-09T00:00:00Z"}),
+            json!({"key":"ABC-1","body":{"format":"storage","value":"<p>x</p>"}}),
+            true,
+        ),
+        (json!({"key":"ABC-1","body":null}), true),
+        (json!({"key":"ABC-1","body":"native body"}), false),
+        (json!({"format":"markdown","value":"# ABC-1"}), false),
+        (
+            json!({"conflict":true,"comments":[{"id":"1","body":"native error body"}],"mutationStatus":"unknown","retrySafe":false}),
             true,
         ),
         (
-            json!({"executionState": "completed", "retrySafe": false, "mutationStatus": "applied_unverified"}),
+            json!({"conflict":false,"comments":[{"id":"1","body":{"format":"text","value":"selected allow-error"}}]}),
             true,
         ),
-        // Broker admission refusals are delivered without these details.
         (
-            json!({"limitScope": "principal", "limit": 5, "windowSeconds": 60}),
+            json!({"executionState":"not_dispatched","retrySafe":true,"deadlineKind":"operation"}),
+            true,
+        ),
+        (
+            json!({"limitScope":"upstream","service":"jira","retryAfterSeconds":3,"retryAt":"2026-11-09T00:00:00Z"}),
+            true,
+        ),
+        (
+            json!({"executionState":"completed","retrySafe":false,"mutationStatus":"applied"}),
+            true,
+        ),
+        (
+            json!({"limitScope":"principal","limit":5,"windowSeconds":60}),
             false,
         ),
         (
-            json!({"executionState": "not_dispatched", "deadlineKind": "rate_wait"}),
+            json!({"executionState":"not_dispatched","deadlineKind":"rate_wait"}),
             false,
         ),
         (
-            json!({"hints": {"upstreamResourceOwnership": "acting_user"}}),
+            json!({"hints":{"upstreamResourceOwnership":"acting_user"}}),
             true,
         ),
-        (json!({"key": "ABC-1", "unexpected": 1}), false),
+        (json!({"key":"ABC-1","unexpected":1}), false),
         (
-            json!({"key": "ABC-1", "renderedBody": {"format": "native", "value": "x"}}),
+            json!({"key":"ABC-1","body":{"format":"native","value":"x"}}),
             false,
         ),
-        (json!({"conflict": true, "undeclared": 1}), false),
+        (
+            json!({"key":"ABC-1","body":{"format":"adf","value":"x"}}),
+            false,
+        ),
+        (
+            json!({"key":"ABC-1","body":{"format":"text","value":{}}}),
+            false,
+        ),
+        (json!({"conflict":true,"undeclared":1}), false),
     ] {
         assert_eq!(
             check_strict_conformance(&payload, &value).is_ok(),
             accepted,
             "{value}"
         );
-        // Advertised schemas stay open: every strict pass is an open pass.
         if accepted {
             assert!(valid(&payload, &value));
         }
     }
-    // The shared failure branch is open as advertised.
-    assert!(valid(&payload, &json!({"futureSharedField": true})));
-    let mut json_only = json_action();
-    json_only.response_formats.clear();
-    let payload = result_payload_schema(&json_only).unwrap();
-    assert!(
-        !payload["anyOf"]
-            .as_array()
-            .unwrap()
-            .contains(&markdown_result_schema())
-    );
+    assert!(valid(&payload, &json!({"futureSharedField":true})));
+}
+
+#[test]
+fn generic_json_payloads_remain_generic_inside_object_envelopes() {
+    let mut spec = json_action();
+    spec.body_fields.clear();
+    spec.result_schemas.as_mut().unwrap().success = json!({});
+    spec.result_schemas.as_mut().unwrap().error = Some(json!({"type":"string"}));
+    for mode in [ProjectionMode::Http, ProjectionMode::Stdio] {
+        let schema = action_output_schema(&spec, mode).unwrap();
+        assert_eq!(schema["type"], "object");
+        for result in [
+            json!(null),
+            json!(true),
+            json!(3),
+            json!("text"),
+            json!([1,{"x":2}]),
+        ] {
+            check_strict_conformance(&schema, &envelope(Some(result), "allow")).unwrap();
+        }
+        assert!(!valid(&schema, &json!(["unwrapped"])));
+    }
 }
 
 fn envelope(result: Option<Value>, decision: &str) -> Value {
@@ -214,7 +247,8 @@ fn http_mcp_output_schemas_accept_every_delivery_shape() {
             "resultAvailable": false, "retrySafe": false
         }),
     ] {
-        assert!(valid(&schema, &value), "{value}");
+        check_strict_conformance(&schema, &value)
+            .unwrap_or_else(|problem| panic!("{value}: {problem}"));
     }
     for value in [
         json!({}),
@@ -259,8 +293,13 @@ fn stdio_output_schemas_accept_envelopes_receipts_and_local_failures() {
             json!({"message": "Operation succeeded; writing the response output failed.", "output": failed}),
         ),
         receipt(json!({"message": "x", "metadataOutput": failed})),
+        receipt(
+            json!({"reasonCode":"response_content_invalid", "retrySafe":false,"message":"The operation completed, but its response content is invalid."}),
+        ),
+        json!({"error":{"message":"local input rejected"}}),
     ] {
-        assert!(valid(&schema, &value), "{value}");
+        check_strict_conformance(&schema, &value)
+            .unwrap_or_else(|problem| panic!("{value}: {problem}"));
     }
     assert!(!valid(
         &schema,
@@ -279,7 +318,8 @@ fn stdio_output_schemas_accept_envelopes_receipts_and_local_failures() {
         envelope(Some(json!({"filename": "a.txt", "size": 3})), "allow"),
         envelope(None, "deny"),
     ] {
-        assert!(valid(&download, &value), "{value}");
+        check_strict_conformance(&download, &value)
+            .unwrap_or_else(|problem| panic!("{value}: {problem}"));
     }
     assert!(!valid(
         &download,
@@ -297,7 +337,7 @@ fn helper_output_schemas_describe_results_receipts_and_failures() {
     let mut detail = action.clone();
     detail.as_object_mut().unwrap().extend(
         json!({"service": "jira", "io": {"type": "json"}, "responseKind": "response_envelope",
-            "exitPolicy": "invoke_decision", "sensitiveInputPointers": [], "readContentFormats": ["native"],
+            "exitPolicy": "invoke_decision", "sensitiveInputPointers": [], "outputContentFormats": ["adf"], "nativeOutputContentFormat":"adf", "defaultOutputContentFormat":"adf", "bodyFields":[],
             "resultSchemas": {"success": {"type": "object"}},
             "mcpTool": {"name": "jira_issue_view", "inputSchema": {"type": "object"}, "outputSchema": {"type": "object"}}})
         .as_object()
@@ -331,7 +371,7 @@ fn helper_output_schemas_describe_results_receipts_and_failures() {
             HelperKind::ServicesDescribe,
             json!({"service": "jira", "displayName": "Jira", "surface": "invoke",
             "credentialVerificationSupported": true, "scopeTypes": ["project"],
-            "resourceScopes": {"project": {"resourceType": "jira_project", "selectors": ["exact"]}},
+            "resourceScopes": {"project": {"matching":"scalar", "resourceType": "jira_project", "selectors": ["exact"]}},
             "actions": [action], "availability": availability, "scopedMcpReady": true,
             "limits": {"scope": "principal_service"}}),
         ),
@@ -363,6 +403,49 @@ fn helper_output_schemas_describe_results_receipts_and_failures() {
             "service": "jira", "action": "", "resourceScopes": {}, "reasonCode": "service_action_denied",
             "reason": "service is not visible for this identity", "error": {"message": "x"}})
         ));
+    }
+}
+
+#[test]
+fn helper_schemas_cover_containment_and_current_body_declarations_strictly() {
+    let availability = json!({"state":"available","requirements":[],"message":"Available"});
+    let location = json!({"service":"wiki","executionContext":"default","availability":availability,
+        "coverageSemantics":"single_target","access":[{
+            "scope":"location","action":"page.view","resourceTypes":["wiki_space","wiki_content"],
+            "domain":"wiki","enforcement":"request","containmentVerification":"at_invocation",
+            "coverage":[{"resourceType":"wiki_content","selector":{"kind":"subtree","value":"page:1"},"restricted":true,"conditional":true}]
+        }],"registeredResources":{"source":"broker_configuration","items":[],"nextCursor":null}});
+    check_strict_conformance(
+        &helper_result_schema(HelperKind::ResourceAccessDescribe),
+        &location,
+    )
+    .unwrap();
+    let service = json!({"service":"wiki","displayName":"Wiki","surface":"invoke",
+        "credentialVerificationSupported":true,"scopeTypes":["content"],"actions":[],"availability":availability,
+        "resourceScopes":{"content":{"matching":"containment","domain":"wiki", "selectorsByType":{"wiki_content":["exact","subtree"]},
+            "containerTypes":["wiki_space"],"targetKinds":["page"],"ancestorKinds":["page"],"effects":["content","child_placement","subtree_impact"]}}});
+    check_strict_conformance(
+        &helper_result_schema(HelperKind::ServicesDescribe),
+        &service,
+    )
+    .unwrap();
+    let mut detail = serde_json::to_value(json_action()).unwrap();
+    detail.as_object_mut().unwrap().remove("scopedMcpName");
+    detail["service"] = json!("jira");
+    detail["bodyFields"][0]["ownerEquals"] = json!({"type":"adf"});
+    check_strict_conformance(&helper_result_schema(HelperKind::ActionsDescribe), &detail).unwrap();
+    for helper in [
+        HelperKind::ServicesList,
+        HelperKind::ServicesDescribe,
+        HelperKind::ActionsList,
+        HelperKind::ActionsDescribe,
+        HelperKind::ResourceAccessDescribe,
+    ] {
+        check_strict_conformance(
+            &helper_output_schema(helper, ProjectionMode::Stdio),
+            &json!({"error":{"message":"Local discovery failure"}}),
+        )
+        .unwrap();
     }
 }
 
@@ -411,7 +494,7 @@ fn catalog_tools_details_and_openapi_share_one_composition() {
         &serde_json::from_value::<ApiActionSpec>(value).unwrap(),
         action
     );
-    assert_eq!(crate::API_CATALOG_VERSION, "agent-access.catalog.v2");
+    assert_eq!(crate::API_CATALOG_VERSION, "agent-access.catalog.v3");
     let mut undeclared = descriptor.clone();
     undeclared.actions[0].result_schemas = None;
     let plain = crate::api_service_spec(&undeclared, true).unwrap();

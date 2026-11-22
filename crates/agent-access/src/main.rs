@@ -6,6 +6,8 @@ mod import_commands;
 mod mcp;
 mod output;
 #[cfg(test)]
+mod output_content_tests;
+#[cfg(test)]
 mod request_timeout_tests;
 #[cfg(test)]
 mod token_issuance_tests;
@@ -24,7 +26,7 @@ use agent_access_core::{
 use agent_access_provider::{
     ActionIo, MultipartUploadSpec, REQUEST_ID_HEADER, RESULT_METADATA_HEADER,
     is_loopback_or_localhost, is_service_name,
-    presentation::{ReadContentFormat, ResponseFormat, ResponseOptions},
+    presentation::{BodyField, OutputContentFormat, ResponseOptions, validate_selected_content},
 };
 use anyhow::{Context, Result};
 use base64::Engine;
@@ -227,63 +229,34 @@ enum Command {
         #[arg(long)]
         input_stdin: bool,
         #[arg(long, value_enum)]
-        read_content_format: Option<ReadContentFormatArg>,
-        #[arg(long, value_enum)]
-        output_format: Option<OutputFormatArg>,
+        output_content_format: Option<OutputContentFormatArg>,
     },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-enum ReadContentFormatArg {
-    Native,
+enum OutputContentFormatArg {
     Markdown,
     Text,
+    Adf,
+    Storage,
 }
 
-impl From<ReadContentFormatArg> for ReadContentFormat {
-    fn from(value: ReadContentFormatArg) -> Self {
+impl From<OutputContentFormatArg> for OutputContentFormat {
+    fn from(value: OutputContentFormatArg) -> Self {
         match value {
-            ReadContentFormatArg::Native => Self::Native,
-            ReadContentFormatArg::Markdown => Self::Markdown,
-            ReadContentFormatArg::Text => Self::Text,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-enum OutputFormatArg {
-    Json,
-    Markdown,
-}
-
-impl From<OutputFormatArg> for ResponseFormat {
-    fn from(value: OutputFormatArg) -> Self {
-        match value {
-            OutputFormatArg::Json => Self::Json,
-            OutputFormatArg::Markdown => Self::Markdown,
+            OutputContentFormatArg::Markdown => Self::Markdown,
+            OutputContentFormatArg::Text => Self::Text,
+            OutputContentFormatArg::Adf => Self::Adf,
+            OutputContentFormatArg::Storage => Self::Storage,
         }
     }
 }
 
 #[derive(Debug, Args)]
-struct EmbeddedAndWholeOutputArgs {
+struct OutputContentArgs {
+    /// Exact format for declared rich-text fields; unsupported selections fail.
     #[arg(long, value_enum)]
-    read_content_format: Option<ReadContentFormatArg>,
-    #[arg(long, value_enum)]
-    output_format: Option<OutputFormatArg>,
-}
-
-#[derive(Debug, Args)]
-struct EmbeddedOutputArgs {
-    #[arg(long, value_enum)]
-    read_content_format: Option<ReadContentFormatArg>,
-}
-
-#[derive(Debug, Args)]
-struct WholeOutputArgs {
-    /// Response representation: json (default) or markdown.
-    #[arg(long, value_enum)]
-    output_format: Option<OutputFormatArg>,
+    output_content_format: Option<OutputContentFormatArg>,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -326,6 +299,21 @@ enum ConfluencePageMovePositionArg {
     Before,
     After,
     Append,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum ConfluenceParentKindArg {
+    Page,
+    Folder,
+}
+
+impl ConfluenceParentKindArg {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Page => "page",
+            Self::Folder => "folder",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -1758,6 +1746,7 @@ enum AdminPolicyCommand {
         command: ResourceGroupsCommand,
     },
     EffectiveAccess {
+        /// JSON object with service, actions, executionContexts, resources and credentialMode.
         #[arg(long)]
         request_file: PathBuf,
     },
@@ -1995,16 +1984,12 @@ enum JiraProjectCommand {
         include: Option<Vec<JiraProjectSection>>,
         #[arg(long, help = "Filter included metadata by name, ID, or JQL reference")]
         query: Option<String>,
-        #[arg(long, value_enum)]
-        output_format: Option<OutputFormatArg>,
     },
     List {
         #[arg(long, value_parser = clap::value_parser!(u32).range(1..=100))]
         max_results: Option<u32>,
         #[arg(long)]
         page_token: Option<String>,
-        #[arg(long, value_enum)]
-        output_format: Option<OutputFormatArg>,
     },
 }
 
@@ -2039,8 +2024,6 @@ enum JiraIssueTypeCommand {
         start_at: Option<u32>,
         #[arg(long, value_parser = clap::value_parser!(u32).range(1..=100))]
         max_results: Option<u32>,
-        #[arg(long, value_enum)]
-        output_format: Option<OutputFormatArg>,
     },
 }
 
@@ -2056,9 +2039,7 @@ enum JiraIssueCommand {
         )]
         include_comments: bool,
         #[arg(long, value_enum)]
-        read_content_format: Option<ReadContentFormatArg>,
-        #[arg(long, value_enum)]
-        output_format: Option<OutputFormatArg>,
+        output_content_format: Option<OutputContentFormatArg>,
     },
     Create {
         #[arg(long)]
@@ -2079,7 +2060,7 @@ enum JiraIssueCommand {
         #[arg(long, value_enum, requires = "content_source")]
         content_format: Option<JiraContentFormatArg>,
         #[arg(long, value_enum)]
-        read_content_format: Option<ReadContentFormatArg>,
+        output_content_format: Option<OutputContentFormatArg>,
     },
     Child {
         #[command(subcommand)]
@@ -2103,7 +2084,7 @@ enum JiraIssueCommand {
         #[arg(long, value_enum, requires = "content_source")]
         content_format: Option<JiraContentFormatArg>,
         #[arg(long, value_enum)]
-        read_content_format: Option<ReadContentFormatArg>,
+        output_content_format: Option<OutputContentFormatArg>,
         #[arg(long)]
         notify_users: bool,
         #[arg(
@@ -2119,6 +2100,10 @@ enum JiraIssueCommand {
     CustomField {
         #[command(subcommand)]
         command: JiraIssueCustomFieldCommand,
+    },
+    Transition {
+        #[command(subcommand)]
+        command: JiraIssueTransitionCommand,
     },
     Dependency {
         #[command(subcommand)]
@@ -2137,8 +2122,6 @@ enum JiraIssueCommand {
         max_results: Option<u32>,
         #[arg(long)]
         next_page_token: Option<String>,
-        #[arg(long, value_enum)]
-        output_format: Option<OutputFormatArg>,
     },
     Comment {
         #[command(subcommand)]
@@ -2161,8 +2144,40 @@ enum JiraIssueCommand {
         expect_comment_id: Option<String>,
         #[arg(long)]
         expect_attachment_id: Option<String>,
-        #[arg(long, value_enum)]
-        output_format: Option<OutputFormatArg>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum JiraIssueTransitionCommand {
+    /// Discover the transitions currently available on an issue.
+    List {
+        issue: Option<String>,
+        #[arg(long)]
+        issue_url: Option<String>,
+        #[arg(
+            long,
+            help = "Include transition-screen requirements and resolution choices"
+        )]
+        include_fields: bool,
+    },
+    /// Apply one transition discovered for this issue, checking its destination.
+    Apply {
+        issue: Option<String>,
+        #[arg(long)]
+        issue_url: Option<String>,
+        #[arg(long)]
+        transition_id: String,
+        #[arg(long)]
+        to_status_id: String,
+        #[arg(long)]
+        expected_issue_id: Option<String>,
+        #[arg(
+            long,
+            help = "Check the current status before sending; does not make retries safe"
+        )]
+        expected_status_id: Option<String>,
+        #[arg(long)]
+        resolution_id: Option<String>,
     },
 }
 
@@ -2256,9 +2271,7 @@ enum JiraCommentCommand {
         #[arg(long, help = "Include full comment and reply bodies in this page")]
         include_bodies: bool,
         #[arg(long, value_enum)]
-        read_content_format: Option<ReadContentFormatArg>,
-        #[arg(long, value_enum)]
-        output_format: Option<OutputFormatArg>,
+        output_content_format: Option<OutputContentFormatArg>,
     },
     View {
         comment_id: String,
@@ -2267,9 +2280,7 @@ enum JiraCommentCommand {
         #[arg(long)]
         issue_url: Option<String>,
         #[arg(long, value_enum)]
-        read_content_format: Option<ReadContentFormatArg>,
-        #[arg(long, value_enum)]
-        output_format: Option<OutputFormatArg>,
+        output_content_format: Option<OutputContentFormatArg>,
     },
     Add {
         #[arg(long)]
@@ -2296,7 +2307,7 @@ enum JiraCommentCommand {
         #[arg(long)]
         visibility_file: Option<PathBuf>,
         #[arg(long, value_enum)]
-        read_content_format: Option<ReadContentFormatArg>,
+        output_content_format: Option<OutputContentFormatArg>,
     },
     Reply {
         parent_comment_id: String,
@@ -2324,7 +2335,7 @@ enum JiraCommentCommand {
         #[arg(long)]
         visibility_file: Option<PathBuf>,
         #[arg(long, value_enum)]
-        read_content_format: Option<ReadContentFormatArg>,
+        output_content_format: Option<OutputContentFormatArg>,
     },
     Update {
         comment_id: String,
@@ -2354,7 +2365,7 @@ enum JiraCommentCommand {
         #[arg(long, action = clap::ArgAction::Set, default_value_t = false)]
         notify_users: bool,
         #[arg(long, value_enum)]
-        read_content_format: Option<ReadContentFormatArg>,
+        output_content_format: Option<OutputContentFormatArg>,
     },
     Delete {
         comment_id: String,
@@ -2377,8 +2388,6 @@ enum JiraCommentPropertyCommand {
         issue: Option<String>,
         #[arg(long)]
         issue_url: Option<String>,
-        #[arg(long, value_enum)]
-        output_format: Option<OutputFormatArg>,
     },
     Get {
         comment_id: String,
@@ -2387,8 +2396,6 @@ enum JiraCommentPropertyCommand {
         issue: Option<String>,
         #[arg(long)]
         issue_url: Option<String>,
-        #[arg(long, value_enum)]
-        output_format: Option<OutputFormatArg>,
     },
     Set {
         comment_id: String,
@@ -2416,8 +2423,6 @@ enum JiraAttachmentCommand {
         issue: Option<String>,
         #[arg(long)]
         issue_url: Option<String>,
-        #[arg(long, value_enum)]
-        output_format: Option<OutputFormatArg>,
     },
     Download {
         issue: String,
@@ -2448,8 +2453,6 @@ enum ConfluenceSpaceCommand {
         max_results: Option<u32>,
         #[arg(long)]
         page_token: Option<String>,
-        #[arg(long, value_enum)]
-        output_format: Option<OutputFormatArg>,
     },
 }
 
@@ -2460,7 +2463,7 @@ enum ConfluencePageCommand {
         #[arg(long)]
         page_url: Option<String>,
         #[command(flatten)]
-        response: EmbeddedAndWholeOutputArgs,
+        response: OutputContentArgs,
     },
     Search {
         /// CQL filter and/or ordering; empty browses the authorized content scope.
@@ -2475,17 +2478,24 @@ enum ConfluencePageCommand {
         max_results: Option<u32>,
         #[arg(long)]
         next_page_token: Option<String>,
-        #[command(flatten)]
-        response: WholeOutputArgs,
     },
     Create {
         #[arg(long)]
         space: String,
         #[arg(long)]
         title: String,
-        #[arg(long, conflicts_with = "parent_url")]
-        parent: Option<String>,
-        #[arg(long)]
+        /// Kind of the explicit destination parent.
+        #[arg(
+            long,
+            value_enum,
+            requires = "parent_id",
+            conflicts_with = "parent_url"
+        )]
+        parent_kind: Option<ConfluenceParentKindArg>,
+        /// ID of the explicit page or folder parent.
+        #[arg(long, requires = "parent_kind", conflicts_with = "parent_url")]
+        parent_id: Option<String>,
+        #[arg(long, conflicts_with_all = ["parent_kind", "parent_id"])]
         parent_url: Option<String>,
         #[arg(
             long,
@@ -2505,6 +2515,7 @@ enum ConfluencePageCommand {
     },
     Update {
         page_id: String,
+        /// Current page version, from 1 through 2147483646.
         #[arg(long)]
         base_version: u64,
         #[arg(long)]
@@ -2568,8 +2579,6 @@ enum ConfluencePageCommand {
         expect_title: Option<String>,
         #[arg(long)]
         expect_attachment_id: Option<String>,
-        #[command(flatten)]
-        response: WholeOutputArgs,
     },
 }
 
@@ -2580,9 +2589,18 @@ enum ConfluencePageDraftCommand {
         space: String,
         #[arg(long)]
         title: String,
-        #[arg(long, conflicts_with = "parent_url")]
-        parent: Option<String>,
-        #[arg(long)]
+        /// Kind of the explicit destination parent.
+        #[arg(
+            long,
+            value_enum,
+            requires = "parent_id",
+            conflicts_with = "parent_url"
+        )]
+        parent_kind: Option<ConfluenceParentKindArg>,
+        /// ID of the explicit page or folder parent.
+        #[arg(long, requires = "parent_kind", conflicts_with = "parent_url")]
+        parent_id: Option<String>,
+        #[arg(long, conflicts_with_all = ["parent_kind", "parent_id"])]
         parent_url: Option<String>,
         #[arg(
             long,
@@ -2629,7 +2647,7 @@ enum ConfluencePageDraftCommand {
         #[arg(long)]
         body_format: String,
         #[command(flatten)]
-        response: EmbeddedAndWholeOutputArgs,
+        response: OutputContentArgs,
     },
     Update {
         page_id: String,
@@ -2675,8 +2693,6 @@ enum ConfluencePageDraftCommand {
         expect_title: Option<String>,
         #[arg(long)]
         expect_attachment_id: Option<String>,
-        #[command(flatten)]
-        response: WholeOutputArgs,
     },
     Attach {
         page_id: String,
@@ -2703,8 +2719,6 @@ enum ConfluencePageDraftAttachmentCommand {
         max_results: Option<u32>,
         #[arg(long)]
         next_page_token: Option<String>,
-        #[command(flatten)]
-        response: WholeOutputArgs,
     },
     Download {
         page_id: String,
@@ -2725,8 +2739,6 @@ enum ConfluenceAttachmentCommand {
         max_results: Option<u32>,
         #[arg(long)]
         next_page_token: Option<String>,
-        #[command(flatten)]
-        response: WholeOutputArgs,
     },
     Download {
         page_id: String,
@@ -2748,14 +2760,14 @@ enum ConfluencePageCommentCommand {
         #[arg(long)]
         next_page_token: Option<String>,
         #[command(flatten)]
-        response: EmbeddedAndWholeOutputArgs,
+        response: OutputContentArgs,
     },
     View {
         comment_id: String,
         #[arg(long)]
         body_format: Option<String>,
         #[command(flatten)]
-        response: EmbeddedAndWholeOutputArgs,
+        response: OutputContentArgs,
     },
     Add {
         page_id: String,
@@ -2775,7 +2787,7 @@ enum ConfluencePageCommentCommand {
         #[arg(long, value_enum)]
         content_format: ConfluenceContentFormatArg,
         #[command(flatten)]
-        response: EmbeddedOutputArgs,
+        response: OutputContentArgs,
     },
     Update {
         comment_id: String,
@@ -2797,7 +2809,7 @@ enum ConfluencePageCommentCommand {
         #[arg(long, value_enum)]
         content_format: ConfluenceContentFormatArg,
         #[command(flatten)]
-        response: EmbeddedOutputArgs,
+        response: OutputContentArgs,
     },
     Delete {
         comment_id: String,
@@ -2811,7 +2823,7 @@ enum ConfluencePageCommentCommand {
         #[arg(long)]
         next_page_token: Option<String>,
         #[command(flatten)]
-        response: EmbeddedAndWholeOutputArgs,
+        response: OutputContentArgs,
     },
     Reply {
         comment_id: String,
@@ -2831,7 +2843,7 @@ enum ConfluencePageCommentCommand {
         #[arg(long, value_enum)]
         content_format: ConfluenceContentFormatArg,
         #[command(flatten)]
-        response: EmbeddedOutputArgs,
+        response: OutputContentArgs,
     },
 }
 
@@ -2850,14 +2862,14 @@ enum ConfluencePageInlineCommentCommand {
         #[arg(long)]
         next_page_token: Option<String>,
         #[command(flatten)]
-        response: EmbeddedAndWholeOutputArgs,
+        response: OutputContentArgs,
     },
     View {
         comment_id: String,
         #[arg(long)]
         body_format: Option<String>,
         #[command(flatten)]
-        response: EmbeddedAndWholeOutputArgs,
+        response: OutputContentArgs,
     },
     Update {
         comment_id: String,
@@ -2879,7 +2891,7 @@ enum ConfluencePageInlineCommentCommand {
         #[arg(long, value_enum)]
         content_format: ConfluenceContentFormatArg,
         #[command(flatten)]
-        response: EmbeddedOutputArgs,
+        response: OutputContentArgs,
     },
     Delete {
         comment_id: String,
@@ -2893,7 +2905,7 @@ enum ConfluencePageInlineCommentCommand {
         #[arg(long)]
         next_page_token: Option<String>,
         #[command(flatten)]
-        response: EmbeddedAndWholeOutputArgs,
+        response: OutputContentArgs,
     },
     Reply {
         comment_id: String,
@@ -2913,7 +2925,7 @@ enum ConfluencePageInlineCommentCommand {
         #[arg(long, value_enum)]
         content_format: ConfluenceContentFormatArg,
         #[command(flatten)]
-        response: EmbeddedOutputArgs,
+        response: OutputContentArgs,
     },
 }
 
@@ -2924,7 +2936,7 @@ enum ConfluenceBlogCommand {
         #[arg(long)]
         blog_url: Option<String>,
         #[command(flatten)]
-        response: EmbeddedAndWholeOutputArgs,
+        response: OutputContentArgs,
     },
     Search {
         /// CQL filter and/or ordering; empty browses the authorized content scope.
@@ -2939,8 +2951,6 @@ enum ConfluenceBlogCommand {
         max_results: Option<u32>,
         #[arg(long)]
         next_page_token: Option<String>,
-        #[command(flatten)]
-        response: WholeOutputArgs,
     },
     Create {
         #[arg(long)]
@@ -3018,8 +3028,6 @@ enum ConfluenceBlogCommand {
         expect_title: Option<String>,
         #[arg(long)]
         expect_attachment_id: Option<String>,
-        #[command(flatten)]
-        response: WholeOutputArgs,
     },
 }
 
@@ -3075,7 +3083,7 @@ enum ConfluenceBlogDraftCommand {
         #[arg(long)]
         body_format: String,
         #[command(flatten)]
-        response: EmbeddedAndWholeOutputArgs,
+        response: OutputContentArgs,
     },
     Update {
         blog_id: String,
@@ -3121,8 +3129,6 @@ enum ConfluenceBlogDraftCommand {
         expect_title: Option<String>,
         #[arg(long)]
         expect_attachment_id: Option<String>,
-        #[command(flatten)]
-        response: WholeOutputArgs,
     },
     Attach {
         blog_id: String,
@@ -3149,8 +3155,6 @@ enum ConfluenceBlogDraftAttachmentCommand {
         max_results: Option<u32>,
         #[arg(long)]
         next_page_token: Option<String>,
-        #[command(flatten)]
-        response: WholeOutputArgs,
     },
     Download {
         blog_id: String,
@@ -3171,8 +3175,6 @@ enum ConfluenceBlogAttachmentCommand {
         max_results: Option<u32>,
         #[arg(long)]
         next_page_token: Option<String>,
-        #[command(flatten)]
-        response: WholeOutputArgs,
     },
     Download {
         blog_id: String,
@@ -3194,14 +3196,14 @@ enum ConfluenceBlogCommentCommand {
         #[arg(long)]
         next_page_token: Option<String>,
         #[command(flatten)]
-        response: EmbeddedAndWholeOutputArgs,
+        response: OutputContentArgs,
     },
     View {
         comment_id: String,
         #[arg(long)]
         body_format: Option<String>,
         #[command(flatten)]
-        response: EmbeddedAndWholeOutputArgs,
+        response: OutputContentArgs,
     },
     Add {
         blog_id: String,
@@ -3221,7 +3223,7 @@ enum ConfluenceBlogCommentCommand {
         #[arg(long, value_enum)]
         content_format: ConfluenceContentFormatArg,
         #[command(flatten)]
-        response: EmbeddedOutputArgs,
+        response: OutputContentArgs,
     },
     Update {
         comment_id: String,
@@ -3243,7 +3245,7 @@ enum ConfluenceBlogCommentCommand {
         #[arg(long, value_enum)]
         content_format: ConfluenceContentFormatArg,
         #[command(flatten)]
-        response: EmbeddedOutputArgs,
+        response: OutputContentArgs,
     },
     Delete {
         comment_id: String,
@@ -3257,7 +3259,7 @@ enum ConfluenceBlogCommentCommand {
         #[arg(long)]
         next_page_token: Option<String>,
         #[command(flatten)]
-        response: EmbeddedAndWholeOutputArgs,
+        response: OutputContentArgs,
     },
     Reply {
         comment_id: String,
@@ -3277,7 +3279,7 @@ enum ConfluenceBlogCommentCommand {
         #[arg(long, value_enum)]
         content_format: ConfluenceContentFormatArg,
         #[command(flatten)]
-        response: EmbeddedOutputArgs,
+        response: OutputContentArgs,
     },
 }
 
@@ -3296,14 +3298,14 @@ enum ConfluenceBlogInlineCommentCommand {
         #[arg(long)]
         next_page_token: Option<String>,
         #[command(flatten)]
-        response: EmbeddedAndWholeOutputArgs,
+        response: OutputContentArgs,
     },
     View {
         comment_id: String,
         #[arg(long)]
         body_format: Option<String>,
         #[command(flatten)]
-        response: EmbeddedAndWholeOutputArgs,
+        response: OutputContentArgs,
     },
     Update {
         comment_id: String,
@@ -3325,7 +3327,7 @@ enum ConfluenceBlogInlineCommentCommand {
         #[arg(long, value_enum)]
         content_format: ConfluenceContentFormatArg,
         #[command(flatten)]
-        response: EmbeddedOutputArgs,
+        response: OutputContentArgs,
     },
     Delete {
         comment_id: String,
@@ -3339,7 +3341,7 @@ enum ConfluenceBlogInlineCommentCommand {
         #[arg(long)]
         next_page_token: Option<String>,
         #[command(flatten)]
-        response: EmbeddedAndWholeOutputArgs,
+        response: OutputContentArgs,
     },
     Reply {
         comment_id: String,
@@ -3359,7 +3361,7 @@ enum ConfluenceBlogInlineCommentCommand {
         #[arg(long, value_enum)]
         content_format: ConfluenceContentFormatArg,
         #[command(flatten)]
-        response: EmbeddedOutputArgs,
+        response: OutputContentArgs,
     },
 }
 
@@ -3629,8 +3631,6 @@ enum CloudbeesCiJobCommand {
     View {
         #[command(flatten)]
         job: CloudbeesCiJobArgs,
-        #[command(flatten)]
-        response: WholeOutputArgs,
     },
 }
 
@@ -3670,8 +3670,6 @@ enum CloudbeesCiBuildCommand {
         /// Most test cases to return.
         #[arg(long)]
         max_results: Option<u32>,
-        #[command(flatten)]
-        response: WholeOutputArgs,
     },
     /// Download the detailed test report as JSON.
     TestsDownload {
@@ -3682,8 +3680,6 @@ enum CloudbeesCiBuildCommand {
     PendingInputs {
         #[command(flatten)]
         build: CloudbeesCiBuildArgs,
-        #[command(flatten)]
-        response: WholeOutputArgs,
     },
     /// List or download a build's archived artifacts.
     Artifact {
@@ -3697,15 +3693,11 @@ enum CloudbeesCiBuildCommand {
         /// Most builds to return.
         #[arg(long)]
         max_results: Option<u32>,
-        #[command(flatten)]
-        response: WholeOutputArgs,
     },
     /// Read one build's status, causes, and parameters.
     View {
         #[command(flatten)]
         build: CloudbeesCiBuildArgs,
-        #[command(flatten)]
-        response: WholeOutputArgs,
     },
     /// Read a bounded beginning, ending, or literal-search excerpt of a build log.
     Log {
@@ -3726,22 +3718,16 @@ enum CloudbeesCiBuildCommand {
         /// Returned text budget (defaults to 16384 bytes); does not raise the scan budget.
         #[arg(long, value_parser = clap::value_parser!(u64).range(1024..=65536))]
         max_bytes: Option<u64>,
-        #[command(flatten)]
-        response: WholeOutputArgs,
     },
     /// Read a build's test report summary.
     Tests {
         #[command(flatten)]
         build: CloudbeesCiBuildArgs,
-        #[command(flatten)]
-        response: WholeOutputArgs,
     },
     /// Queue a parameterless build; do not retry an unverified trigger.
     Trigger {
         #[command(flatten)]
         job: CloudbeesCiJobArgs,
-        #[command(flatten)]
-        response: WholeOutputArgs,
     },
 }
 
@@ -3751,8 +3737,6 @@ enum CloudbeesCiPipelineCommand {
     View {
         #[command(flatten)]
         build: CloudbeesCiBuildArgs,
-        #[command(flatten)]
-        response: WholeOutputArgs,
     },
     /// Read one Pipeline node and its steps.
     Node {
@@ -3761,8 +3745,6 @@ enum CloudbeesCiPipelineCommand {
         /// Pipeline node ID from build pipeline view.
         #[arg(long)]
         node_id: String,
-        #[command(flatten)]
-        response: WholeOutputArgs,
     },
     /// Read one Pipeline node's log.
     Log {
@@ -3771,8 +3753,6 @@ enum CloudbeesCiPipelineCommand {
         /// Pipeline node ID from build pipeline view.
         #[arg(long)]
         node_id: String,
-        #[command(flatten)]
-        response: WholeOutputArgs,
     },
 }
 
@@ -3782,8 +3762,6 @@ enum CloudbeesCiBuildArtifactCommand {
     List {
         #[command(flatten)]
         build: CloudbeesCiBuildArgs,
-        #[command(flatten)]
-        response: WholeOutputArgs,
     },
     /// Download one archived artifact; requires --output.
     Download {
@@ -3804,8 +3782,6 @@ enum CloudbeesCiQueueCommand {
         /// Queue item ID from build trigger.
         #[arg(long)]
         queue_id: u64,
-        #[command(flatten)]
-        response: WholeOutputArgs,
     },
 }
 
@@ -3889,8 +3865,6 @@ enum GitlabProjectCommand {
         project: Option<String>,
         #[arg(long)]
         project_url: Option<String>,
-        #[command(flatten)]
-        response: WholeOutputArgs,
     },
 }
 
@@ -3903,7 +3877,7 @@ enum GitlabIssueCommand {
         #[arg(long)]
         issue_url: Option<String>,
         #[command(flatten)]
-        response: EmbeddedAndWholeOutputArgs,
+        response: OutputContentArgs,
     },
     /// List and filter issues within one required project.
     Search {
@@ -3933,7 +3907,7 @@ enum GitlabIssueCommand {
         #[arg(long)]
         page_token: Option<String>,
         #[command(flatten)]
-        response: EmbeddedAndWholeOutputArgs,
+        response: OutputContentArgs,
     },
     Create {
         project: String,
@@ -3954,7 +3928,7 @@ enum GitlabIssueCommand {
         #[arg(long)]
         confidential: Option<bool>,
         #[command(flatten)]
-        response: EmbeddedOutputArgs,
+        response: OutputContentArgs,
     },
     Update {
         project: String,
@@ -3982,7 +3956,7 @@ enum GitlabIssueCommand {
         #[arg(long)]
         confidential: Option<bool>,
         #[command(flatten)]
-        response: EmbeddedOutputArgs,
+        response: OutputContentArgs,
     },
     Comment {
         project: String,
@@ -4001,7 +3975,7 @@ enum GitlabIssueCommand {
         #[arg(long)]
         confidential: Option<bool>,
         #[command(flatten)]
-        response: EmbeddedOutputArgs,
+        response: OutputContentArgs,
     },
     UpdateComment {
         project: String,
@@ -4019,7 +3993,7 @@ enum GitlabIssueCommand {
         #[arg(long, value_enum, requires = "content_source")]
         content_format: Option<GitlabContentFormatArg>,
         #[command(flatten)]
-        response: EmbeddedOutputArgs,
+        response: OutputContentArgs,
     },
     DeleteComment {
         project: String,
@@ -4031,7 +4005,7 @@ enum GitlabIssueCommand {
         iid: u64,
         note_id: u64,
         #[command(flatten)]
-        response: EmbeddedAndWholeOutputArgs,
+        response: OutputContentArgs,
     },
     ListComments {
         project: String,
@@ -4047,7 +4021,7 @@ enum GitlabIssueCommand {
         #[arg(long, value_enum, default_value = "full")]
         projection: GitlabProjectionArg,
         #[command(flatten)]
-        response: EmbeddedAndWholeOutputArgs,
+        response: OutputContentArgs,
     },
 }
 
@@ -4060,7 +4034,7 @@ enum GitlabMergeRequestCommand {
         #[arg(long)]
         merge_request_url: Option<String>,
         #[command(flatten)]
-        response: EmbeddedAndWholeOutputArgs,
+        response: OutputContentArgs,
     },
     /// List and filter merge requests within one required project.
     Search {
@@ -4096,7 +4070,7 @@ enum GitlabMergeRequestCommand {
         #[arg(long)]
         page_token: Option<String>,
         #[command(flatten)]
-        response: EmbeddedAndWholeOutputArgs,
+        response: OutputContentArgs,
     },
     ListReviewers {
         project: String,
@@ -4105,8 +4079,6 @@ enum GitlabMergeRequestCommand {
         max_results: Option<u32>,
         #[arg(long)]
         page_token: Option<String>,
-        #[command(flatten)]
-        response: WholeOutputArgs,
     },
     ListCommits {
         project: String,
@@ -4115,8 +4087,6 @@ enum GitlabMergeRequestCommand {
         max_results: Option<u32>,
         #[arg(long)]
         page_token: Option<String>,
-        #[command(flatten)]
-        response: WholeOutputArgs,
     },
     ListPipelines {
         project: String,
@@ -4125,8 +4095,6 @@ enum GitlabMergeRequestCommand {
         max_results: Option<u32>,
         #[arg(long)]
         page_token: Option<String>,
-        #[command(flatten)]
-        response: WholeOutputArgs,
     },
     ListDiffs {
         project: String,
@@ -4137,8 +4105,6 @@ enum GitlabMergeRequestCommand {
         max_results: Option<u32>,
         #[arg(long)]
         page_token: Option<String>,
-        #[command(flatten)]
-        response: WholeOutputArgs,
     },
     DiffRaw {
         project: String,
@@ -4151,8 +4117,6 @@ enum GitlabMergeRequestCommand {
         max_results: Option<u32>,
         #[arg(long)]
         page_token: Option<String>,
-        #[command(flatten)]
-        response: WholeOutputArgs,
     },
     ViewDiffVersion {
         project: String,
@@ -4160,15 +4124,13 @@ enum GitlabMergeRequestCommand {
         version_id: u64,
         #[arg(long)]
         unidiff: bool,
-        #[command(flatten)]
-        response: WholeOutputArgs,
     },
     ViewDiscussion {
         project: String,
         iid: u64,
         discussion_id: String,
         #[command(flatten)]
-        response: EmbeddedAndWholeOutputArgs,
+        response: OutputContentArgs,
     },
     InlineDiscussion {
         project: String,
@@ -4180,7 +4142,7 @@ enum GitlabMergeRequestCommand {
         #[command(flatten)]
         body: GitlabRequiredContentArgs,
         #[command(flatten)]
-        response: EmbeddedOutputArgs,
+        response: OutputContentArgs,
     },
     ReplyDiscussion {
         project: String,
@@ -4189,7 +4151,7 @@ enum GitlabMergeRequestCommand {
         #[command(flatten)]
         body: GitlabRequiredContentArgs,
         #[command(flatten)]
-        response: EmbeddedOutputArgs,
+        response: OutputContentArgs,
     },
     ListDraftNotes {
         project: String,
@@ -4201,14 +4163,14 @@ enum GitlabMergeRequestCommand {
         #[arg(long, value_enum, default_value = "full")]
         projection: GitlabProjectionArg,
         #[command(flatten)]
-        response: EmbeddedAndWholeOutputArgs,
+        response: OutputContentArgs,
     },
     ViewDraftNote {
         project: String,
         iid: u64,
         draft_note_id: u64,
         #[command(flatten)]
-        response: EmbeddedAndWholeOutputArgs,
+        response: OutputContentArgs,
     },
     AddDraftNote {
         project: String,
@@ -4228,7 +4190,7 @@ enum GitlabMergeRequestCommand {
         #[command(flatten)]
         body: GitlabRequiredContentArgs,
         #[command(flatten)]
-        response: EmbeddedOutputArgs,
+        response: OutputContentArgs,
     },
     UpdateDraftNote {
         project: String,
@@ -4241,7 +4203,7 @@ enum GitlabMergeRequestCommand {
         #[command(flatten)]
         body: GitlabOptionalContentArgs,
         #[command(flatten)]
-        response: EmbeddedOutputArgs,
+        response: OutputContentArgs,
     },
     DeleteDraftNote {
         project: String,
@@ -4274,14 +4236,10 @@ enum GitlabMergeRequestCommand {
     ViewApproval {
         project: String,
         iid: u64,
-        #[command(flatten)]
-        response: WholeOutputArgs,
     },
     ViewApprovalState {
         project: String,
         iid: u64,
-        #[command(flatten)]
-        response: WholeOutputArgs,
     },
     ListApprovalRules {
         project: String,
@@ -4290,15 +4248,11 @@ enum GitlabMergeRequestCommand {
         max_results: Option<u32>,
         #[arg(long)]
         page_token: Option<String>,
-        #[command(flatten)]
-        response: WholeOutputArgs,
     },
     ViewApprovalRule {
         project: String,
         iid: u64,
         approval_rule_id: u64,
-        #[command(flatten)]
-        response: WholeOutputArgs,
     },
     Approve {
         project: String,
@@ -4358,7 +4312,7 @@ enum GitlabMergeRequestCommand {
         #[arg(long)]
         draft: Option<bool>,
         #[command(flatten)]
-        response: EmbeddedOutputArgs,
+        response: OutputContentArgs,
     },
     Update {
         project: String,
@@ -4390,7 +4344,7 @@ enum GitlabMergeRequestCommand {
         #[arg(long)]
         squash: Option<bool>,
         #[command(flatten)]
-        response: EmbeddedOutputArgs,
+        response: OutputContentArgs,
     },
     Comment {
         project: String,
@@ -4407,7 +4361,7 @@ enum GitlabMergeRequestCommand {
         #[arg(long, value_enum, requires = "content_source")]
         content_format: Option<GitlabContentFormatArg>,
         #[command(flatten)]
-        response: EmbeddedOutputArgs,
+        response: OutputContentArgs,
     },
     UpdateComment {
         project: String,
@@ -4425,7 +4379,7 @@ enum GitlabMergeRequestCommand {
         #[arg(long, value_enum, requires = "content_source")]
         content_format: Option<GitlabContentFormatArg>,
         #[command(flatten)]
-        response: EmbeddedOutputArgs,
+        response: OutputContentArgs,
     },
     DeleteComment {
         project: String,
@@ -4437,7 +4391,7 @@ enum GitlabMergeRequestCommand {
         iid: u64,
         note_id: u64,
         #[command(flatten)]
-        response: EmbeddedAndWholeOutputArgs,
+        response: OutputContentArgs,
     },
     ListComments {
         project: String,
@@ -4453,7 +4407,7 @@ enum GitlabMergeRequestCommand {
         #[arg(long, value_enum, default_value = "full")]
         projection: GitlabProjectionArg,
         #[command(flatten)]
-        response: EmbeddedAndWholeOutputArgs,
+        response: OutputContentArgs,
     },
     Discussion {
         project: String,
@@ -4470,7 +4424,7 @@ enum GitlabMergeRequestCommand {
         #[arg(long, value_enum, requires = "content_source")]
         content_format: Option<GitlabContentFormatArg>,
         #[command(flatten)]
-        response: EmbeddedOutputArgs,
+        response: OutputContentArgs,
     },
     UpdateDiscussionNote {
         project: String,
@@ -4489,7 +4443,7 @@ enum GitlabMergeRequestCommand {
         #[arg(long, value_enum, requires = "content_source")]
         content_format: Option<GitlabContentFormatArg>,
         #[command(flatten)]
-        response: EmbeddedOutputArgs,
+        response: OutputContentArgs,
     },
     DeleteDiscussionNote {
         project: String,
@@ -4502,14 +4456,14 @@ enum GitlabMergeRequestCommand {
         iid: u64,
         discussion_id: String,
         #[command(flatten)]
-        response: EmbeddedOutputArgs,
+        response: OutputContentArgs,
     },
     ReopenDiscussion {
         project: String,
         iid: u64,
         discussion_id: String,
         #[command(flatten)]
-        response: EmbeddedOutputArgs,
+        response: OutputContentArgs,
     },
     ListDiscussions {
         project: String,
@@ -4521,7 +4475,7 @@ enum GitlabMergeRequestCommand {
         #[arg(long, value_enum, default_value = "full")]
         projection: GitlabProjectionArg,
         #[command(flatten)]
-        response: EmbeddedAndWholeOutputArgs,
+        response: OutputContentArgs,
     },
     Merge {
         project: String,
@@ -4549,14 +4503,10 @@ enum GitlabBranchCommand {
         regex: Option<String>,
         #[arg(long)]
         max_results: Option<u32>,
-        #[command(flatten)]
-        response: WholeOutputArgs,
     },
     View {
         project: String,
         branch: String,
-        #[command(flatten)]
-        response: WholeOutputArgs,
     },
     Create {
         project: String,
@@ -4574,21 +4524,15 @@ enum GitlabProtectedBranchCommand {
         search: Option<String>,
         #[arg(long)]
         max_results: Option<u32>,
-        #[command(flatten)]
-        response: WholeOutputArgs,
     },
     View {
         project: String,
         branch_or_wildcard_name: String,
-        #[command(flatten)]
-        response: WholeOutputArgs,
     },
     Verify {
         project: String,
         #[arg(long = "required-pattern")]
         required_patterns: Vec<String>,
-        #[command(flatten)]
-        response: WholeOutputArgs,
     },
 }
 
@@ -4606,8 +4550,6 @@ enum GitlabFileCommand {
         /// Whole-file byte budget; requires --include-content.
         #[arg(long, requires = "include_content", value_parser = clap::value_parser!(u64).range(1..))]
         max_content_bytes: Option<u64>,
-        #[command(flatten)]
-        response: WholeOutputArgs,
     },
     Raw {
         project: String,
@@ -4691,14 +4633,10 @@ enum GitlabCommitCommand {
         first_parent: Option<bool>,
         #[arg(long)]
         max_results: Option<u32>,
-        #[command(flatten)]
-        response: WholeOutputArgs,
     },
     View {
         project: String,
         sha: String,
-        #[command(flatten)]
-        response: WholeOutputArgs,
     },
     Create {
         project: String,
@@ -4737,14 +4675,10 @@ enum GitlabPipelineCommand {
         updated_before: Option<String>,
         #[arg(long)]
         max_results: Option<u32>,
-        #[command(flatten)]
-        response: WholeOutputArgs,
     },
     View {
         project: String,
         pipeline_id: u64,
-        #[command(flatten)]
-        response: WholeOutputArgs,
     },
     Run {
         project: String,
@@ -4771,14 +4705,10 @@ enum GitlabJobCommand {
         scope: Option<String>,
         #[arg(long)]
         max_results: Option<u32>,
-        #[command(flatten)]
-        response: WholeOutputArgs,
     },
     View {
         project: String,
         job_id: u64,
-        #[command(flatten)]
-        response: WholeOutputArgs,
     },
     Trace {
         project: String,
@@ -4975,19 +4905,29 @@ enum McpCommand {
         /// identical either way. Fixed for this process.
         #[arg(long, value_name = "MODE", default_value = "off", value_parser = mcp::output_schemas_parser())]
         output_schemas: agent_access_core::mcp::OutputSchemas,
+        /// Soft preference for returned rich-text fields.
+        #[arg(long, value_enum)]
+        preferred_output_content_format: Option<OutputContentFormatArg>,
+        /// Include a readable text copy beside each structured tool result.
+        #[arg(long, action = clap::ArgAction::Set, default_value_t = true)]
+        include_text_copy: bool,
     },
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    require_cli_input(reject_retired_environment());
     require_cli_input(validate_output_command(&cli));
     let config = cli.config.clone().unwrap_or_else(default_config_path);
     if let Command::Mcp {
-        command: McpCommand::Serve {
-            service,
-            output_schemas,
-        },
+        command:
+            McpCommand::Serve {
+                service,
+                output_schemas,
+                include_text_copy,
+                ..
+            },
     } = &cli.command
     {
         let view = service
@@ -4995,7 +4935,8 @@ async fn main() -> Result<()> {
             .map(agent_access_core::mcp::McpView::Service)
             .unwrap_or_default();
         let output_schemas = *output_schemas;
-        return mcp::serve(cli, config, view, output_schemas).await;
+        let include_text_copy = *include_text_copy;
+        return mcp::serve(cli, config, view, output_schemas, include_text_copy).await;
     }
     let result = match &cli.command {
         Command::Auth {
@@ -5039,6 +4980,12 @@ async fn main() -> Result<()> {
     {
         eprintln!("{}", error.message);
         std::process::exit(error.code);
+    }
+    if let Err(error) = &result
+        && let Some(failure) = error.downcast_ref::<output::ResponseContentFailure>()
+    {
+        eprintln!("{}", serde_json::to_string_pretty(&failure.details)?);
+        std::process::exit(5);
     }
     if let Err(error) = &result
         && let Some(failure) = error.downcast_ref::<output::LocalOutputFailure>()
@@ -5194,7 +5141,6 @@ fn write_local_response(
     ctx: &CliContext<'_>,
     status: u16,
     value: &serde_json::Value,
-    format: ResponseFormat,
     reserved: Option<output::ResponseOutput>,
 ) -> Result<Option<serde_json::Value>> {
     if !(200..300).contains(&status)
@@ -5209,29 +5155,19 @@ fn write_local_response(
         None => output::ResponseOutput::prepare(ctx.output, &[]).map_err(|error| {
             output::LocalOutputFailure::response(
                 value,
-                ctx.output.expect("preparation failed for selected output"),
+                ctx.output.expect("selected output"),
                 error,
                 &[],
             )
         })?,
     };
-    let Some(reserved) = reserved else {
-        return Ok(None);
-    };
-    let (bytes, content_type) = if format == ResponseFormat::Markdown {
-        let markdown =
-            markdown_result_value(value)?.context("formatted response has no Markdown result")?;
-        (markdown.as_bytes().to_vec(), "text/markdown")
-    } else {
-        let mut bytes = serde_json::to_vec_pretty(value)?;
-        bytes.push(b'\n');
-        (bytes, "application/json")
-    };
-    Ok(Some(reserved.save(value, &bytes, content_type)?))
+    reserved
+        .map(|reserved| reserved.save_json(value))
+        .transpose()
 }
 
 fn print_local_response(ctx: &CliContext<'_>, status: u16, value: serde_json::Value) -> Result<()> {
-    if let Some(receipt) = write_local_response(ctx, status, &value, ResponseFormat::Json, None)? {
+    if let Some(receipt) = write_local_response(ctx, status, &value, None)? {
         print_value_and_exit(status, receipt);
     }
     print_value_and_exit(status, value);
@@ -5327,14 +5263,13 @@ async fn run_cli_command(ctx: &CliContext<'_>, command: &Command) -> Result<()> 
         Command::CloudbeesCi { command } => run_cloudbees_ci_command(ctx, command).await,
         Command::Gmail { command } => {
             let (action, inputs) = gmail_invocation(command);
-            run_typed_invoke_value(ctx, action, inputs, None, None).await
+            run_typed_invoke_value(ctx, action, inputs, None).await
         }
         Command::Teams { command } => {
             run_typed_invoke_value(
                 ctx,
                 "teams.notification.send",
                 teams_invocation(command),
-                None,
                 None,
             )
             .await
@@ -5355,7 +5290,7 @@ async fn run_cli_command(ctx: &CliContext<'_>, command: &Command) -> Result<()> 
                 ),
                 OAuthStubCommand::Account => ("oauth_stub.account.view", serde_json::json!({})),
             };
-            run_typed_invoke_value(ctx, action, inputs, None, None).await
+            run_typed_invoke_value(ctx, action, inputs, None).await
         }
         Command::Spec { command } => run_spec_command(ctx, command).await,
         Command::Send {
@@ -5368,8 +5303,7 @@ async fn run_cli_command(ctx: &CliContext<'_>, command: &Command) -> Result<()> 
             input_json,
             input_file,
             input_stdin,
-            read_content_format,
-            output_format,
+            output_content_format,
         } => {
             run_invoke(
                 ctx,
@@ -5377,8 +5311,7 @@ async fn run_cli_command(ctx: &CliContext<'_>, command: &Command) -> Result<()> 
                 input_json,
                 input_file,
                 *input_stdin,
-                *read_content_format,
-                *output_format,
+                *output_content_format,
             )
             .await
         }
@@ -5392,7 +5325,6 @@ async fn run_confluence_command(ctx: &CliContext<'_>, command: &ConfluenceComman
                 ConfluenceSpaceCommand::List {
                     max_results,
                     page_token,
-                    output_format,
                 },
         } => {
             let mut inputs = serde_json::Map::new();
@@ -5402,14 +5334,7 @@ async fn run_confluence_command(ctx: &CliContext<'_>, command: &ConfluenceComman
             if let Some(page_token) = page_token {
                 inputs.insert("pageToken".to_string(), serde_json::json!(page_token));
             }
-            run_typed_invoke_value(
-                ctx,
-                "confluence.space.list",
-                inputs.into(),
-                None,
-                *output_format,
-            )
-            .await
+            run_typed_invoke_value(ctx, "confluence.space.list", inputs.into(), None).await
         }
 
         ConfluenceCommand::Page { command } => match command {
@@ -5429,8 +5354,7 @@ async fn run_confluence_command(ctx: &CliContext<'_>, command: &ConfluenceComman
                     ctx,
                     "confluence.page.view",
                     inputs,
-                    response.read_content_format,
-                    response.output_format,
+                    response.output_content_format,
                 )
                 .await
             }
@@ -5440,7 +5364,6 @@ async fn run_confluence_command(ctx: &CliContext<'_>, command: &ConfluenceComman
                 spaces,
                 max_results,
                 next_page_token,
-                response,
             } => {
                 let mut inputs = serde_json::Map::new();
                 inputs.insert(
@@ -5469,14 +5392,14 @@ async fn run_confluence_command(ctx: &CliContext<'_>, command: &ConfluenceComman
                     "confluence.search",
                     serde_json::Value::Object(inputs),
                     None,
-                    response.output_format,
                 )
                 .await
             }
             ConfluencePageCommand::Create {
                 space,
                 title,
-                parent,
+                parent_kind,
+                parent_id,
                 parent_url,
                 content,
                 content_file,
@@ -5494,7 +5417,8 @@ async fn run_confluence_command(ctx: &CliContext<'_>, command: &ConfluenceComman
                 )?;
                 confluence_optional_parent_locator_inputs(
                     &mut inputs,
-                    parent.as_deref(),
+                    *parent_kind,
+                    parent_id.as_deref(),
                     parent_url.as_deref(),
                     "confluence page create",
                 );
@@ -5570,7 +5494,6 @@ async fn run_confluence_command(ctx: &CliContext<'_>, command: &ConfluenceComman
                     page_url,
                     max_results,
                     next_page_token,
-                    response,
                 } => {
                     let mut inputs = match (page_id.as_deref(), page_url.as_deref()) {
                         (Some(page_id), None) => {
@@ -5601,7 +5524,6 @@ async fn run_confluence_command(ctx: &CliContext<'_>, command: &ConfluenceComman
                         "confluence.attachment.list",
                         serde_json::Value::Object(inputs),
                         None,
-                        response.output_format,
                     )
                     .await
                 }
@@ -5633,7 +5555,6 @@ async fn run_confluence_command(ctx: &CliContext<'_>, command: &ConfluenceComman
                 expect_version,
                 expect_title,
                 expect_attachment_id,
-                response,
             } => {
                 if expect_version.is_none()
                     && expect_title.is_none()
@@ -5662,7 +5583,6 @@ async fn run_confluence_command(ctx: &CliContext<'_>, command: &ConfluenceComman
                     "confluence.verify",
                     serde_json::Value::Object(inputs),
                     None,
-                    response.output_format,
                 )
                 .await
             }
@@ -5684,8 +5604,7 @@ async fn run_confluence_command(ctx: &CliContext<'_>, command: &ConfluenceComman
                     ctx,
                     "confluence.blog.view",
                     inputs,
-                    response.read_content_format,
-                    response.output_format,
+                    response.output_content_format,
                 )
                 .await
             }
@@ -5695,7 +5614,6 @@ async fn run_confluence_command(ctx: &CliContext<'_>, command: &ConfluenceComman
                 spaces,
                 max_results,
                 next_page_token,
-                response,
             } => {
                 let mut inputs = serde_json::Map::new();
                 inputs.insert(
@@ -5724,7 +5642,6 @@ async fn run_confluence_command(ctx: &CliContext<'_>, command: &ConfluenceComman
                     "confluence.blog.search",
                     serde_json::Value::Object(inputs),
                     None,
-                    response.output_format,
                 )
                 .await
             }
@@ -5798,7 +5715,6 @@ async fn run_confluence_command(ctx: &CliContext<'_>, command: &ConfluenceComman
                     blog_url,
                     max_results,
                     next_page_token,
-                    response,
                 } => {
                     let mut inputs = match (blog_id.as_deref(), blog_url.as_deref()) {
                         (Some(blog_id), None) => {
@@ -5829,7 +5745,6 @@ async fn run_confluence_command(ctx: &CliContext<'_>, command: &ConfluenceComman
                         "confluence.blog.attachment.list",
                         serde_json::Value::Object(inputs),
                         None,
-                        response.output_format,
                     )
                     .await
                 }
@@ -5861,7 +5776,6 @@ async fn run_confluence_command(ctx: &CliContext<'_>, command: &ConfluenceComman
                 expect_version,
                 expect_title,
                 expect_attachment_id,
-                response,
             } => {
                 if expect_version.is_none()
                     && expect_title.is_none()
@@ -5890,7 +5804,6 @@ async fn run_confluence_command(ctx: &CliContext<'_>, command: &ConfluenceComman
                     "confluence.blog.verify",
                     serde_json::Value::Object(inputs),
                     None,
-                    response.output_format,
                 )
                 .await
             }
@@ -5906,7 +5819,8 @@ async fn run_confluence_page_draft_command(
         ConfluencePageDraftCommand::Create {
             space,
             title,
-            parent,
+            parent_kind,
+            parent_id,
             parent_url,
             content,
             content_file,
@@ -5924,7 +5838,8 @@ async fn run_confluence_page_draft_command(
             )?;
             confluence_optional_parent_locator_inputs(
                 &mut inputs,
-                parent.as_deref(),
+                *parent_kind,
+                parent_id.as_deref(),
                 parent_url.as_deref(),
                 "confluence page draft create",
             );
@@ -5977,8 +5892,7 @@ async fn run_confluence_page_draft_command(
                     "draftHandle": draft_handle,
                     "bodyFormat": body_format,
                 }),
-                response.read_content_format,
-                response.output_format,
+                response.output_content_format,
             )
             .await
         }
@@ -6046,7 +5960,6 @@ async fn run_confluence_page_draft_command(
             expect_version,
             expect_title,
             expect_attachment_id,
-            response,
         } => {
             let inputs = confluence_draft_verify_inputs(
                 "pageId",
@@ -6057,14 +5970,7 @@ async fn run_confluence_page_draft_command(
                 expect_attachment_id.as_deref(),
                 "confluence page draft verify",
             );
-            run_typed_invoke_value(
-                ctx,
-                "confluence.page.draft.verify",
-                inputs,
-                None,
-                response.output_format,
-            )
-            .await
+            run_typed_invoke_value(ctx, "confluence.page.draft.verify", inputs, None).await
         }
         ConfluencePageDraftCommand::Attach {
             page_id,
@@ -6091,7 +5997,6 @@ async fn run_confluence_page_draft_command(
                 draft_handle,
                 max_results,
                 next_page_token,
-                response,
             } => {
                 let inputs = confluence_draft_attachment_list_inputs(
                     "pageId",
@@ -6100,14 +6005,8 @@ async fn run_confluence_page_draft_command(
                     *max_results,
                     next_page_token.as_deref(),
                 );
-                run_typed_invoke_value(
-                    ctx,
-                    "confluence.page.draft.attachment.list",
-                    inputs,
-                    None,
-                    response.output_format,
-                )
-                .await
+                run_typed_invoke_value(ctx, "confluence.page.draft.attachment.list", inputs, None)
+                    .await
             }
             ConfluencePageDraftAttachmentCommand::Download {
                 page_id,
@@ -6202,8 +6101,7 @@ async fn run_confluence_blog_draft_command(
                     "draftHandle": draft_handle,
                     "bodyFormat": body_format,
                 }),
-                response.read_content_format,
-                response.output_format,
+                response.output_content_format,
             )
             .await
         }
@@ -6271,7 +6169,6 @@ async fn run_confluence_blog_draft_command(
             expect_version,
             expect_title,
             expect_attachment_id,
-            response,
         } => {
             let inputs = confluence_draft_verify_inputs(
                 "blogId",
@@ -6282,14 +6179,7 @@ async fn run_confluence_blog_draft_command(
                 expect_attachment_id.as_deref(),
                 "confluence blog draft verify",
             );
-            run_typed_invoke_value(
-                ctx,
-                "confluence.blog.draft.verify",
-                inputs,
-                None,
-                response.output_format,
-            )
-            .await
+            run_typed_invoke_value(ctx, "confluence.blog.draft.verify", inputs, None).await
         }
         ConfluenceBlogDraftCommand::Attach {
             blog_id,
@@ -6316,7 +6206,6 @@ async fn run_confluence_blog_draft_command(
                 draft_handle,
                 max_results,
                 next_page_token,
-                response,
             } => {
                 let inputs = confluence_draft_attachment_list_inputs(
                     "blogId",
@@ -6325,14 +6214,8 @@ async fn run_confluence_blog_draft_command(
                     *max_results,
                     next_page_token.as_deref(),
                 );
-                run_typed_invoke_value(
-                    ctx,
-                    "confluence.blog.draft.attachment.list",
-                    inputs,
-                    None,
-                    response.output_format,
-                )
-                .await
+                run_typed_invoke_value(ctx, "confluence.blog.draft.attachment.list", inputs, None)
+                    .await
             }
             ConfluenceBlogDraftAttachmentCommand::Download {
                 blog_id,
@@ -6382,8 +6265,7 @@ async fn run_confluence_page_comment_command(
                     sort: sort.as_deref(),
                     max_results: *max_results,
                     next_page_token: next_page_token.as_deref(),
-                    read_content_format: response.read_content_format,
-                    output_format: response.output_format,
+                    output_content_format: response.output_content_format,
                 },
             )
             .await
@@ -6418,7 +6300,7 @@ async fn run_confluence_page_comment_command(
                     content: content.as_deref(),
                     content_file: content_file.as_deref(),
                     content_format: *content_format,
-                    read_content_format: response.read_content_format,
+                    output_content_format: response.output_content_format,
                 },
             )
             .await
@@ -6440,7 +6322,7 @@ async fn run_confluence_page_comment_command(
                     content: content.as_deref(),
                     content_file: content_file.as_deref(),
                     content_format: *content_format,
-                    read_content_format: response.read_content_format,
+                    output_content_format: response.output_content_format,
                 },
             )
             .await
@@ -6519,8 +6401,7 @@ async fn run_confluence_page_inline_comment_command(
                     sort: sort.as_deref(),
                     max_results: *max_results,
                     next_page_token: next_page_token.as_deref(),
-                    read_content_format: response.read_content_format,
-                    output_format: response.output_format,
+                    output_content_format: response.output_content_format,
                 },
             )
             .await
@@ -6556,7 +6437,7 @@ async fn run_confluence_page_inline_comment_command(
                     content: content.as_deref(),
                     content_file: content_file.as_deref(),
                     content_format: *content_format,
-                    read_content_format: response.read_content_format,
+                    output_content_format: response.output_content_format,
                 },
             )
             .await
@@ -6634,8 +6515,7 @@ async fn run_confluence_blog_comment_command(
                     sort: sort.as_deref(),
                     max_results: *max_results,
                     next_page_token: next_page_token.as_deref(),
-                    read_content_format: response.read_content_format,
-                    output_format: response.output_format,
+                    output_content_format: response.output_content_format,
                 },
             )
             .await
@@ -6670,7 +6550,7 @@ async fn run_confluence_blog_comment_command(
                     content: content.as_deref(),
                     content_file: content_file.as_deref(),
                     content_format: *content_format,
-                    read_content_format: response.read_content_format,
+                    output_content_format: response.output_content_format,
                 },
             )
             .await
@@ -6692,7 +6572,7 @@ async fn run_confluence_blog_comment_command(
                     content: content.as_deref(),
                     content_file: content_file.as_deref(),
                     content_format: *content_format,
-                    read_content_format: response.read_content_format,
+                    output_content_format: response.output_content_format,
                 },
             )
             .await
@@ -6771,8 +6651,7 @@ async fn run_confluence_blog_inline_comment_command(
                     sort: sort.as_deref(),
                     max_results: *max_results,
                     next_page_token: next_page_token.as_deref(),
-                    read_content_format: response.read_content_format,
-                    output_format: response.output_format,
+                    output_content_format: response.output_content_format,
                 },
             )
             .await
@@ -6808,7 +6687,7 @@ async fn run_confluence_blog_inline_comment_command(
                     content: content.as_deref(),
                     content_file: content_file.as_deref(),
                     content_format: *content_format,
-                    read_content_format: response.read_content_format,
+                    output_content_format: response.output_content_format,
                 },
             )
             .await
@@ -6869,8 +6748,7 @@ struct ConfluenceCommentListCliRequest<'a> {
     sort: Option<&'a str>,
     max_results: Option<u32>,
     next_page_token: Option<&'a str>,
-    read_content_format: Option<ReadContentFormatArg>,
-    output_format: Option<OutputFormatArg>,
+    output_content_format: Option<OutputContentFormatArg>,
 }
 
 async fn run_confluence_comment_list(
@@ -6907,8 +6785,7 @@ async fn run_confluence_comment_list(
         ctx,
         &request.service_action,
         serde_json::Value::Object(inputs),
-        request.read_content_format,
-        request.output_format,
+        request.output_content_format,
     )
     .await
 }
@@ -6918,7 +6795,7 @@ async fn run_confluence_comment_view(
     service_action: &str,
     comment_id: &str,
     body_format: Option<&str>,
-    response: &EmbeddedAndWholeOutputArgs,
+    response: &OutputContentArgs,
 ) -> Result<()> {
     let mut inputs = serde_json::Map::new();
     inputs.insert("commentId".to_string(), serde_json::json!(comment_id));
@@ -6929,8 +6806,7 @@ async fn run_confluence_comment_view(
         ctx,
         service_action,
         serde_json::Value::Object(inputs),
-        response.read_content_format,
-        response.output_format,
+        response.output_content_format,
     )
     .await
 }
@@ -6942,7 +6818,7 @@ struct ConfluenceCommentAddCliRequest<'a> {
     content: Option<&'a str>,
     content_file: Option<&'a Path>,
     content_format: ConfluenceContentFormatArg,
-    read_content_format: Option<ReadContentFormatArg>,
+    output_content_format: Option<OutputContentFormatArg>,
 }
 
 async fn run_confluence_comment_add(
@@ -6965,8 +6841,7 @@ async fn run_confluence_comment_add(
         ctx,
         &request.service_action,
         serde_json::Value::Object(inputs),
-        request.read_content_format,
-        None,
+        request.output_content_format,
     )
     .await
 }
@@ -6978,7 +6853,7 @@ async fn run_confluence_comment_replies(
     body_format: Option<&str>,
     max_results: Option<u32>,
     next_page_token: Option<&str>,
-    response: &EmbeddedAndWholeOutputArgs,
+    response: &OutputContentArgs,
 ) -> Result<()> {
     let mut inputs = serde_json::Map::new();
     inputs.insert("commentId".to_string(), serde_json::json!(comment_id));
@@ -6998,8 +6873,7 @@ async fn run_confluence_comment_replies(
         ctx,
         service_action,
         serde_json::Value::Object(inputs),
-        response.read_content_format,
-        response.output_format,
+        response.output_content_format,
     )
     .await
 }
@@ -7011,7 +6885,7 @@ async fn run_confluence_comment_reply(
     content: Option<&str>,
     content_file: Option<&Path>,
     content_format: ConfluenceContentFormatArg,
-    response: &EmbeddedOutputArgs,
+    response: &OutputContentArgs,
 ) -> Result<()> {
     let mut inputs = serde_json::Map::new();
     inputs.insert("commentId".to_string(), serde_json::json!(comment_id));
@@ -7026,8 +6900,7 @@ async fn run_confluence_comment_reply(
         ctx,
         service_action,
         serde_json::Value::Object(inputs),
-        response.read_content_format,
-        None,
+        response.output_content_format,
     )
     .await
 }
@@ -7039,7 +6912,7 @@ struct ConfluenceCommentUpdateCliRequest<'a> {
     content: Option<&'a str>,
     content_file: Option<&'a Path>,
     content_format: ConfluenceContentFormatArg,
-    read_content_format: Option<ReadContentFormatArg>,
+    output_content_format: Option<OutputContentFormatArg>,
 }
 
 async fn run_confluence_comment_update(
@@ -7066,8 +6939,7 @@ async fn run_confluence_comment_update(
         ctx,
         &request.service_action,
         serde_json::Value::Object(inputs),
-        request.read_content_format,
-        None,
+        request.output_content_format,
     )
     .await
 }
@@ -7092,13 +6964,8 @@ async fn run_cloudbees_ci_command(
     command: &CloudbeesCiCommand,
 ) -> Result<()> {
     match cloudbees_ci_invocation(command) {
-        CloudbeesCiInvocation::Json {
-            action,
-            inputs,
-            format,
-        } => {
-            run_typed_invoke_value(ctx, &format!("cloudbees_ci.{action}"), inputs, None, format)
-                .await
+        CloudbeesCiInvocation::Json { action, inputs } => {
+            run_typed_invoke_value(ctx, &format!("cloudbees_ci.{action}"), inputs, None).await
         }
         CloudbeesCiInvocation::Download { action, inputs } => {
             run_attachment_download(
@@ -7116,7 +6983,6 @@ enum CloudbeesCiInvocation {
     Json {
         action: &'static str,
         inputs: serde_json::Value,
-        format: Option<OutputFormatArg>,
     },
     Download {
         action: &'static str,
@@ -7138,10 +7004,7 @@ fn cloudbees_ci_invocation(command: &CloudbeesCiCommand) -> CloudbeesCiInvocatio
         serde_json::Value::Object(inputs)
     };
     let download = |action, inputs| CloudbeesCiInvocation::Download { action, inputs };
-    let list_response = WholeOutputArgs {
-        output_format: None,
-    };
-    let (action, inputs, response) = match command {
+    let (action, inputs) = match command {
         CloudbeesCiCommand::Job {
             command:
                 CloudbeesCiJobCommand::List {
@@ -7163,30 +7026,23 @@ fn cloudbees_ci_invocation(command: &CloudbeesCiCommand) -> CloudbeesCiInvocatio
                     ),
                 ],
             ),
-            &list_response,
         ),
         CloudbeesCiCommand::Job {
-            command: CloudbeesCiJobCommand::View { job, response },
-        } => ("job.view", with(job.inputs(), &[]), response),
+            command: CloudbeesCiJobCommand::View { job },
+        } => ("job.view", with(job.inputs(), &[])),
         CloudbeesCiCommand::Queue {
-            command:
-                CloudbeesCiQueueCommand::View {
-                    job,
-                    queue_id,
-                    response,
-                },
+            command: CloudbeesCiQueueCommand::View { job, queue_id },
         } => (
             "queue.view",
             with(
                 job.inputs(),
                 &[("queueId", Some(serde_json::json!(queue_id)))],
             ),
-            response,
         ),
         CloudbeesCiCommand::Build { command } => match command {
             Build::Artifact {
-                command: Artifact::List { build, response },
-            } => ("build.artifact.list", with(build.inputs(), &[]), response),
+                command: Artifact::List { build },
+            } => ("build.artifact.list", with(build.inputs(), &[])),
             Build::Artifact {
                 command:
                     Artifact::Download {
@@ -7208,11 +7064,7 @@ fn cloudbees_ci_invocation(command: &CloudbeesCiCommand) -> CloudbeesCiInvocatio
             Build::TestsDownload { build } => {
                 return download("build.tests.download", with(build.inputs(), &[]));
             }
-            Build::TestsDetails {
-                build,
-                max_results,
-                response,
-            } => (
+            Build::TestsDetails { build, max_results } => (
                 "build.tests.details",
                 with(
                     build.inputs(),
@@ -7221,51 +7073,32 @@ fn cloudbees_ci_invocation(command: &CloudbeesCiCommand) -> CloudbeesCiInvocatio
                         max_results.map(|value| serde_json::json!(value)),
                     )],
                 ),
-                response,
             ),
-            Build::PendingInputs { build, response } => (
-                "build.pending-inputs.list",
-                with(build.inputs(), &[]),
-                response,
-            ),
+            Build::PendingInputs { build } => {
+                ("build.pending-inputs.list", with(build.inputs(), &[]))
+            }
             Build::Pipeline {
-                command: Pipeline::View { build, response },
-            } => ("build.pipeline.view", with(build.inputs(), &[]), response),
+                command: Pipeline::View { build },
+            } => ("build.pipeline.view", with(build.inputs(), &[])),
             Build::Pipeline {
-                command:
-                    Pipeline::Node {
-                        build,
-                        node_id,
-                        response,
-                    },
+                command: Pipeline::Node { build, node_id },
             } => (
                 "build.pipeline.node.view",
                 with(
                     build.inputs(),
                     &[("nodeId", Some(serde_json::json!(node_id)))],
                 ),
-                response,
             ),
             Build::Pipeline {
-                command:
-                    Pipeline::Log {
-                        build,
-                        node_id,
-                        response,
-                    },
+                command: Pipeline::Log { build, node_id },
             } => (
                 "build.pipeline.node.log.read",
                 with(
                     build.inputs(),
                     &[("nodeId", Some(serde_json::json!(node_id)))],
                 ),
-                response,
             ),
-            Build::List {
-                job,
-                max_results,
-                response,
-            } => (
+            Build::List { job, max_results } => (
                 "build.list",
                 with(
                     job.inputs(),
@@ -7274,9 +7107,8 @@ fn cloudbees_ci_invocation(command: &CloudbeesCiCommand) -> CloudbeesCiInvocatio
                         max_results.map(|value| serde_json::json!(value)),
                     )],
                 ),
-                response,
             ),
-            Build::View { build, response } => ("build.view", with(build.inputs(), &[]), response),
+            Build::View { build } => ("build.view", with(build.inputs(), &[])),
             Build::Log {
                 build,
                 mode,
@@ -7284,7 +7116,6 @@ fn cloudbees_ci_invocation(command: &CloudbeesCiCommand) -> CloudbeesCiInvocatio
                 query,
                 max_matches,
                 max_bytes,
-                response,
             } => (
                 "build.log.read",
                 with(
@@ -7306,21 +7137,12 @@ fn cloudbees_ci_invocation(command: &CloudbeesCiCommand) -> CloudbeesCiInvocatio
                         ("maxBytes", max_bytes.map(|value| serde_json::json!(value))),
                     ],
                 ),
-                response,
             ),
-            Build::Tests { build, response } => {
-                ("build.tests.view", with(build.inputs(), &[]), response)
-            }
-            Build::Trigger { job, response } => {
-                ("build.trigger", with(job.inputs(), &[]), response)
-            }
+            Build::Tests { build } => ("build.tests.view", with(build.inputs(), &[])),
+            Build::Trigger { job } => ("build.trigger", with(job.inputs(), &[])),
         },
     };
-    CloudbeesCiInvocation::Json {
-        action,
-        inputs,
-        format: response.output_format,
-    }
+    CloudbeesCiInvocation::Json { action, inputs }
 }
 
 async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Result<()> {
@@ -7369,21 +7191,13 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
             GitlabProjectCommand::View {
                 project,
                 project_url,
-                response,
             } => {
                 let inputs = gitlab_project_locator_inputs(
                     project.as_deref(),
                     project_url.as_deref(),
                     "gitlab project view",
                 );
-                run_typed_invoke_value(
-                    ctx,
-                    "gitlab.project.view",
-                    inputs,
-                    None,
-                    response.output_format,
-                )
-                .await
+                run_typed_invoke_value(ctx, "gitlab.project.view", inputs, None).await
             }
         },
         GitlabCommand::Issue { command } => match command {
@@ -7404,8 +7218,7 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                     ctx,
                     "gitlab.issue.view",
                     inputs,
-                    response.read_content_format,
-                    response.output_format,
+                    response.output_content_format,
                 )
                 .await
             }
@@ -7443,8 +7256,7 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                     ctx,
                     "gitlab.issue.search",
                     serde_json::Value::Object(inputs),
-                    response.read_content_format,
-                    response.output_format,
+                    response.output_content_format,
                 )
                 .await
             }
@@ -7479,8 +7291,7 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                     ctx,
                     "gitlab.issue.create",
                     serde_json::Value::Object(inputs),
-                    response.read_content_format,
-                    None,
+                    response.output_content_format,
                 )
                 .await
             }
@@ -7523,8 +7334,7 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                     ctx,
                     "gitlab.issue.update",
                     serde_json::Value::Object(inputs),
-                    response.read_content_format,
-                    None,
+                    response.output_content_format,
                 )
                 .await
             }
@@ -7553,8 +7363,7 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                     ctx,
                     "gitlab.issue.note.add",
                     serde_json::Value::Object(inputs),
-                    response.read_content_format,
-                    None,
+                    response.output_content_format,
                 )
                 .await
             }
@@ -7578,7 +7387,7 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                         content_file: content_file.as_deref(),
                         content_format: *content_format,
                         command: "gitlab issue update-comment",
-                        read_content_format: response.read_content_format,
+                        output_content_format: response.output_content_format,
                     },
                 )
                 .await
@@ -7607,8 +7416,7 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                     ctx,
                     "gitlab.issue.note.view",
                     serde_json::json!({"project": project, "iid": iid, "noteId": note_id}),
-                    response.read_content_format,
-                    response.output_format,
+                    response.output_content_format,
                 )
                 .await
             }
@@ -7637,8 +7445,7 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                     ctx,
                     "gitlab.issue.note.list",
                     serde_json::Value::Object(inputs),
-                    response.read_content_format,
-                    response.output_format,
+                    response.output_content_format,
                 )
                 .await
             }
@@ -7661,8 +7468,7 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                     ctx,
                     "gitlab.merge_request.view",
                     inputs,
-                    response.read_content_format,
-                    response.output_format,
+                    response.output_content_format,
                 )
                 .await
             }
@@ -7706,8 +7512,7 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                     ctx,
                     "gitlab.merge_request.search",
                     serde_json::Value::Object(inputs),
-                    response.read_content_format,
-                    response.output_format,
+                    response.output_content_format,
                 )
                 .await
             }
@@ -7716,7 +7521,6 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                 iid,
                 max_results,
                 page_token,
-                response,
             } => {
                 run_typed_invoke_value(
                     ctx,
@@ -7728,7 +7532,6 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                         page_token.as_deref(),
                     ),
                     None,
-                    response.output_format,
                 )
                 .await
             }
@@ -7737,7 +7540,6 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                 iid,
                 max_results,
                 page_token,
-                response,
             } => {
                 run_typed_invoke_value(
                     ctx,
@@ -7749,7 +7551,6 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                         page_token.as_deref(),
                     ),
                     None,
-                    response.output_format,
                 )
                 .await
             }
@@ -7758,7 +7559,6 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                 iid,
                 max_results,
                 page_token,
-                response,
             } => {
                 run_typed_invoke_value(
                     ctx,
@@ -7770,7 +7570,6 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                         page_token.as_deref(),
                     ),
                     None,
-                    response.output_format,
                 )
                 .await
             }
@@ -7780,7 +7579,6 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                 unidiff,
                 max_results,
                 page_token,
-                response,
             } => {
                 run_typed_invoke_value(
                     ctx,
@@ -7793,7 +7591,6 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                         page_token.as_deref(),
                     ),
                     None,
-                    response.output_format,
                 )
                 .await
             }
@@ -7811,7 +7608,6 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                 iid,
                 max_results,
                 page_token,
-                response,
             } => {
                 run_typed_invoke_value(
                     ctx,
@@ -7823,7 +7619,6 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                         page_token.as_deref(),
                     ),
                     None,
-                    response.output_format,
                 )
                 .await
             }
@@ -7832,14 +7627,12 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                 iid,
                 version_id,
                 unidiff,
-                response,
             } => {
                 run_typed_invoke_value(
                     ctx,
                     "gitlab.merge_request.diff_version.view",
                     gitlab_merge_request_diff_version_inputs(project, *iid, *version_id, *unidiff),
                     None,
-                    response.output_format,
                 )
                 .await
             }
@@ -7853,8 +7646,7 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                     ctx,
                     "gitlab.merge_request.discussion.view",
                     gitlab_merge_request_discussion_view_inputs(project, *iid, discussion_id),
-                    response.read_content_format,
-                    response.output_format,
+                    response.output_content_format,
                 )
                 .await
             }
@@ -7877,8 +7669,7 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                     ctx,
                     "gitlab.merge_request.discussion.inline.add",
                     inputs,
-                    response.read_content_format,
-                    None,
+                    response.output_content_format,
                 )
                 .await
             }
@@ -7899,8 +7690,7 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                     ctx,
                     "gitlab.merge_request.discussion.note.add",
                     inputs,
-                    response.read_content_format,
-                    None,
+                    response.output_content_format,
                 )
                 .await
             }
@@ -7923,8 +7713,7 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                     ctx,
                     "gitlab.merge_request.draft_note.list",
                     inputs,
-                    response.read_content_format,
-                    response.output_format,
+                    response.output_content_format,
                 )
                 .await
             }
@@ -7938,8 +7727,7 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                     ctx,
                     "gitlab.merge_request.draft_note.view",
                     gitlab_draft_note_object_inputs(project, *iid, *draft_note_id),
-                    response.read_content_format,
-                    response.output_format,
+                    response.output_content_format,
                 )
                 .await
             }
@@ -7966,8 +7754,7 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                     ctx,
                     "gitlab.merge_request.draft_note.add",
                     inputs,
-                    response.read_content_format,
-                    None,
+                    response.output_content_format,
                 )
                 .await
             }
@@ -7992,8 +7779,7 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                     ctx,
                     "gitlab.merge_request.draft_note.update",
                     inputs,
-                    response.read_content_format,
-                    None,
+                    response.output_content_format,
                 )
                 .await
             }
@@ -8048,31 +7834,21 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                 ));
                 run_invoke_value(ctx, "gitlab.merge_request.review.submit", inputs).await
             }
-            GitlabMergeRequestCommand::ViewApproval {
-                project,
-                iid,
-                response,
-            } => {
+            GitlabMergeRequestCommand::ViewApproval { project, iid } => {
                 run_typed_invoke_value(
                     ctx,
                     "gitlab.merge_request.approval.view",
                     gitlab_merge_request_inputs(project, *iid),
                     None,
-                    response.output_format,
                 )
                 .await
             }
-            GitlabMergeRequestCommand::ViewApprovalState {
-                project,
-                iid,
-                response,
-            } => {
+            GitlabMergeRequestCommand::ViewApprovalState { project, iid } => {
                 run_typed_invoke_value(
                     ctx,
                     "gitlab.merge_request.approval_state.view",
                     gitlab_merge_request_inputs(project, *iid),
                     None,
-                    response.output_format,
                 )
                 .await
             }
@@ -8081,7 +7857,6 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                 iid,
                 max_results,
                 page_token,
-                response,
             } => {
                 run_typed_invoke_value(
                     ctx,
@@ -8093,7 +7868,6 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                         page_token.as_deref(),
                     ),
                     None,
-                    response.output_format,
                 )
                 .await
             }
@@ -8101,14 +7875,12 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                 project,
                 iid,
                 approval_rule_id,
-                response,
             } => {
                 run_typed_invoke_value(
                     ctx,
                     "gitlab.merge_request.approval_rule.view",
                     gitlab_approval_rule_inputs(project, *iid, *approval_rule_id),
                     None,
-                    response.output_format,
                 )
                 .await
             }
@@ -8207,8 +7979,7 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                     ctx,
                     "gitlab.merge_request.create",
                     serde_json::Value::Object(inputs),
-                    response.read_content_format,
-                    None,
+                    response.output_content_format,
                 )
                 .await
             }
@@ -8255,8 +8026,7 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                     ctx,
                     "gitlab.merge_request.update",
                     serde_json::Value::Object(inputs),
-                    response.read_content_format,
-                    None,
+                    response.output_content_format,
                 )
                 .await
             }
@@ -8278,7 +8048,7 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                         content_file: content_file.as_deref(),
                         content_format: *content_format,
                         command: "gitlab merge-request comment",
-                        read_content_format: response.read_content_format,
+                        output_content_format: response.output_content_format,
                     },
                 )
                 .await
@@ -8303,7 +8073,7 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                         content_file: content_file.as_deref(),
                         content_format: *content_format,
                         command: "gitlab merge-request update-comment",
-                        read_content_format: response.read_content_format,
+                        output_content_format: response.output_content_format,
                     },
                 )
                 .await
@@ -8332,8 +8102,7 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                     ctx,
                     "gitlab.merge_request.note.view",
                     serde_json::json!({"project": project, "iid": iid, "noteId": note_id}),
-                    response.read_content_format,
-                    response.output_format,
+                    response.output_content_format,
                 )
                 .await
             }
@@ -8362,8 +8131,7 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                     ctx,
                     "gitlab.merge_request.note.list",
                     serde_json::Value::Object(inputs),
-                    response.read_content_format,
-                    response.output_format,
+                    response.output_content_format,
                 )
                 .await
             }
@@ -8385,7 +8153,7 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                         content_file: content_file.as_deref(),
                         content_format: *content_format,
                         command: "gitlab merge-request discussion",
-                        read_content_format: response.read_content_format,
+                        output_content_format: response.output_content_format,
                     },
                 )
                 .await
@@ -8412,7 +8180,7 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                         content_file: content_file.as_deref(),
                         content_format: *content_format,
                         command: "gitlab merge-request update-discussion-note",
-                        read_content_format: response.read_content_format,
+                        output_content_format: response.output_content_format,
                     },
                 )
                 .await
@@ -8445,7 +8213,7 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                     project,
                     *iid,
                     discussion_id,
-                    response.read_content_format,
+                    response.output_content_format,
                 )
                 .await
             }
@@ -8461,7 +8229,7 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                     project,
                     *iid,
                     discussion_id,
-                    response.read_content_format,
+                    response.output_content_format,
                 )
                 .await
             }
@@ -8484,8 +8252,7 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                     ctx,
                     "gitlab.merge_request.discussion.list",
                     inputs,
-                    response.read_content_format,
-                    response.output_format,
+                    response.output_content_format,
                 )
                 .await
             }
@@ -8532,7 +8299,6 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                 search,
                 regex,
                 max_results,
-                response,
             } => {
                 let mut inputs = serde_json::Map::new();
                 inputs.insert("project".to_string(), serde_json::json!(project));
@@ -8544,15 +8310,10 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                     "gitlab.branch.list",
                     serde_json::Value::Object(inputs),
                     None,
-                    response.output_format,
                 )
                 .await
             }
-            GitlabBranchCommand::View {
-                project,
-                branch,
-                response,
-            } => {
+            GitlabBranchCommand::View { project, branch } => {
                 run_typed_invoke_value(
                     ctx,
                     "gitlab.branch.view",
@@ -8561,7 +8322,6 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                         "branch": branch,
                     }),
                     None,
-                    response.output_format,
                 )
                 .await
             }
@@ -8587,7 +8347,6 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                 project,
                 search,
                 max_results,
-                response,
             } => {
                 let mut inputs = serde_json::Map::new();
                 inputs.insert("project".to_string(), serde_json::json!(project));
@@ -8598,14 +8357,12 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                     "gitlab.protected_branch.list",
                     serde_json::Value::Object(inputs),
                     None,
-                    response.output_format,
                 )
                 .await
             }
             GitlabProtectedBranchCommand::View {
                 project,
                 branch_or_wildcard_name,
-                response,
             } => {
                 run_typed_invoke_value(
                     ctx,
@@ -8615,14 +8372,12 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                         "branchOrWildcardName": branch_or_wildcard_name,
                     }),
                     None,
-                    response.output_format,
                 )
                 .await
             }
             GitlabProtectedBranchCommand::Verify {
                 project,
                 required_patterns,
-                response,
             } => {
                 let mut inputs = serde_json::Map::new();
                 inputs.insert("project".to_string(), serde_json::json!(project));
@@ -8632,7 +8387,6 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                     "gitlab.protected_branch.verify",
                     serde_json::Value::Object(inputs),
                     None,
-                    response.output_format,
                 )
                 .await
             }
@@ -8644,7 +8398,6 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                 ref_name,
                 include_content,
                 max_content_bytes,
-                response,
             } => {
                 let mut inputs = serde_json::json!({
                     "project": project,
@@ -8655,14 +8408,7 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                 if let Some(maximum) = max_content_bytes {
                     inputs["maxContentBytes"] = serde_json::json!(maximum);
                 }
-                run_typed_invoke_value(
-                    ctx,
-                    "gitlab.file.view",
-                    inputs,
-                    None,
-                    response.output_format,
-                )
-                .await
+                run_typed_invoke_value(ctx, "gitlab.file.view", inputs, None).await
             }
             GitlabFileCommand::Raw {
                 project,
@@ -8765,7 +8511,6 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                 until,
                 first_parent,
                 max_results,
-                response,
             } => {
                 let mut inputs = serde_json::Map::new();
                 inputs.insert("project".to_string(), serde_json::json!(project));
@@ -8782,15 +8527,10 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                     "gitlab.commit.list",
                     serde_json::Value::Object(inputs),
                     None,
-                    response.output_format,
                 )
                 .await
             }
-            GitlabCommitCommand::View {
-                project,
-                sha,
-                response,
-            } => {
+            GitlabCommitCommand::View { project, sha } => {
                 run_typed_invoke_value(
                     ctx,
                     "gitlab.commit.view",
@@ -8799,7 +8539,6 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                         "sha": sha,
                     }),
                     None,
-                    response.output_format,
                 )
                 .await
             }
@@ -8843,7 +8582,6 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                 updated_after,
                 updated_before,
                 max_results,
-                response,
             } => {
                 let mut inputs = serde_json::Map::new();
                 inputs.insert("project".to_string(), serde_json::json!(project));
@@ -8859,14 +8597,12 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                     "gitlab.pipeline.list",
                     serde_json::Value::Object(inputs),
                     None,
-                    response.output_format,
                 )
                 .await
             }
             GitlabPipelineCommand::View {
                 project,
                 pipeline_id,
-                response,
             } => {
                 run_typed_invoke_value(
                     ctx,
@@ -8876,7 +8612,6 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                         "pipelineId": pipeline_id,
                     }),
                     None,
-                    response.output_format,
                 )
                 .await
             }
@@ -8926,7 +8661,6 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                 pipeline_id,
                 scope,
                 max_results,
-                response,
             } => {
                 let mut inputs = serde_json::Map::new();
                 inputs.insert("project".to_string(), serde_json::json!(project));
@@ -8940,15 +8674,10 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                     "gitlab.job.list",
                     serde_json::Value::Object(inputs),
                     None,
-                    response.output_format,
                 )
                 .await
             }
-            GitlabJobCommand::View {
-                project,
-                job_id,
-                response,
-            } => {
+            GitlabJobCommand::View { project, job_id } => {
                 run_typed_invoke_value(
                     ctx,
                     "gitlab.job.view",
@@ -8957,7 +8686,6 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                         "jobId": job_id,
                     }),
                     None,
-                    response.output_format,
                 )
                 .await
             }
@@ -10061,7 +9789,7 @@ struct GitlabContentCommandArgs<'a> {
     content_file: Option<&'a Path>,
     content_format: Option<GitlabContentFormatArg>,
     command: &'a str,
-    read_content_format: Option<ReadContentFormatArg>,
+    output_content_format: Option<OutputContentFormatArg>,
 }
 
 async fn run_gitlab_content_command(
@@ -10083,8 +9811,7 @@ async fn run_gitlab_content_command(
         ctx,
         args.action,
         serde_json::Value::Object(inputs),
-        args.read_content_format,
-        None,
+        args.output_content_format,
     )
     .await
 }
@@ -10098,7 +9825,7 @@ struct GitlabNoteContentCommandArgs<'a> {
     content_file: Option<&'a Path>,
     content_format: Option<GitlabContentFormatArg>,
     command: &'a str,
-    read_content_format: Option<ReadContentFormatArg>,
+    output_content_format: Option<OutputContentFormatArg>,
 }
 
 async fn run_gitlab_note_content_command(
@@ -10121,8 +9848,7 @@ async fn run_gitlab_note_content_command(
         ctx,
         args.action,
         serde_json::Value::Object(inputs),
-        args.read_content_format,
-        None,
+        args.output_content_format,
     )
     .await
 }
@@ -10151,7 +9877,7 @@ struct GitlabDiscussionNoteContentArgs<'a> {
     content_file: Option<&'a Path>,
     content_format: Option<GitlabContentFormatArg>,
     command: &'a str,
-    read_content_format: Option<ReadContentFormatArg>,
+    output_content_format: Option<OutputContentFormatArg>,
 }
 
 async fn run_gitlab_discussion_note_content_command(
@@ -10178,8 +9904,7 @@ async fn run_gitlab_discussion_note_content_command(
         ctx,
         args.action,
         serde_json::Value::Object(inputs),
-        args.read_content_format,
-        None,
+        args.output_content_format,
     )
     .await
 }
@@ -10206,7 +9931,7 @@ async fn run_gitlab_discussion_state_command(
     project: &str,
     iid: u64,
     discussion_id: &str,
-    read_content_format: Option<ReadContentFormatArg>,
+    output_content_format: Option<OutputContentFormatArg>,
 ) -> Result<()> {
     let mut inputs = serde_json::Map::new();
     inputs.insert("project".to_string(), serde_json::json!(project));
@@ -10216,8 +9941,7 @@ async fn run_gitlab_discussion_state_command(
         ctx,
         action,
         serde_json::Value::Object(inputs),
-        read_content_format,
-        None,
+        output_content_format,
     )
     .await
 }
@@ -10408,10 +10132,18 @@ enum SendRequest {
         secret_sources: Vec<SecretSourceBinding>,
         #[serde(rename = "responseMode")]
         response_mode: Option<String>,
-        #[serde(default, rename = "readContentFormat")]
-        read_content_format: ReadContentFormat,
-        #[serde(default, rename = "responseFormat")]
-        response_format: ResponseFormat,
+        #[serde(
+            default,
+            rename = "outputContentFormat",
+            deserialize_with = "optional_content_format"
+        )]
+        output_content_format: Option<OutputContentFormat>,
+        #[serde(
+            default,
+            rename = "preferredOutputContentFormat",
+            deserialize_with = "optional_content_format"
+        )]
+        preferred_output_content_format: Option<OutputContentFormat>,
         output: Option<SendOutput>,
         #[serde(rename = "metadataOutput")]
         metadata_output: Option<SendMetadataOutput>,
@@ -10533,6 +10265,11 @@ fn parse_runtime_catalog(value: serde_json::Value) -> Result<ApiCatalog> {
     if catalog.send.version != SEND_SCHEMA_VERSION || !catalog.send.catalog_required {
         anyhow::bail!("runtime catalog send metadata is unsupported");
     }
+    for service in &catalog.services {
+        for action in &service.actions {
+            agent_access_core::mcp::validate_catalog_action(&service.service, action)?;
+        }
+    }
     Ok(catalog)
 }
 
@@ -10570,7 +10307,8 @@ async fn run_send_command(
         eprintln!("{error:#}");
         std::process::exit(5);
     });
-    let sensitive_pointers = send_sensitive_pointers(&catalog, &request_value)?;
+    let sensitive_pointers =
+        send_sensitive_pointers(&catalog, &request_value).map_err(DeferredCliError::input)?;
     reject_literal_identity_token_for_send_management(ctx, &catalog, &request_value)?;
     if source_kind == JsonInputSourceKind::Argv {
         reject_inline_sensitive_values(&request_value, &sensitive_pointers)?;
@@ -10586,8 +10324,8 @@ async fn run_send_command(
             files,
             secret_sources,
             response_mode,
-            read_content_format,
-            response_format,
+            output_content_format,
+            preferred_output_content_format,
             output,
             metadata_output,
         } => {
@@ -10602,7 +10340,11 @@ async fn run_send_command(
                     inputs,
                     files,
                     response_mode,
-                    response_options: ResponseOptions::new(read_content_format, response_format),
+                    response_options: ResponseOptions::new(
+                        output_content_format,
+                        preferred_output_content_format
+                            .or(ctx.settings.preferred_output_content_format),
+                    ),
                     output,
                     metadata_output,
                 },
@@ -10960,7 +10702,16 @@ async fn run_send_invoke(
 ) -> Result<()> {
     let service = request.service.clone();
     let action = request.action.clone();
-    let action_spec = catalog_action(catalog, &service, &action)?.clone();
+    let action_spec = catalog_action(catalog, &service, &action)
+        .map_err(DeferredCliError::input)?
+        .clone();
+    resolve_response_options(
+        ctx.settings,
+        request.response_options.output_content_format,
+        Some(&action_spec),
+        &format!("{service}.{action}"),
+    )
+    .map_err(DeferredCliError::input)?;
     if !action_spec.supports_io() {
         exit_cli_input_error(anyhow::anyhow!(
             "this client does not support the action's input and output kind"
@@ -11016,16 +10767,13 @@ async fn run_send_invoke(
                 request.response_options,
             )
             .await?;
-            validate_embedded_invoke_result(
+            validate_invoke_result(
+                status,
                 &value,
-                request.response_options.read_content_format,
-                &action_spec.rendered_body_owners,
-                &action_spec.optional_rendered_body_owner_prefixes,
-            )
-            .map_err(DeferredCliError::malformed)?;
-            if request.response_options.response_format == ResponseFormat::Markdown {
-                markdown_result_value(&value).map_err(DeferredCliError::malformed)?;
-            }
+                request.response_options.output_content_format,
+                &action_spec.body_fields,
+                &action_spec.sensitive_output_pointers,
+            )?;
             finish_send_json(
                 status,
                 value,
@@ -11093,16 +10841,13 @@ async fn run_send_upload(
         response_options,
     )
     .await?;
-    validate_embedded_invoke_result(
+    validate_invoke_result(
+        status,
         &value,
-        response_options.read_content_format,
-        &action_spec.rendered_body_owners,
-        &action_spec.optional_rendered_body_owner_prefixes,
-    )
-    .map_err(DeferredCliError::malformed)?;
-    if response_options.response_format == ResponseFormat::Markdown {
-        markdown_result_value(&value).map_err(DeferredCliError::malformed)?;
-    }
+        response_options.output_content_format,
+        &action_spec.body_fields,
+        &action_spec.sensitive_output_pointers,
+    )?;
     finish_send_json(
         status,
         value,
@@ -11122,46 +10867,37 @@ async fn run_upload_with_plan(
     plan: &MultipartUploadSpec,
     response_options: ResponseOptions,
 ) -> Result<()> {
-    let spec = if ctx.output.is_some() {
-        Some(
-            output_action_spec(ctx, service, action)
-                .await
-                .unwrap_or_else(|error| exit_cli_input_error(error)),
-        )
-    } else {
-        None
-    };
-    let reserved = output::ResponseOutput::prepare(
-        ctx.output,
-        spec.as_ref()
-            .map(|spec| spec.sensitive_output_pointers.as_slice())
-            .unwrap_or_default(),
+    let spec = output_action_spec(ctx, service, action)
+        .await
+        .map_err(DeferredCliError::input)?;
+    let response_options = ResponseOptions::new(
+        response_options.output_content_format,
+        response_options
+            .preferred_output_content_format
+            .or(ctx.settings.preferred_output_content_format),
+    );
+    resolve_response_options(
+        ctx.settings,
+        response_options.output_content_format,
+        Some(&spec),
+        &format!("{service}.{action}"),
     )
     .map_err(DeferredCliError::input)?;
+    let reserved = output::ResponseOutput::prepare(ctx.output, &spec.sensitive_output_pointers)
+        .map_err(DeferredCliError::input)?;
     let (status, value) =
         send_upload_with_plan(ctx, service, action, inputs, files, plan, response_options).await?;
-    if let Some(spec) = spec {
-        validate_embedded_invoke_result(
-            &value,
-            response_options.read_content_format,
-            &spec.rendered_body_owners,
-            &spec.optional_rendered_body_owner_prefixes,
-        )
-        .map_err(DeferredCliError::malformed)?;
-    }
-    if response_options.response_format == ResponseFormat::Markdown {
-        markdown_result_value(&value).map_err(DeferredCliError::malformed)?;
-    }
-    if let Some(receipt) = write_local_response(
-        ctx,
+    validate_invoke_result(
         status,
         &value,
-        response_options.response_format,
-        reserved,
-    )? {
+        response_options.output_content_format,
+        &spec.body_fields,
+        &spec.sensitive_output_pointers,
+    )?;
+    if let Some(receipt) = write_local_response(ctx, status, &value, reserved)? {
         print_value_and_exit(status, receipt);
     }
-    print_invoke_value_and_exit(status, value, response_options.response_format);
+    print_invoke_value_and_exit(status, value);
 }
 
 async fn send_upload_with_plan(
@@ -11237,8 +10973,8 @@ async fn send_upload_with_plan(
     set_upload_metadata(&mut inputs, plan, upload_metadata).map_err(DeferredCliError::input)?;
     let request_json = serde_json::to_string(&InvokeRequest {
         inputs,
-        read_content_format: response_options.read_content_format,
-        response_format: response_options.response_format,
+        output_content_format: response_options.output_content_format,
+        preferred_output_content_format: response_options.preferred_output_content_format,
         body_parts: vec![],
     })?;
     form = form.part(
@@ -11332,6 +11068,7 @@ async fn run_send_download(
         inputs,
         output,
         metadata_output,
+        response_options,
         ..
     } = request;
     let output =
@@ -11345,9 +11082,12 @@ async fn run_send_download(
         &service,
         &action,
         inputs,
-        &output_path,
-        prepared.body.take().map(output::ResponseOutput::into_file),
-        sensitive_outputs,
+        DownloadResponseOptions {
+            output: &output_path,
+            reserved: prepared.body.take().map(output::ResponseOutput::into_file),
+            sensitive_outputs,
+            response_options,
+        },
     )
     .await
     .map_err(DownloadResponseError::into_error)?;
@@ -11866,6 +11606,7 @@ fn run_git_credential_command(
                     "Git credential helper does not accept --token-value; use --token-file, --token-env, or configured token sources",
                 );
             }
+            reject_retired_environment()?;
             let explicit_config = cli.config.is_some();
             let config_exists = config_path.exists();
             let resolution = load_config_or_default(config_path, explicit_config)
@@ -15083,7 +14824,6 @@ async fn run_jira_command(ctx: &CliContext<'_>, command: &JiraCommand) -> Result
                     project,
                     include,
                     query,
-                    output_format,
                 },
         } => {
             let mut inputs = serde_json::Map::new();
@@ -15102,21 +14842,13 @@ async fn run_jira_command(ctx: &CliContext<'_>, command: &JiraCommand) -> Result
             if let Some(query) = query {
                 inputs.insert("query".to_string(), serde_json::json!(query));
             }
-            run_typed_invoke_value(
-                ctx,
-                "jira.project.view",
-                inputs.into(),
-                None,
-                *output_format,
-            )
-            .await
+            run_typed_invoke_value(ctx, "jira.project.view", inputs.into(), None).await
         }
         JiraCommand::Project {
             command:
                 JiraProjectCommand::List {
                     max_results,
                     page_token,
-                    output_format,
                 },
         } => {
             let mut inputs = serde_json::Map::new();
@@ -15126,14 +14858,7 @@ async fn run_jira_command(ctx: &CliContext<'_>, command: &JiraCommand) -> Result
             if let Some(page_token) = page_token {
                 inputs.insert("pageToken".to_string(), serde_json::json!(page_token));
             }
-            run_typed_invoke_value(
-                ctx,
-                "jira.project.list",
-                inputs.into(),
-                None,
-                *output_format,
-            )
-            .await
+            run_typed_invoke_value(ctx, "jira.project.list", inputs.into(), None).await
         }
         JiraCommand::IssueType {
             command:
@@ -15141,7 +14866,6 @@ async fn run_jira_command(ctx: &CliContext<'_>, command: &JiraCommand) -> Result
                     project,
                     start_at,
                     max_results,
-                    output_format,
                 },
         } => {
             let mut inputs = serde_json::Map::new();
@@ -15152,22 +14876,14 @@ async fn run_jira_command(ctx: &CliContext<'_>, command: &JiraCommand) -> Result
             if let Some(max_results) = max_results {
                 inputs.insert("maxResults".to_string(), serde_json::json!(max_results));
             }
-            run_typed_invoke_value(
-                ctx,
-                "jira.issue_type.list",
-                inputs.into(),
-                None,
-                *output_format,
-            )
-            .await
+            run_typed_invoke_value(ctx, "jira.issue_type.list", inputs.into(), None).await
         }
         JiraCommand::Issue { command } => match command {
             JiraIssueCommand::View {
                 issue,
                 issue_url,
                 include_comments,
-                read_content_format,
-                output_format,
+                output_content_format,
             } => {
                 let mut inputs = match (issue.as_deref(), issue_url.as_deref()) {
                     (Some(issue), None) => serde_json::json!({ "issue": issue }),
@@ -15179,14 +14895,7 @@ async fn run_jira_command(ctx: &CliContext<'_>, command: &JiraCommand) -> Result
                 if *include_comments {
                     inputs["includeComments"] = serde_json::json!(true);
                 }
-                run_typed_invoke_value(
-                    ctx,
-                    "jira.issue.view",
-                    inputs,
-                    *read_content_format,
-                    *output_format,
-                )
-                .await
+                run_typed_invoke_value(ctx, "jira.issue.view", inputs, *output_content_format).await
             }
             JiraIssueCommand::Create {
                 project,
@@ -15195,7 +14904,7 @@ async fn run_jira_command(ctx: &CliContext<'_>, command: &JiraCommand) -> Result
                 content,
                 content_file,
                 content_format,
-                read_content_format,
+                output_content_format,
             } => {
                 let mut inputs = serde_json::Map::new();
                 inputs.insert("project".to_string(), serde_json::json!(project));
@@ -15213,8 +14922,7 @@ async fn run_jira_command(ctx: &CliContext<'_>, command: &JiraCommand) -> Result
                     ctx,
                     "jira.issue.create",
                     serde_json::Value::Object(inputs),
-                    *read_content_format,
-                    None,
+                    *output_content_format,
                 )
                 .await
             }
@@ -15262,7 +14970,7 @@ async fn run_jira_command(ctx: &CliContext<'_>, command: &JiraCommand) -> Result
                 content,
                 content_file,
                 content_format,
-                read_content_format,
+                output_content_format,
                 notify_users,
                 suppress_notifications,
             } => {
@@ -15308,8 +15016,7 @@ async fn run_jira_command(ctx: &CliContext<'_>, command: &JiraCommand) -> Result
                     ctx,
                     "jira.issue.update",
                     serde_json::Value::Object(inputs),
-                    *read_content_format,
-                    None,
+                    *output_content_format,
                 )
                 .await
             }
@@ -15372,6 +15079,53 @@ async fn run_jira_command(ctx: &CliContext<'_>, command: &JiraCommand) -> Result
                     .await
                 }
             },
+            JiraIssueCommand::Transition { command } => {
+                let (action, inputs) = match command {
+                    JiraIssueTransitionCommand::List {
+                        issue,
+                        issue_url,
+                        include_fields,
+                    } => {
+                        let mut inputs = jira_issue_argument_locator_inputs(
+                            issue.as_deref(),
+                            issue_url.as_deref(),
+                            "jira issue transition list",
+                        );
+                        if *include_fields {
+                            inputs.insert("includeFields".into(), serde_json::json!(true));
+                        }
+                        ("jira.issue.transition.list", inputs)
+                    }
+                    JiraIssueTransitionCommand::Apply {
+                        issue,
+                        issue_url,
+                        transition_id,
+                        to_status_id,
+                        expected_issue_id,
+                        expected_status_id,
+                        resolution_id,
+                    } => {
+                        let mut inputs = jira_issue_argument_locator_inputs(
+                            issue.as_deref(),
+                            issue_url.as_deref(),
+                            "jira issue transition apply",
+                        );
+                        inputs.insert("transitionId".into(), serde_json::json!(transition_id));
+                        inputs.insert("toStatusId".into(), serde_json::json!(to_status_id));
+                        for (key, value) in [
+                            ("expectedIssueId", expected_issue_id),
+                            ("expectedStatusId", expected_status_id),
+                            ("resolutionId", resolution_id),
+                        ] {
+                            if let Some(value) = value {
+                                inputs.insert(key.into(), serde_json::json!(value));
+                            }
+                        }
+                        ("jira.issue.transition.apply", inputs)
+                    }
+                };
+                run_invoke_value(ctx, action, serde_json::Value::Object(inputs)).await
+            }
             JiraIssueCommand::Dependency { command } => match command {
                 JiraIssueDependencyCommand::Add {
                     blocking,
@@ -15410,7 +15164,6 @@ async fn run_jira_command(ctx: &CliContext<'_>, command: &JiraCommand) -> Result
                 projects,
                 max_results,
                 next_page_token,
-                output_format,
             } => {
                 let mut inputs = serde_json::Map::new();
                 inputs.insert(
@@ -15429,14 +15182,8 @@ async fn run_jira_command(ctx: &CliContext<'_>, command: &JiraCommand) -> Result
                         serde_json::json!(next_page_token),
                     );
                 }
-                run_typed_invoke_value(
-                    ctx,
-                    "jira.search",
-                    serde_json::Value::Object(inputs),
-                    None,
-                    *output_format,
-                )
-                .await
+                run_typed_invoke_value(ctx, "jira.search", serde_json::Value::Object(inputs), None)
+                    .await
             }
             JiraIssueCommand::Comment { command } => run_jira_comment_command(ctx, command).await,
             JiraIssueCommand::Attach {
@@ -15445,11 +15192,7 @@ async fn run_jira_command(ctx: &CliContext<'_>, command: &JiraCommand) -> Result
                 content_type,
             } => run_jira_attachment_add(ctx, issue, files, content_type.as_deref()).await,
             JiraIssueCommand::Attachment { command } => match command {
-                JiraAttachmentCommand::List {
-                    issue,
-                    issue_url,
-                    output_format,
-                } => {
+                JiraAttachmentCommand::List { issue, issue_url } => {
                     let inputs = match (issue.as_deref(), issue_url.as_deref()) {
                         (Some(issue), None) => serde_json::json!({ "issue": issue }),
                         (None, Some(url)) => serde_json::json!({ "url": url }),
@@ -15457,14 +15200,7 @@ async fn run_jira_command(ctx: &CliContext<'_>, command: &JiraCommand) -> Result
                             "jira issue attachment list requires exactly one issue argument or --issue-url"
                         ))),
                     };
-                    run_typed_invoke_value(
-                        ctx,
-                        "jira.attachment.list",
-                        inputs,
-                        None,
-                        *output_format,
-                    )
-                    .await
+                    run_typed_invoke_value(ctx, "jira.attachment.list", inputs, None).await
                 }
                 JiraAttachmentCommand::Download {
                     issue,
@@ -15478,7 +15214,6 @@ async fn run_jira_command(ctx: &CliContext<'_>, command: &JiraCommand) -> Result
                 issue,
                 expect_comment_id,
                 expect_attachment_id,
-                output_format,
             } => {
                 if expect_comment_id.is_none() && expect_attachment_id.is_none() {
                     require_cli_input::<()>(Err(anyhow::anyhow!(
@@ -15496,14 +15231,8 @@ async fn run_jira_command(ctx: &CliContext<'_>, command: &JiraCommand) -> Result
                         serde_json::json!(attachment_id),
                     );
                 }
-                run_typed_invoke_value(
-                    ctx,
-                    "jira.verify",
-                    serde_json::Value::Object(inputs),
-                    None,
-                    *output_format,
-                )
-                .await
+                run_typed_invoke_value(ctx, "jira.verify", serde_json::Value::Object(inputs), None)
+                    .await
             }
         },
     }
@@ -15521,8 +15250,7 @@ async fn run_jira_comment_command(
             start_at,
             order_by,
             include_bodies,
-            read_content_format,
-            output_format,
+            output_content_format,
         } => {
             let mut inputs = jira_issue_locator_inputs(
                 issue.as_deref(),
@@ -15545,8 +15273,7 @@ async fn run_jira_comment_command(
                 ctx,
                 "jira.comment.list",
                 serde_json::Value::Object(inputs),
-                *read_content_format,
-                *output_format,
+                *output_content_format,
             )
             .await
         }
@@ -15554,8 +15281,7 @@ async fn run_jira_comment_command(
             comment_id,
             issue,
             issue_url,
-            read_content_format,
-            output_format,
+            output_content_format,
         } => {
             let mut inputs = jira_issue_locator_inputs(
                 issue.as_deref(),
@@ -15567,8 +15293,7 @@ async fn run_jira_comment_command(
                 ctx,
                 "jira.comment.view",
                 serde_json::Value::Object(inputs),
-                *read_content_format,
-                *output_format,
+                *output_content_format,
             )
             .await
         }
@@ -15579,7 +15304,7 @@ async fn run_jira_comment_command(
             content_file,
             content_format,
             visibility_file,
-            read_content_format,
+            output_content_format,
         } => {
             let mut inputs = jira_issue_locator_inputs(
                 issue.as_deref(),
@@ -15601,8 +15326,7 @@ async fn run_jira_comment_command(
                 ctx,
                 "jira.comment.add",
                 serde_json::Value::Object(inputs),
-                *read_content_format,
-                None,
+                *output_content_format,
             )
             .await
         }
@@ -15614,7 +15338,7 @@ async fn run_jira_comment_command(
             content_file,
             content_format,
             visibility_file,
-            read_content_format,
+            output_content_format,
         } => {
             let mut inputs = jira_issue_locator_inputs(
                 issue.as_deref(),
@@ -15640,8 +15364,7 @@ async fn run_jira_comment_command(
                 ctx,
                 "jira.comment.reply",
                 serde_json::Value::Object(inputs),
-                *read_content_format,
-                None,
+                *output_content_format,
             )
             .await
         }
@@ -15654,7 +15377,7 @@ async fn run_jira_comment_command(
             content_format,
             visibility_file,
             notify_users,
-            read_content_format,
+            output_content_format,
         } => {
             let mut inputs = jira_issue_locator_inputs(
                 issue.as_deref(),
@@ -15679,8 +15402,7 @@ async fn run_jira_comment_command(
                 ctx,
                 "jira.comment.update",
                 serde_json::Value::Object(inputs),
-                *read_content_format,
-                None,
+                *output_content_format,
             )
             .await
         }
@@ -15717,7 +15439,6 @@ async fn run_jira_comment_property_command(
             comment_id,
             issue,
             issue_url,
-            output_format,
         } => {
             let mut inputs = jira_issue_locator_inputs(
                 issue.as_deref(),
@@ -15730,7 +15451,6 @@ async fn run_jira_comment_property_command(
                 "jira.comment.property.list",
                 serde_json::Value::Object(inputs),
                 None,
-                *output_format,
             )
             .await
         }
@@ -15739,7 +15459,6 @@ async fn run_jira_comment_property_command(
             property_key,
             issue,
             issue_url,
-            output_format,
         } => {
             let mut inputs = jira_issue_locator_inputs(
                 issue.as_deref(),
@@ -15753,7 +15472,6 @@ async fn run_jira_comment_property_command(
                 "jira.comment.property.get",
                 serde_json::Value::Object(inputs),
                 None,
-                *output_format,
             )
             .await
         }
@@ -15921,8 +15639,8 @@ async fn run_jira_attachment_add(
             "issue": issue,
             "attachments": attachments,
         }),
-        read_content_format: ReadContentFormat::Native,
-        response_format: ResponseFormat::Json,
+        output_content_format: None,
+        preferred_output_content_format: ctx.settings.preferred_output_content_format,
         body_parts: vec![],
     })?;
     form = form.part(
@@ -15990,8 +15708,8 @@ async fn run_confluence_attachment_add(
             "pageId": page_id,
             "attachments": attachments,
         }),
-        read_content_format: ReadContentFormat::Native,
-        response_format: ResponseFormat::Json,
+        output_content_format: None,
+        preferred_output_content_format: ctx.settings.preferred_output_content_format,
         body_parts: vec![],
     })?;
     form = form.part(
@@ -16048,8 +15766,8 @@ async fn run_confluence_blog_attachment_add(
             "blogId": blog_id,
             "attachments": attachments,
         }),
-        read_content_format: ReadContentFormat::Native,
-        response_format: ResponseFormat::Json,
+        output_content_format: None,
+        preferred_output_content_format: ctx.settings.preferred_output_content_format,
         body_parts: vec![],
     })?;
     form = form.part(
@@ -16123,8 +15841,8 @@ async fn run_confluence_draft_attachment_add(
     inputs.insert("attachments".to_string(), serde_json::json!(attachments));
     let request_json = serde_json::to_string(&InvokeRequest {
         inputs: serde_json::Value::Object(inputs),
-        read_content_format: ReadContentFormat::Native,
-        response_format: ResponseFormat::Json,
+        output_content_format: None,
+        preferred_output_content_format: ctx.settings.preferred_output_content_format,
         body_parts: vec![],
     })?;
     form = form.part(
@@ -16307,23 +16025,24 @@ async fn run_invoke_multipart(
     form: reqwest::multipart::Form,
 ) -> Result<()> {
     let (service, action) =
-        require_cli_input(split_service_action(service_action).map_err(anyhow::Error::msg));
-    let reserved = if ctx.output.is_some() {
-        let spec = output_action_spec(ctx, &service, &action)
-            .await
-            .unwrap_or_else(|error| exit_cli_input_error(error));
-        output::ResponseOutput::prepare(ctx.output, &spec.sensitive_output_pointers)
-            .map_err(DeferredCliError::input)?
-    } else {
-        None
-    };
+        split_service_action(service_action).map_err(DeferredCliError::input)?;
+    let spec = output_action_spec(ctx, &service, &action)
+        .await
+        .map_err(DeferredCliError::input)?;
+    let reserved = output::ResponseOutput::prepare(ctx.output, &spec.sensitive_output_pointers)
+        .map_err(DeferredCliError::input)?;
     let (status, value) = send_invoke_multipart(ctx, service_action, form).await?;
-    if let Some(receipt) =
-        write_local_response(ctx, status, &value, ResponseFormat::Json, reserved)?
-    {
+    validate_invoke_result(
+        status,
+        &value,
+        None,
+        &spec.body_fields,
+        &spec.sensitive_output_pointers,
+    )?;
+    if let Some(receipt) = write_local_response(ctx, status, &value, reserved)? {
         print_value_and_exit(status, receipt);
     }
-    print_value_and_exit(status, value);
+    print_invoke_value_and_exit(status, value);
 }
 
 async fn send_invoke_multipart(
@@ -16376,20 +16095,24 @@ fn confluence_page_argument_locator_inputs(
 
 fn confluence_optional_parent_locator_inputs(
     inputs: &mut serde_json::Map<String, serde_json::Value>,
-    parent: Option<&str>,
+    parent_kind: Option<ConfluenceParentKindArg>,
+    parent_id: Option<&str>,
     parent_url: Option<&str>,
     command: &str,
 ) {
-    match (parent, parent_url) {
-        (Some(parent), None) => {
-            inputs.insert("parentPageId".to_string(), serde_json::json!(parent));
+    match (parent_kind, parent_id, parent_url) {
+        (Some(kind), Some(id), None) => {
+            inputs.insert(
+                "parent".to_string(),
+                serde_json::json!({ "kind": kind.as_str(), "id": id }),
+            );
         }
-        (None, Some(url)) => {
+        (None, None, Some(url)) => {
             inputs.insert("parentUrl".to_string(), serde_json::json!(url));
         }
-        (None, None) => {}
-        (Some(_), Some(_)) => require_cli_input::<()>(Err(anyhow::anyhow!(
-            "{command} accepts at most one --parent or --parent-url"
+        (None, None, None) => {}
+        _ => require_cli_input::<()>(Err(anyhow::anyhow!(
+            "{command} accepts --parent-kind with --parent-id, or --parent-url"
         ))),
     }
 }
@@ -16478,16 +16201,13 @@ async fn run_invoke(
     input_json: &Option<String>,
     input_file: &Option<PathBuf>,
     input_stdin: bool,
-    read_content_format: Option<ReadContentFormatArg>,
-    output_format: Option<OutputFormatArg>,
+    output_content_format: Option<OutputContentFormatArg>,
 ) -> Result<()> {
     let (service, action) =
         require_cli_input(split_service_action(service_action).map_err(anyhow::Error::msg));
     let inputs = read_invoke_input_source(input_json, input_file, input_stdin);
     let options =
-        resolve_generic_invoke_options(ctx, &service, &action, read_content_format, output_format)
-            .await
-            .unwrap_or_else(|error| exit_cli_input_error(error));
+        resolve_generic_invoke_options(ctx, &service, &action, output_content_format).await?;
     run_invoke_parts_with_options(ctx, &service, &action, inputs, options).await
 }
 
@@ -16505,84 +16225,40 @@ async fn run_typed_invoke_value(
     ctx: &CliContext<'_>,
     service_action: &str,
     inputs: serde_json::Value,
-    read_content_format: Option<ReadContentFormatArg>,
-    output_format: Option<OutputFormatArg>,
+    output_content_format: Option<OutputContentFormatArg>,
 ) -> Result<()> {
     let (service, action) =
         require_cli_input(split_service_action(service_action).map_err(anyhow::Error::msg));
     let options =
-        resolve_generic_invoke_options(ctx, &service, &action, read_content_format, output_format)
-            .await
-            .unwrap_or_else(|error| exit_cli_input_error(error));
+        resolve_generic_invoke_options(ctx, &service, &action, output_content_format).await?;
     run_invoke_parts_with_options(ctx, &service, &action, inputs, options).await
 }
 
 fn resolve_response_options(
     settings: &ResolvedCliSettings,
-    explicit_read: Option<ReadContentFormatArg>,
-    explicit_output: Option<OutputFormatArg>,
-    supports_read_content: bool,
-    supports_markdown_output: bool,
+    exact: Option<OutputContentFormat>,
+    action_spec: Option<&ApiActionSpec>,
     service_action: &str,
 ) -> Result<ResponseOptions> {
-    let requested_read = explicit_read
-        .map(ReadContentFormat::from)
-        .unwrap_or(settings.read_content_format);
-    let requested_output = explicit_output
-        .map(ResponseFormat::from)
-        .unwrap_or(settings.output_format);
-
-    if explicit_read.is_some()
-        && requested_read != ReadContentFormat::Native
-        && !supports_read_content
-    {
-        anyhow::bail!("action {service_action} does not support --read-content-format");
-    }
-    if explicit_output.is_some()
-        && requested_output != ResponseFormat::Json
-        && !supports_markdown_output
-    {
-        anyhow::bail!("action {service_action} does not support --output-format");
-    }
-    let selected_read = if supports_read_content {
-        requested_read
-    } else {
-        ReadContentFormat::Native
-    };
-    let selected_output = if supports_markdown_output {
-        requested_output
-    } else {
-        ResponseFormat::Json
-    };
-    if selected_output == ResponseFormat::Markdown && selected_read != ReadContentFormat::Native {
-        // An explicit whole-result selection intentionally overrides an ambient
-        // embedded-content default. All other non-native combinations are
-        // ambiguous and must be resolved by the caller instead of silently
-        // changing one of the configured defaults.
-        if explicit_output != Some(OutputFormatArg::Markdown) || explicit_read.is_some() {
+    if let Some(exact) = exact {
+        let spec = action_spec.context(format!("runtime catalog does not expose action {service_action}; run agent-access services list to check availability and setup requirements"))?;
+        if !spec.output_content_formats.contains(&exact) {
             anyhow::bail!(
-                "--output-format markdown cannot be combined with a non-native read-content format; explicitly select --output-format markdown to override an ambient read-content default"
+                "action {service_action} does not support --output-content-format {}",
+                exact.as_str()
             );
         }
     }
-
     Ok(ResponseOptions::new(
-        if selected_output == ResponseFormat::Markdown {
-            ReadContentFormat::Native
-        } else {
-            selected_read
-        },
-        selected_output,
+        exact,
+        settings.preferred_output_content_format,
     ))
 }
 
-/// Response options for one invoke and the catalog's `renderedBody` owners
-/// for the action, where the CLI checks returned companions.
+/// One fresh caller catalog governs local I/O and exact-format validation.
 #[derive(Debug, Clone, Default)]
 struct InvokeResponseOptions {
     options: ResponseOptions,
-    rendered_body_owners: Vec<String>,
-    optional_rendered_body_owner_prefixes: Vec<String>,
     action_spec: Option<ApiActionSpec>,
 }
 
@@ -16590,95 +16266,35 @@ async fn resolve_generic_invoke_options(
     ctx: &CliContext<'_>,
     service: &str,
     action: &str,
-    explicit_read: Option<ReadContentFormatArg>,
-    explicit_output: Option<OutputFormatArg>,
+    exact: Option<OutputContentFormatArg>,
 ) -> Result<InvokeResponseOptions> {
-    let effective_read = explicit_read
-        .map(ReadContentFormat::from)
-        .unwrap_or(ctx.settings.read_content_format);
-    let effective_output = explicit_output
-        .map(ResponseFormat::from)
-        .unwrap_or(ctx.settings.output_format);
-    if ctx.output.is_none() && !generic_invoke_needs_catalog(effective_read, effective_output) {
-        return Ok(InvokeResponseOptions::default());
-    }
-
-    let catalog = fetch_runtime_catalog(ctx).await.unwrap_or_else(|error| {
-        exit_malformed_broker_response(format!("invalid runtime catalog: {error:#}"))
-    });
-    let service_action = format!("{service}.{action}");
+    let catalog = fetch_runtime_catalog(ctx)
+        .await
+        .map_err(DeferredCliError::malformed)?;
     let action_spec = if ctx.output.is_some() {
-        Some(catalog_action(&catalog, service, action)?)
+        Some(catalog_action(&catalog, service, action).map_err(DeferredCliError::input)?)
     } else {
         catalog_action(&catalog, service, action).ok()
     };
     if ctx.output.is_none()
         && action_spec.is_some_and(|spec| matches!(spec.io, ActionIo::RawDownload { .. }))
     {
-        anyhow::bail!("download requires --output PATH (or --output - for stdout)");
+        return Err(DeferredCliError::input(
+            "download requires --output PATH (or --output - for stdout)",
+        )
+        .into());
     }
-    let options = resolve_generic_response_options_from_action(
+    let options = resolve_response_options(
         ctx.settings,
+        exact.map(Into::into),
         action_spec,
-        explicit_read,
-        explicit_output,
-        &service_action,
-    )?;
-    let rendered_body_owners = action_spec
-        .map(|action_spec| action_spec.rendered_body_owners.clone())
-        .unwrap_or_default();
-    if options.read_content_format != ReadContentFormat::Native && rendered_body_owners.is_empty() {
-        exit_malformed_broker_response(format!(
-            "runtime catalog advertises readContentFormats for {service_action} without renderedBodyOwners"
-        ));
-    }
-    let optional_rendered_body_owner_prefixes = action_spec
-        .map(|action_spec| action_spec.optional_rendered_body_owner_prefixes.clone())
-        .unwrap_or_default();
+        &format!("{service}.{action}"),
+    )
+    .map_err(DeferredCliError::input)?;
     Ok(InvokeResponseOptions {
         options,
-        rendered_body_owners,
-        optional_rendered_body_owner_prefixes,
         action_spec: action_spec.cloned(),
     })
-}
-
-fn resolve_generic_response_options_from_action(
-    settings: &ResolvedCliSettings,
-    action_spec: Option<&ApiActionSpec>,
-    explicit_read: Option<ReadContentFormatArg>,
-    explicit_output: Option<OutputFormatArg>,
-    service_action: &str,
-) -> Result<ResponseOptions> {
-    let Some(action_spec) = action_spec else {
-        if explicit_read.is_some() || explicit_output.is_some() {
-            anyhow::bail!(
-                "runtime catalog does not expose action {service_action}; run agent-access services list to check availability and setup requirements"
-            );
-        }
-        // Catalog visibility is caller-filtered. An omitted action therefore
-        // cannot safely inherit ambient format defaults; send the protocol
-        // defaults and let the Broker make the authoritative action decision.
-        return Ok(ResponseOptions::default());
-    };
-    let raw_download = matches!(action_spec.io, ActionIo::RawDownload { .. });
-    let supports_read_content = !raw_download && !action_spec.read_content_formats.is_empty();
-    let supports_markdown_output = !raw_download && !action_spec.response_formats.is_empty();
-    resolve_response_options(
-        settings,
-        explicit_read,
-        explicit_output,
-        supports_read_content,
-        supports_markdown_output,
-        service_action,
-    )
-}
-
-fn generic_invoke_needs_catalog(
-    read_content_format: ReadContentFormat,
-    output_format: ResponseFormat,
-) -> bool {
-    read_content_format != ReadContentFormat::Native || output_format != ResponseFormat::Json
 }
 
 fn read_invoke_input_source(
@@ -16722,9 +16338,34 @@ async fn send_download_value(
     inputs: serde_json::Value,
     output: &Path,
 ) -> DownloadResponseResult<(u16, serde_json::Value)> {
-    let (service, action) =
-        require_cli_input(split_service_action(service_action).map_err(anyhow::Error::msg));
-    send_download_parts(ctx, &service, &action, inputs, output, None, &[]).await
+    let (service, action) = split_service_action(service_action)
+        .map_err(|error| DownloadResponseError::Local(DeferredCliError::input(error).into()))?;
+    let catalog = fetch_runtime_catalog(ctx)
+        .await
+        .map_err(|error| DownloadResponseError::Local(DeferredCliError::malformed(error).into()))?;
+    let spec = catalog_action(&catalog, &service, &action)
+        .map_err(|error| DownloadResponseError::Local(DeferredCliError::input(error).into()))?;
+    if !matches!(spec.io, ActionIo::RawDownload { .. }) {
+        return Err(DownloadResponseError::Local(
+            DeferredCliError::input("action does not support raw downloads").into(),
+        ));
+    }
+    send_download_parts(
+        ctx,
+        &service,
+        &action,
+        inputs,
+        DownloadResponseOptions {
+            output,
+            reserved: None,
+            sensitive_outputs: &spec.sensitive_output_pointers,
+            response_options: ResponseOptions::new(
+                None,
+                ctx.settings.preferred_output_content_format,
+            ),
+        },
+    )
+    .await
 }
 
 async fn run_invoke_parts(
@@ -16733,14 +16374,8 @@ async fn run_invoke_parts(
     action: &str,
     inputs: serde_json::Value,
 ) -> Result<()> {
-    run_invoke_parts_with_options(
-        ctx,
-        service,
-        action,
-        inputs,
-        InvokeResponseOptions::default(),
-    )
-    .await
+    let options = resolve_generic_invoke_options(ctx, service, action, None).await?;
+    run_invoke_parts_with_options(ctx, service, action, inputs, options).await
 }
 
 async fn run_invoke_parts_with_options(
@@ -16752,22 +16387,16 @@ async fn run_invoke_parts_with_options(
 ) -> Result<()> {
     let InvokeResponseOptions {
         options,
-        rendered_body_owners,
-        optional_rendered_body_owner_prefixes,
         action_spec,
     } = response_options;
+    let sensitive = action_spec
+        .as_ref()
+        .map(|spec| spec.sensitive_output_pointers.as_slice())
+        .unwrap_or_default();
     let reserved = if let Some(output) = ctx.output {
-        let spec = match action_spec {
-            Some(spec) => spec,
-            None => {
-                let catalog = fetch_runtime_catalog(ctx)
-                    .await
-                    .map_err(DeferredCliError::remote)?;
-                catalog_action(&catalog, service, action)
-                    .map_err(DeferredCliError::input)?
-                    .clone()
-            }
-        };
+        let spec = action_spec.as_ref().ok_or_else(|| {
+            DeferredCliError::input("action is not available in the runtime catalog")
+        })?;
         if !spec.supports_io() || !spec.supports_file_output() {
             return Err(DeferredCliError::input(
                 "this client does not support the action's input and output kind",
@@ -16780,9 +16409,12 @@ async fn run_invoke_parts_with_options(
                 service,
                 action,
                 inputs,
-                output,
-                None,
-                &spec.sensitive_output_pointers,
+                DownloadResponseOptions {
+                    output,
+                    reserved: None,
+                    sensitive_outputs: sensitive,
+                    response_options: options,
+                },
             )
             .await
             .map_err(DownloadResponseError::into_error)?;
@@ -16791,8 +16423,7 @@ async fn run_invoke_parts_with_options(
             }
             print_value_and_exit(status, metadata);
         }
-        output::ResponseOutput::prepare(ctx.output, &spec.sensitive_output_pointers)
-            .map_err(DeferredCliError::input)?
+        output::ResponseOutput::prepare(ctx.output, sensitive).map_err(DeferredCliError::input)?
     } else {
         None
     };
@@ -16800,28 +16431,21 @@ async fn run_invoke_parts_with_options(
         settings: ctx.settings,
         output: None,
     };
-    let response =
+    let (status, value) =
         send_invoke_parts_with_options(&invoke_ctx, service, action, inputs, options).await?;
-    validate_embedded_invoke_result(
-        &response.1,
-        options.read_content_format,
-        &rendered_body_owners,
-        &optional_rendered_body_owner_prefixes,
-    )
-    .map_err(DeferredCliError::malformed)?;
-    if options.response_format == ResponseFormat::Markdown {
-        markdown_result_value(&response.1).map_err(DeferredCliError::malformed)?;
+    if let Some(spec) = &action_spec {
+        validate_invoke_result(
+            status,
+            &value,
+            options.output_content_format,
+            &spec.body_fields,
+            sensitive,
+        )?;
     }
-    if let Some(receipt) = write_local_response(
-        ctx,
-        response.0,
-        &response.1,
-        options.response_format,
-        reserved,
-    )? {
-        print_value_and_exit(response.0, receipt);
+    if let Some(receipt) = write_local_response(ctx, status, &value, reserved)? {
+        print_value_and_exit(status, receipt);
     }
-    print_invoke_value_and_exit(response.0, response.1, options.response_format);
+    print_invoke_value_and_exit(status, value);
 }
 
 async fn send_invoke_parts_with_options(
@@ -16843,8 +16467,8 @@ async fn send_invoke_parts_with_options(
     let response = request_builder(client.post(endpoint), resolved)
         .json(&InvokeRequest {
             inputs,
-            read_content_format: response_options.read_content_format,
-            response_format: response_options.response_format,
+            output_content_format: response_options.output_content_format,
+            preferred_output_content_format: response_options.preferred_output_content_format,
             body_parts: vec![],
         })
         .send()
@@ -16854,15 +16478,26 @@ async fn send_invoke_parts_with_options(
     invocation_response_value(response).await
 }
 
+struct DownloadResponseOptions<'a> {
+    output: &'a Path,
+    reserved: Option<output::AtomicOutput>,
+    sensitive_outputs: &'a [String],
+    response_options: ResponseOptions,
+}
+
 async fn send_download_parts(
     ctx: &CliContext<'_>,
     service: &str,
     action: &str,
     inputs: serde_json::Value,
-    output: &Path,
-    reserved: Option<output::AtomicOutput>,
-    sensitive_outputs: &[String],
+    options: DownloadResponseOptions<'_>,
 ) -> DownloadResponseResult<(u16, serde_json::Value)> {
+    let DownloadResponseOptions {
+        output,
+        reserved,
+        sensitive_outputs,
+        response_options,
+    } = options;
     let reserved = DownloadOutput::prepare(output, reserved)
         .map_err(DeferredCliError::input)
         .map_err(|error| DownloadResponseError::Local(error.into()))?;
@@ -16878,8 +16513,8 @@ async fn send_download_parts(
             .header("Accept", "application/octet-stream")
             .json(&InvokeRequest {
                 inputs,
-                read_content_format: ReadContentFormat::Native,
-                response_format: ResponseFormat::Json,
+                output_content_format: response_options.output_content_format,
+                preferred_output_content_format: response_options.preferred_output_content_format,
                 body_parts: vec![],
             })
             .send(),
@@ -17022,42 +16657,12 @@ pub(crate) fn rate_limit_message(status: u16, value: &serde_json::Value) -> Opti
     Some(message.unwrap_or(reason_code))
 }
 
-fn print_invoke_value_and_exit(
-    status: u16,
-    value: serde_json::Value,
-    response_format: ResponseFormat,
-) -> ! {
+fn print_invoke_value_and_exit(status: u16, value: serde_json::Value) -> ! {
     if status >= 400 && is_mutation_verification_failure(&value) {
-        match serde_json::to_string_pretty(&value) {
-            Ok(output) => eprintln!("{output}"),
-            Err(error) => {
-                eprintln!("failed to format broker response: {error}");
-                std::process::exit(5);
-            }
-        }
-        exit_for_broker_status(status, &value);
-    }
-    if response_format == ResponseFormat::Markdown {
-        match markdown_result_value(&value) {
-            Ok(Some(markdown)) => {
-                let mut stdout = std::io::stdout().lock();
-                if let Err(error) = stdout
-                    .write_all(markdown.as_bytes())
-                    .and_then(|()| stdout.flush())
-                {
-                    exit_malformed_broker_response(format!(
-                        "failed to write formatted broker response: {error}"
-                    ));
-                }
-            }
-            Ok(None) => match serde_json::to_string_pretty(&value) {
-                Ok(output) => println!("{output}"),
-                Err(error) => exit_malformed_broker_response(format!(
-                    "failed to format broker response: {error}"
-                )),
-            },
-            Err(error) => exit_malformed_broker_response(error.to_string()),
-        }
+        eprintln!(
+            "{}",
+            serde_json::to_string_pretty(&value).expect("JSON value is serializable")
+        );
         exit_for_broker_status(status, &value);
     }
     print_value_and_exit(status, value);
@@ -17069,120 +16674,22 @@ fn is_mutation_verification_failure(value: &serde_json::Value) -> bool {
         && value.get("decision").and_then(serde_json::Value::as_str) == Some("error")
 }
 
-fn markdown_result_value(value: &serde_json::Value) -> Result<Option<&str>> {
-    let Some(object) = value.as_object() else {
-        anyhow::bail!("unexpected JSON shape");
-    };
-    if object.get("decision").and_then(serde_json::Value::as_str) != Some("allow") {
-        return Ok(None);
-    }
-    let result = object
-        .get("result")
-        .and_then(serde_json::Value::as_object)
-        .ok_or_else(|| anyhow::anyhow!("formatted allow response is missing result"))?;
-    if result.get("format").and_then(serde_json::Value::as_str) != Some("markdown") {
-        anyhow::bail!("formatted allow response has an invalid result format");
-    }
-    result
-        .get("value")
-        .and_then(serde_json::Value::as_str)
-        .map(Some)
-        .ok_or_else(|| anyhow::anyhow!("formatted allow response is missing result.value"))
-}
-
-/// Checks the `renderedBody` companions of a normalized allow result at the
-/// owners the runtime catalog declares for the action: each owner must be
-/// present and an object unless its path has an explicitly optional missing
-/// field. A companion must be an object carrying the
-/// requested format and a string value. The rest of the result, including
-/// the preserved native bodies, is upstream content and is not inspected.
-fn validate_embedded_invoke_result(
+/// Validate only complete successful bodies; compact errors retain their own contract.
+fn validate_invoke_result(
+    status: u16,
     envelope: &serde_json::Value,
-    format: ReadContentFormat,
-    rendered_body_owners: &[String],
-    optional_rendered_body_owner_prefixes: &[String],
+    exact: Option<OutputContentFormat>,
+    body_fields: &[BodyField],
+    sensitive: &[String],
 ) -> Result<()> {
-    if format == ReadContentFormat::Native {
-        return Ok(());
-    }
-    let object = envelope
-        .as_object()
-        .ok_or_else(|| anyhow::anyhow!("unexpected JSON shape"))?;
-    if object.get("decision").and_then(serde_json::Value::as_str) != Some("allow") {
-        return Ok(());
-    }
-    for pointer in rendered_body_owners {
-        let segments = pointer
-            .strip_prefix('/')
-            .ok_or_else(|| anyhow::anyhow!("invalid renderedBody owner pointer {pointer:?}"))?
-            .split('/')
-            .collect::<Vec<_>>();
-        validate_rendered_body_owners(
-            envelope,
-            &segments,
-            "",
-            optional_rendered_body_owner_prefixes,
-            format,
-        )?;
-    }
-    Ok(())
-}
-
-fn validate_rendered_body_owners(
-    value: &serde_json::Value,
-    segments: &[&str],
-    pointer: &str,
-    optional_prefixes: &[String],
-    format: ReadContentFormat,
-) -> Result<()> {
-    let Some((segment, rest)) = segments.split_first() else {
-        return validate_rendered_body_owner(value, format);
-    };
-    let child_pointer = format!("{pointer}/{segment}");
-    if *segment == "*" {
-        let items = value
-            .as_array()
-            .ok_or_else(|| anyhow::anyhow!("normalized result body collection is not an array"))?;
-        return items.iter().try_for_each(|item| {
-            validate_rendered_body_owners(item, rest, &child_pointer, optional_prefixes, format)
-        });
-    }
-    let field = segment.replace("~1", "/").replace("~0", "~");
-    let object = value
-        .as_object()
-        .ok_or_else(|| anyhow::anyhow!("normalized result body owner parent is not an object"))?;
-    let Some(child) = object.get(&field) else {
-        if optional_prefixes.contains(&child_pointer) {
-            return Ok(());
-        }
-        anyhow::bail!("normalized result is missing body owner field {field}");
-    };
-    validate_rendered_body_owners(child, rest, &child_pointer, optional_prefixes, format)
-}
-
-fn validate_rendered_body_owner(
-    owner: &serde_json::Value,
-    format: ReadContentFormat,
-) -> Result<()> {
-    let owner = owner
-        .as_object()
-        .ok_or_else(|| anyhow::anyhow!("normalized result body owner is not an object"))?;
-    let Some(rendered) = owner.get("renderedBody") else {
-        return Ok(());
-    };
-    let rendered = rendered.as_object().ok_or_else(|| {
-        anyhow::anyhow!("normalized result has a renderedBody that is not an object")
-    })?;
-    if rendered.get("format").and_then(serde_json::Value::as_str) != Some(format.as_str()) {
-        anyhow::bail!("normalized result has an invalid renderedBody format");
-    }
-    if !rendered
-        .get("value")
-        .is_some_and(serde_json::Value::is_string)
+    if !(200..300).contains(&status)
+        || envelope.get("decision").and_then(serde_json::Value::as_str) != Some("allow")
+        || output::is_compact_mutation_receipt(envelope)
     {
-        anyhow::bail!("normalized result is missing renderedBody.value");
+        return Ok(());
     }
-    Ok(())
+    validate_selected_content(envelope, body_fields, exact)
+        .map_err(|_| output::ResponseContentFailure::new(envelope, sensitive).into())
 }
 
 // Redirect locations can contain credentials or other private material. Report
@@ -17618,6 +17125,13 @@ fn exit_malformed_broker_response(message: String) -> ! {
 }
 
 fn exit_cli_input_error(error: anyhow::Error) -> ! {
+    if let Some(message) = error
+        .downcast_ref::<ConfigError>()
+        .and_then(retired_cli_default_message)
+    {
+        eprintln!("{message}");
+        std::process::exit(3);
+    }
     eprintln!("{error:#}");
     std::process::exit(3);
 }
@@ -17639,8 +17153,7 @@ struct ResolvedCliSettings {
     identity_header: String,
     identity_scheme: String,
     allow_insecure_broker_http: bool,
-    read_content_format: ReadContentFormat,
-    output_format: ResponseFormat,
+    preferred_output_content_format: Option<OutputContentFormat>,
 }
 
 impl ResolvedCliSettings {
@@ -17690,14 +17203,34 @@ fn resolve_cli_settings(cli: &Cli, config_path: &PathBuf) -> Result<ResolvedCliS
             .map(|value| value.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
 
-    let read_content_format = resolve_read_content_format_default(
-        config_path,
-        config_exists,
-        config.defaults.read_content_format,
-    )?;
-    let output_format =
-        resolve_output_format_default(config_path, config_exists, config.defaults.output_format)?;
+    let preferred_output_content_format = config
+        .defaults
+        .preferred_output_content_format
+        .map(|format| Ok(Some(format)))
+        .unwrap_or_else(
+            || match env::var("AGENT_ACCESS_PREFERRED_OUTPUT_CONTENT_FORMAT") {
+                Ok(value) => parse_output_content_format(
+                    &value,
+                    "AGENT_ACCESS_PREFERRED_OUTPUT_CONTENT_FORMAT",
+                )
+                .map(Some),
+                Err(env::VarError::NotPresent) => Ok(None),
+                Err(_) => anyhow::bail!(
+                    "AGENT_ACCESS_PREFERRED_OUTPUT_CONTENT_FORMAT must be valid UTF-8"
+                ),
+            },
+        )?;
 
+    let preferred_output_content_format = match &cli.command {
+        Command::Mcp {
+            command:
+                McpCommand::Serve {
+                    preferred_output_content_format: Some(format),
+                    ..
+                },
+        } => Some((*format).into()),
+        _ => preferred_output_content_format,
+    };
     let resolved = ResolvedCliSettings {
         url,
         request_timeout_ms: config.service.request_timeout_ms,
@@ -17707,8 +17240,7 @@ fn resolve_cli_settings(cli: &Cli, config_path: &PathBuf) -> Result<ResolvedCliS
         identity_header,
         identity_scheme,
         allow_insecure_broker_http,
-        read_content_format,
-        output_format,
+        preferred_output_content_format,
     };
     validate_cli_config(&CliConfig {
         service: agent_access_core::CliServiceConfig {
@@ -17724,73 +17256,58 @@ fn resolve_cli_settings(cli: &Cli, config_path: &PathBuf) -> Result<ResolvedCliS
             disabled: resolved.token.is_none() || resolved.allow_insecure_broker_http,
         },
         defaults: agent_access_core::CliDefaultsConfig {
-            read_content_format: resolved.read_content_format,
-            output_format: resolved.output_format,
+            preferred_output_content_format: resolved.preferred_output_content_format,
         },
     })?;
     Ok(resolved)
 }
 
-fn resolve_read_content_format_default(
-    config_path: &Path,
-    config_exists: bool,
-    config_value: ReadContentFormat,
-) -> Result<ReadContentFormat> {
-    if config_exists && cli_default_key_is_present(config_path, "read_content_format")? {
-        return Ok(config_value);
-    }
-    match env::var("AGENT_ACCESS_READ_CONTENT_FORMAT") {
-        Ok(value) => parse_read_content_format(&value, "AGENT_ACCESS_READ_CONTENT_FORMAT"),
-        Err(env::VarError::NotPresent) => Ok(ReadContentFormat::Native),
-        Err(error) => Err(anyhow::anyhow!(
-            "failed to read AGENT_ACCESS_READ_CONTENT_FORMAT: {error}"
-        )),
-    }
-}
-
-fn resolve_output_format_default(
-    config_path: &Path,
-    config_exists: bool,
-    config_value: ResponseFormat,
-) -> Result<ResponseFormat> {
-    if config_exists && cli_default_key_is_present(config_path, "output_format")? {
-        return Ok(config_value);
-    }
-    match env::var("AGENT_ACCESS_OUTPUT_FORMAT") {
-        Ok(value) => parse_output_format(&value, "AGENT_ACCESS_OUTPUT_FORMAT"),
-        Err(env::VarError::NotPresent) => Ok(ResponseFormat::Json),
-        Err(error) => Err(anyhow::anyhow!(
-            "failed to read AGENT_ACCESS_OUTPUT_FORMAT: {error}"
-        )),
-    }
-}
-
-fn parse_read_content_format(value: &str, source: &str) -> Result<ReadContentFormat> {
+fn parse_output_content_format(value: &str, source: &str) -> Result<OutputContentFormat> {
     match value {
-        "native" => Ok(ReadContentFormat::Native),
-        "markdown" => Ok(ReadContentFormat::Markdown),
-        "text" => Ok(ReadContentFormat::Text),
-        _ => anyhow::bail!("{source} must be one of native, markdown, or text"),
+        "markdown" => Ok(OutputContentFormat::Markdown),
+        "text" => Ok(OutputContentFormat::Text),
+        "adf" => Ok(OutputContentFormat::Adf),
+        "storage" => Ok(OutputContentFormat::Storage),
+        _ => anyhow::bail!("{source} must be one of markdown, text, adf, or storage"),
     }
 }
 
-fn parse_output_format(value: &str, source: &str) -> Result<ResponseFormat> {
-    match value {
-        "json" => Ok(ResponseFormat::Json),
-        "markdown" => Ok(ResponseFormat::Markdown),
-        _ => anyhow::bail!("{source} must be one of json or markdown"),
-    }
+fn optional_content_format<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<OutputContentFormat>, D::Error> {
+    OutputContentFormat::deserialize(deserializer).map(Some)
 }
 
-fn cli_default_key_is_present(path: &Path, key: &str) -> Result<bool> {
-    let raw = fs::read_to_string(path)
-        .with_context(|| format!("failed to read CLI config {}", path.display()))?;
-    let document = toml::from_str::<toml::Value>(&raw)
-        .with_context(|| format!("failed to parse CLI config {}", path.display()))?;
-    Ok(document
-        .get("defaults")
-        .and_then(toml::Value::as_table)
-        .is_some_and(|defaults| defaults.contains_key(key)))
+fn reject_retired_environment() -> Result<()> {
+    if env::var_os("AGENT_ACCESS_READ_CONTENT_FORMAT").is_some() {
+        anyhow::bail!(
+            "AGENT_ACCESS_READ_CONTENT_FORMAT is retired; use AGENT_ACCESS_PREFERRED_OUTPUT_CONTENT_FORMAT for a content preference"
+        );
+    }
+    if env::var_os("AGENT_ACCESS_OUTPUT_FORMAT").is_some() {
+        anyhow::bail!(
+            "AGENT_ACCESS_OUTPUT_FORMAT is retired; ordinary invocation results are always JSON. Remove this variable; it has no replacement."
+        );
+    }
+    Ok(())
+}
+
+/// Map only Serde's two exact retired-default diagnostics to fixed guidance.
+/// Never expose the TOML source excerpt, other config errors, or token details
+/// through the MCP adapter.
+fn retired_cli_default_message(error: &ConfigError) -> Option<&'static str> {
+    let ConfigError::Parse { source, .. } = error else {
+        return None;
+    };
+    match source.message() {
+        "unknown field `read_content_format`, expected `preferred_output_content_format`" => Some(
+            "[defaults].read_content_format is retired; use [defaults].preferred_output_content_format for a content preference.",
+        ),
+        "unknown field `output_format`, expected `preferred_output_content_format`" => Some(
+            "[defaults].output_format is retired; ordinary invocation results are always JSON. Remove this setting; it has no replacement.",
+        ),
+        _ => None,
+    }
 }
 
 fn load_config_or_default(path: &PathBuf, explicit: bool) -> Result<CliConfig> {
@@ -18054,6 +17571,10 @@ fn endpoint(base: &str, path: &str) -> Result<String> {
 }
 
 fn exit_config_error(error: ConfigError) -> Result<()> {
+    if let Some(message) = retired_cli_default_message(&error) {
+        eprintln!("{message}");
+        std::process::exit(3);
+    }
     eprintln!("{error}");
     for item in error.errors() {
         eprintln!("- {item}");
@@ -18577,17 +18098,12 @@ mod tests {
             let Command::CloudbeesCi { command } = cli.command else {
                 panic!("CloudBees CI command expected");
             };
-            let CloudbeesCiInvocation::Json {
-                action,
-                inputs,
-                format,
-            } = cloudbees_ci_invocation(&command)
+            let CloudbeesCiInvocation::Json { action, inputs } = cloudbees_ci_invocation(&command)
             else {
                 panic!("JSON CloudBees CI action expected");
             };
             assert_eq!(action, expected_action);
             assert_eq!(inputs, expected_inputs);
-            assert_eq!(format, None);
         }
 
         let cli = Cli::try_parse_from([
@@ -18686,7 +18202,7 @@ mod tests {
                 panic!("CloudBees CI command expected");
             };
             match cloudbees_ci_invocation(&command) {
-                CloudbeesCiInvocation::Json { action, inputs, .. }
+                CloudbeesCiInvocation::Json { action, inputs }
                 | CloudbeesCiInvocation::Download { action, inputs } => (action, inputs),
             }
         };
@@ -18960,15 +18476,10 @@ mod tests {
                 panic!("expected CloudBees command")
             };
             match cloudbees_ci_invocation(&command) {
-                CloudbeesCiInvocation::Json {
-                    action,
-                    inputs,
-                    format,
-                } => {
+                CloudbeesCiInvocation::Json { action, inputs } => {
                     assert!(!download);
                     assert_eq!(action, expected_action);
                     assert_eq!(inputs, expected_inputs);
-                    assert_eq!(format, None);
                 }
                 CloudbeesCiInvocation::Download { action, inputs } => {
                     assert!(download);
@@ -19649,8 +19160,7 @@ mod tests {
     }
 
     fn response_test_settings(
-        read_content_format: ReadContentFormat,
-        output_format: ResponseFormat,
+        preferred_output_content_format: Option<OutputContentFormat>,
     ) -> ResolvedCliSettings {
         ResolvedCliSettings {
             url: "http://127.0.0.1:8787".to_string(),
@@ -19661,14 +19171,13 @@ mod tests {
             identity_header: "X-Agent-Access-Identity-Token".to_string(),
             identity_scheme: "raw".to_string(),
             allow_insecure_broker_http: false,
-            read_content_format,
-            output_format,
+            preferred_output_content_format,
         }
     }
 
     #[test]
     fn identity_transport_accepts_only_exact_local_http_hosts() {
-        let mut settings = response_test_settings(ReadContentFormat::Native, ResponseFormat::Json);
+        let mut settings = response_test_settings(None);
         settings.token = Some("transport-test-token".to_string());
         for host in ["localhost", "127.0.0.1", "[::1]"] {
             settings.url = format!("http://{host}:8787");
@@ -19690,48 +19199,41 @@ mod tests {
     }
 
     #[test]
-    fn read_file_output_renders_markdown_and_preserves_destination_on_errors() {
+    fn file_output_serializes_json_and_preserves_destination_on_errors() {
         let directory = tempfile::tempdir().unwrap();
-        let destination = directory.path().join("issue.md");
-        let settings = response_test_settings(ReadContentFormat::Native, ResponseFormat::Markdown);
+        let destination = directory.path().join("issue.json");
+        let settings = response_test_settings(Some(OutputContentFormat::Markdown));
         let ctx = CliContext {
             settings: &settings,
             output: Some(&destination),
         };
-        let envelope = serde_json::json!({"decision":"allow","brokerRequestId":"request-1","result":{"format":"markdown","value":"# Issue\n\nDetails\n"}});
+        let envelope = serde_json::json!({"decision":"allow","brokerRequestId":"request-1","result":{"description":{"format":"markdown","value":"# Issue
+Details"}}});
         let receipt = write_local_response(
             &ctx,
             200,
             &envelope,
-            ResponseFormat::Markdown,
             output::ResponseOutput::prepare(Some(&destination), &["/result/secret".into()])
                 .unwrap(),
         )
         .unwrap()
         .unwrap();
         assert_eq!(
-            fs::read_to_string(&destination).unwrap(),
-            "# Issue\n\nDetails\n"
+            serde_json::from_slice::<serde_json::Value>(&fs::read(&destination).unwrap()).unwrap(),
+            envelope
         );
-        assert_eq!(receipt["output"]["contentType"], "text/markdown");
+        assert_eq!(receipt["output"]["contentType"], "application/json");
         assert_eq!(receipt["output"]["sensitive"], true);
         assert_eq!(receipt["brokerRequestId"], "request-1");
         assert!(receipt.get("result").is_none());
+        let before = fs::read(&destination).unwrap();
         let denied = serde_json::json!({"decision":"deny","reasonCode":"action_denied"});
         assert!(
-            write_local_response(&ctx, 403, &denied, ResponseFormat::Markdown, None)
+            write_local_response(&ctx, 403, &denied, None)
                 .unwrap()
                 .is_none()
         );
-        let malformed =
-            serde_json::json!({"decision":"allow","result":{"format":"markdown","value":42}});
-        assert!(
-            write_local_response(&ctx, 200, &malformed, ResponseFormat::Markdown, None).is_err()
-        );
-        assert_eq!(
-            fs::read_to_string(&destination).unwrap(),
-            "# Issue\n\nDetails\n"
-        );
+        assert_eq!(fs::read(&destination).unwrap(), before);
     }
 
     #[test]
@@ -19755,10 +19257,7 @@ mod tests {
         );
     }
 
-    fn response_test_action(
-        read_content_formats: &[&str],
-        response_formats: &[&str],
-    ) -> ApiActionSpec {
+    fn response_test_action(output_content_formats: &[&str]) -> ApiActionSpec {
         ApiActionSpec {
             scoped_mcp_name: Some("issue.view".to_owned()),
             documentation: None,
@@ -19777,17 +19276,22 @@ mod tests {
             io: ActionIo::Json,
             response_kind: agent_access_core::ResponseKind::ResponseEnvelope,
             exit_policy: ExitPolicy::InvokeDecision,
-            read_content_formats: read_content_formats
+            output_content_formats: output_content_formats
                 .iter()
-                .map(|value| (*value).to_string())
+                .map(|value| parse_output_content_format(value, "test").unwrap())
                 .collect(),
-            response_formats: response_formats
-                .iter()
-                .map(|value| (*value).to_string())
-                .collect(),
-            rendered_body_owners: Vec::new(),
-            optional_rendered_body_owner_prefixes: Vec::new(),
             result_schemas: None,
+            native_output_content_format: output_content_formats
+                .first()
+                .map(|value| parse_output_content_format(value, "test").unwrap()),
+            default_output_content_format: output_content_formats
+                .first()
+                .map(|value| parse_output_content_format(value, "test").unwrap()),
+            body_fields: if output_content_formats.is_empty() {
+                vec![]
+            } else {
+                vec![BodyField::new("/result", "description").nullable()]
+            },
         }
     }
 
@@ -19818,7 +19322,7 @@ mod tests {
             scoped_mcp_ready: false,
             scope_types: vec![],
             resource_scopes: Default::default(),
-            actions: vec![response_test_action(&[], &[])],
+            actions: vec![response_test_action(&[])],
         });
         let mut value = serde_json::to_value(valid).unwrap();
         value["services"][0]["actions"][0]["scopedMcpName"] = serde_json::Value::Null;
@@ -19858,15 +19362,11 @@ mod tests {
         action.join(".")
     }
 
-    /// Presentation capabilities of a backend action, as a broker configured
-    /// with every content format enabled advertises them.
-    fn response_capabilities(
-        service: &str,
-        action: &str,
-    ) -> agent_access_provider::presentation::ResponseCapabilities {
+    /// Native descriptors with every optional content format enabled.
+    fn response_descriptors() -> &'static [agent_access_provider::ServiceDescriptor] {
         static DESCRIPTORS: std::sync::OnceLock<Vec<agent_access_provider::ServiceDescriptor>> =
             std::sync::OnceLock::new();
-        let descriptors = DESCRIPTORS.get_or_init(|| {
+        DESCRIPTORS.get_or_init(|| {
             agent_access_broker::composition()
                 .unwrap()
                 .configured_service_descriptors(
@@ -19894,21 +19394,73 @@ api_base_url = "https://gitlab.example.com/api/v4"
 web_base_url = "https://gitlab.example.com"
 allowed_upstream_hosts = ["https://gitlab.example.com/api/v4/**"]
 
+[providers.cloudbees_ci]
+allowed_upstream_hosts = ["https://ci.example.com/**"]
+[providers.cloudbees_ci.controllers.example]
+base_url = "https://ci.example.com/"
+
 [limits]
 upload_spool_dir = "upload-spool"
 "#,
                 )
                 .unwrap()
-        });
-        let descriptor = descriptors
+        })
+    }
+
+    fn response_capabilities(
+        service: &str,
+        action: &str,
+    ) -> agent_access_provider::presentation::ResponseCapabilities {
+        let descriptor = response_descriptors()
             .iter()
             .find(|descriptor| descriptor.service == service)
             .expect("backend is configured");
         agent_access_provider::presentation::response_capabilities(
             descriptor
                 .action(action)
-                .and_then(|action| action.presentation.as_ref()),
+                .expect("action is declared")
+                .presentation
+                .as_ref(),
+            descriptor.preferred_output_content_format,
         )
+    }
+
+    #[test]
+    fn typed_content_format_help_matches_every_native_action_capability() {
+        for service in response_descriptors() {
+            for action in &service.actions {
+                let typed = action
+                    .documentation
+                    .as_ref()
+                    .and_then(|documentation| documentation.get("typedCommand"))
+                    .and_then(serde_json::Value::as_str)
+                    .expect("native action documents its typed command");
+                let help_command = typed
+                    .split_once("; run agent-access ")
+                    .and_then(|(_, command)| command.split_once(" --help"))
+                    .map(|(command, _)| command)
+                    .expect("native action documents a concrete help command");
+                let mut args = vec!["agent-access"];
+                args.extend(help_command.split_whitespace());
+                args.push("--help");
+                let help = Cli::try_parse_from(args).unwrap_err();
+                assert_eq!(
+                    help.kind(),
+                    clap::error::ErrorKind::DisplayHelp,
+                    "{}.{}: {help}",
+                    service.service,
+                    action.action,
+                );
+                assert_eq!(
+                    help.to_string().contains("--output-content-format"),
+                    action.presentation.is_some(),
+                    "{}.{}: {help_command}",
+                    service.service,
+                    action.action,
+                );
+            }
+        }
+        assert!(cli_help(&["invoke"]).contains("--output-content-format"));
     }
 
     #[test]
@@ -19927,40 +19479,10 @@ upload_spool_dir = "upload-spool"
             ),
         ];
         for (command, action) in embedded {
-            assert!(response_capabilities("jira", action).supports_read_content());
+            assert!(response_capabilities("jira", action).supports_output_content());
             assert!(
-                cli_help(command).contains("--read-content-format <READ_CONTENT_FORMAT>"),
+                cli_help(command).contains("--output-content-format <OUTPUT_CONTENT_FORMAT>"),
                 "missing embedded-content flag on {command:?}"
-            );
-        }
-
-        let whole_result = [
-            (&["jira", "project", "list"][..], "project.list"),
-            (&["jira", "project", "view"][..], "project.view"),
-            (&["jira", "issue-type", "list"][..], "issue_type.list"),
-            (&["jira", "issue", "view"][..], "issue.view"),
-            (&["jira", "issue", "search"][..], "search"),
-            (&["jira", "issue", "comment", "list"][..], "comment.list"),
-            (&["jira", "issue", "comment", "view"][..], "comment.view"),
-            (
-                &["jira", "issue", "comment", "property", "list"][..],
-                "comment.property.list",
-            ),
-            (
-                &["jira", "issue", "comment", "property", "get"][..],
-                "comment.property.get",
-            ),
-            (
-                &["jira", "issue", "attachment", "list"][..],
-                "attachment.list",
-            ),
-            (&["jira", "issue", "verify"][..], "verify"),
-        ];
-        for (command, action) in whole_result {
-            assert!(response_capabilities("jira", action).supports_markdown_response());
-            assert!(
-                cli_help(command).contains("--output-format <OUTPUT_FORMAT>"),
-                "missing whole-result flag on {command:?}"
             );
         }
 
@@ -19979,62 +19501,11 @@ upload_spool_dir = "upload-spool"
             ),
         ] {
             let capabilities = response_capabilities("jira", action);
-            assert!(!capabilities.supports_read_content());
-            assert!(!capabilities.supports_markdown_response());
+            assert!(!capabilities.supports_output_content());
             let help = cli_help(command);
-            assert!(!help.contains("--read-content-format"));
+            assert!(!help.contains("--output-content-format"));
             assert!(!help.contains("--output-format"));
         }
-    }
-
-    #[test]
-    fn jira_read_and_output_flags_parse_closed_values() {
-        Cli::try_parse_from([
-            "agent-access",
-            "jira",
-            "issue",
-            "view",
-            "SBC-1",
-            "--read-content-format",
-            "text",
-            "--output-format",
-            "json",
-        ])
-        .unwrap();
-        Cli::try_parse_from([
-            "agent-access",
-            "invoke",
-            "jira.issue.view",
-            "--read-content-format",
-            "markdown",
-            "--output-format",
-            "markdown",
-        ])
-        .unwrap();
-
-        let bad_read = Cli::try_parse_from([
-            "agent-access",
-            "jira",
-            "issue",
-            "view",
-            "SBC-1",
-            "--read-content-format",
-            "plain_text",
-        ])
-        .unwrap_err();
-        assert_eq!(bad_read.kind(), clap::error::ErrorKind::InvalidValue);
-        let bad_output = Cli::try_parse_from([
-            "agent-access",
-            "jira",
-            "issue",
-            "search",
-            "--jql",
-            "project=SBC",
-            "--output-format",
-            "text",
-        ])
-        .unwrap_err();
-        assert_eq!(bad_output.kind(), clap::error::ErrorKind::InvalidValue);
     }
 
     #[test]
@@ -20109,48 +19580,10 @@ upload_spool_dir = "upload-spool"
         ];
         for command in embedded {
             let action = confluence_action_for_cli_path(command);
-            assert!(response_capabilities("confluence", &action).supports_read_content());
+            assert!(response_capabilities("confluence", &action).supports_output_content());
             assert!(
-                cli_help(command).contains("--read-content-format <READ_CONTENT_FORMAT>"),
+                cli_help(command).contains("--output-content-format <OUTPUT_CONTENT_FORMAT>"),
                 "missing embedded-content flag on {command:?}"
-            );
-        }
-
-        let whole_result = [
-            &["confluence", "space", "list"][..],
-            &["confluence", "page", "view"][..],
-            &["confluence", "page", "search"][..],
-            &["confluence", "page", "verify"][..],
-            &["confluence", "blog", "view"][..],
-            &["confluence", "blog", "search"][..],
-            &["confluence", "blog", "verify"][..],
-            &["confluence", "page", "draft", "view"][..],
-            &["confluence", "page", "draft", "verify"][..],
-            &["confluence", "blog", "draft", "view"][..],
-            &["confluence", "blog", "draft", "verify"][..],
-            &["confluence", "page", "attachment", "list"][..],
-            &["confluence", "page", "draft", "attachment", "list"][..],
-            &["confluence", "blog", "attachment", "list"][..],
-            &["confluence", "blog", "draft", "attachment", "list"][..],
-            &["confluence", "page", "footer-comment", "list"][..],
-            &["confluence", "page", "footer-comment", "view"][..],
-            &["confluence", "page", "footer-comment", "replies"][..],
-            &["confluence", "page", "inline-comment", "list"][..],
-            &["confluence", "page", "inline-comment", "view"][..],
-            &["confluence", "page", "inline-comment", "replies"][..],
-            &["confluence", "blog", "footer-comment", "list"][..],
-            &["confluence", "blog", "footer-comment", "view"][..],
-            &["confluence", "blog", "footer-comment", "replies"][..],
-            &["confluence", "blog", "inline-comment", "list"][..],
-            &["confluence", "blog", "inline-comment", "view"][..],
-            &["confluence", "blog", "inline-comment", "replies"][..],
-        ];
-        for command in whole_result {
-            let action = confluence_action_for_cli_path(command);
-            assert!(response_capabilities("confluence", &action).supports_markdown_response());
-            assert!(
-                cli_help(command).contains("--output-format <OUTPUT_FORMAT>"),
-                "missing whole-result flag on {command:?}"
             );
         }
 
@@ -20163,69 +19596,11 @@ upload_spool_dir = "upload-spool"
         ] {
             let action = confluence_action_for_cli_path(command);
             let capabilities = response_capabilities("confluence", &action);
-            assert!(!capabilities.supports_read_content());
-            assert!(!capabilities.supports_markdown_response());
+            assert!(!capabilities.supports_output_content());
             let help = cli_help(command);
-            assert!(!help.contains("--read-content-format"));
+            assert!(!help.contains("--output-content-format"));
             assert!(!help.contains("--output-format"));
         }
-    }
-
-    #[test]
-    fn confluence_read_and_output_flags_parse_closed_values() {
-        Cli::try_parse_from([
-            "agent-access",
-            "confluence",
-            "page",
-            "view",
-            "123",
-            "--read-content-format",
-            "text",
-            "--output-format",
-            "json",
-        ])
-        .unwrap();
-        Cli::try_parse_from([
-            "agent-access",
-            "confluence",
-            "blog",
-            "search",
-            "--cql",
-            "type=blogpost",
-            "--output-format",
-            "markdown",
-        ])
-        .unwrap();
-
-        let bad_read = Cli::try_parse_from([
-            "agent-access",
-            "confluence",
-            "page",
-            "view",
-            "123",
-            "--read-content-format",
-            "plain_text",
-        ])
-        .unwrap_err();
-        assert_eq!(bad_read.kind(), clap::error::ErrorKind::InvalidValue);
-        let unsupported = Cli::try_parse_from([
-            "agent-access",
-            "confluence",
-            "page",
-            "create",
-            "--space",
-            "ENG",
-            "--title",
-            "Title",
-            "--content",
-            "Body",
-            "--content-format",
-            "markdown",
-            "--output-format",
-            "markdown",
-        ])
-        .unwrap_err();
-        assert_eq!(unsupported.kind(), clap::error::ErrorKind::UnknownArgument);
     }
 
     #[test]
@@ -20324,128 +19699,10 @@ upload_spool_dir = "upload-spool"
             ),
         ];
         for (command, action) in embedded {
-            assert!(response_capabilities("gitlab", action).supports_read_content());
+            assert!(response_capabilities("gitlab", action).supports_output_content());
             assert!(
-                cli_help(command).contains("--read-content-format <READ_CONTENT_FORMAT>"),
+                cli_help(command).contains("--output-content-format <OUTPUT_CONTENT_FORMAT>"),
                 "missing embedded-content flag on {command:?}"
-            );
-        }
-
-        let whole_result = [
-            (&["gitlab", "project", "view"][..], "project.view"),
-            (&["gitlab", "project", "search"][..], "project.search"),
-            (&["gitlab", "search", "issues"][..], "search.issues"),
-            (
-                &["gitlab", "search", "merge-requests"][..],
-                "search.merge_requests",
-            ),
-            (&["gitlab", "search", "code"][..], "search.code"),
-            (&["gitlab", "search", "commits"][..], "search.commits"),
-            (&["gitlab", "search", "wiki"][..], "search.wiki"),
-            (&["gitlab", "search", "comments"][..], "search.comments"),
-            (&["gitlab", "issue", "view"][..], "issue.view"),
-            (&["gitlab", "issue", "search"][..], "issue.search"),
-            (&["gitlab", "issue", "list-comments"][..], "issue.note.list"),
-            (&["gitlab", "issue", "view-comment"][..], "issue.note.view"),
-            (
-                &["gitlab", "merge-request", "view"][..],
-                "merge_request.view",
-            ),
-            (
-                &["gitlab", "merge-request", "search"][..],
-                "merge_request.search",
-            ),
-            (
-                &["gitlab", "merge-request", "list-comments"][..],
-                "merge_request.note.list",
-            ),
-            (
-                &["gitlab", "merge-request", "view-comment"][..],
-                "merge_request.note.view",
-            ),
-            (
-                &["gitlab", "merge-request", "list-discussions"][..],
-                "merge_request.discussion.list",
-            ),
-            (
-                &["gitlab", "merge-request", "list-reviewers"][..],
-                "merge_request.reviewer.list",
-            ),
-            (
-                &["gitlab", "merge-request", "list-commits"][..],
-                "merge_request.commit.list",
-            ),
-            (
-                &["gitlab", "merge-request", "list-pipelines"][..],
-                "merge_request.pipeline.list",
-            ),
-            (
-                &["gitlab", "merge-request", "list-diffs"][..],
-                "merge_request.diff.list",
-            ),
-            (
-                &["gitlab", "merge-request", "list-diff-versions"][..],
-                "merge_request.diff_version.list",
-            ),
-            (
-                &["gitlab", "merge-request", "view-diff-version"][..],
-                "merge_request.diff_version.view",
-            ),
-            (
-                &["gitlab", "merge-request", "view-discussion"][..],
-                "merge_request.discussion.view",
-            ),
-            (
-                &["gitlab", "merge-request", "list-draft-notes"][..],
-                "merge_request.draft_note.list",
-            ),
-            (
-                &["gitlab", "merge-request", "view-draft-note"][..],
-                "merge_request.draft_note.view",
-            ),
-            (
-                &["gitlab", "merge-request", "view-approval"][..],
-                "merge_request.approval.view",
-            ),
-            (
-                &["gitlab", "merge-request", "view-approval-state"][..],
-                "merge_request.approval_state.view",
-            ),
-            (
-                &["gitlab", "merge-request", "list-approval-rules"][..],
-                "merge_request.approval_rule.list",
-            ),
-            (
-                &["gitlab", "merge-request", "view-approval-rule"][..],
-                "merge_request.approval_rule.view",
-            ),
-            (&["gitlab", "branch", "list"][..], "branch.list"),
-            (&["gitlab", "branch", "view"][..], "branch.view"),
-            (
-                &["gitlab", "protected-branch", "list"][..],
-                "protected_branch.list",
-            ),
-            (
-                &["gitlab", "protected-branch", "view"][..],
-                "protected_branch.view",
-            ),
-            (
-                &["gitlab", "protected-branch", "verify"][..],
-                "protected_branch.verify",
-            ),
-            (&["gitlab", "file", "view"][..], "file.view"),
-            (&["gitlab", "commit", "list"][..], "commit.list"),
-            (&["gitlab", "commit", "view"][..], "commit.view"),
-            (&["gitlab", "pipeline", "list"][..], "pipeline.list"),
-            (&["gitlab", "pipeline", "view"][..], "pipeline.view"),
-            (&["gitlab", "job", "list"][..], "job.list"),
-            (&["gitlab", "job", "view"][..], "job.view"),
-        ];
-        for (command, action) in whole_result {
-            assert!(response_capabilities("gitlab", action).supports_markdown_response());
-            assert!(
-                cli_help(command).contains("--output-format <OUTPUT_FORMAT>"),
-                "missing whole-result flag on {command:?}"
             );
         }
 
@@ -20499,10 +19756,9 @@ upload_spool_dir = "upload-spool"
             (&["gitlab", "job", "trace"][..], "job.trace.download"),
         ] {
             let capabilities = response_capabilities("gitlab", action);
-            assert!(!capabilities.supports_read_content());
-            assert!(!capabilities.supports_markdown_response());
+            assert!(!capabilities.supports_output_content());
             let help = cli_help(command);
-            assert!(!help.contains("--read-content-format"));
+            assert!(!help.contains("--output-content-format"));
             assert!(!help.contains("--output-format"));
         }
     }
@@ -20587,87 +19843,6 @@ upload_spool_dir = "upload-spool"
     }
 
     #[test]
-    fn gitlab_read_and_output_flags_parse_closed_values_and_default_to_ambient_resolution() {
-        let parsed = Cli::try_parse_from([
-            "agent-access",
-            "gitlab",
-            "issue",
-            "view",
-            "group/project",
-            "7",
-        ])
-        .unwrap();
-        assert!(matches!(
-            parsed.command,
-            Command::Gitlab {
-                command: GitlabCommand::Issue {
-                    command: GitlabIssueCommand::View {
-                        response: EmbeddedAndWholeOutputArgs {
-                            read_content_format: None,
-                            output_format: None,
-                        },
-                        ..
-                    }
-                }
-            }
-        ));
-
-        Cli::try_parse_from([
-            "agent-access",
-            "gitlab",
-            "issue",
-            "view",
-            "group/project",
-            "7",
-            "--read-content-format",
-            "text",
-            "--output-format",
-            "markdown",
-        ])
-        .unwrap();
-
-        let bad_read = Cli::try_parse_from([
-            "agent-access",
-            "gitlab",
-            "issue",
-            "view",
-            "group/project",
-            "7",
-            "--read-content-format",
-            "plain_text",
-        ])
-        .unwrap_err();
-        assert_eq!(bad_read.kind(), clap::error::ErrorKind::InvalidValue);
-
-        let bad_output = Cli::try_parse_from([
-            "agent-access",
-            "gitlab",
-            "pipeline",
-            "list",
-            "group/project",
-            "--output-format",
-            "text",
-        ])
-        .unwrap_err();
-        assert_eq!(bad_output.kind(), clap::error::ErrorKind::InvalidValue);
-
-        let unsupported = Cli::try_parse_from([
-            "agent-access",
-            "gitlab",
-            "merge-request",
-            "merge",
-            "group/project",
-            "2",
-            "--sha",
-            "deadbeef",
-            "--output-format",
-            "markdown",
-        ])
-        .unwrap_err();
-        assert_eq!(unsupported.kind(), clap::error::ErrorKind::UnknownArgument);
-    }
-
-    #[test]
     fn gitlab_merge_request_review_read_commands_parse_closed_typed_shapes() {
         for command in [
             "list-reviewers",
@@ -20688,8 +19863,6 @@ upload_spool_dir = "upload-spool"
                 "25",
                 "--page-token",
                 "next-page",
-                "--output-format",
-                "markdown",
             ])
             .unwrap_or_else(|error| panic!("{command} should parse: {error}"));
         }
@@ -20729,8 +19902,6 @@ upload_spool_dir = "upload-spool"
             "17",
             "9",
             "--unidiff",
-            "--output-format",
-            "json",
         ])
         .unwrap();
         assert!(matches!(
@@ -20756,10 +19927,8 @@ upload_spool_dir = "upload-spool"
             "group/project",
             "17",
             "discussion-1",
-            "--read-content-format",
+            "--output-content-format",
             "text",
-            "--output-format",
-            "markdown",
         ])
         .unwrap();
         assert!(matches!(
@@ -20770,9 +19939,8 @@ upload_spool_dir = "upload-spool"
                         ref project,
                         iid: 17,
                         ref discussion_id,
-                        response: EmbeddedAndWholeOutputArgs {
-                            read_content_format: Some(ReadContentFormatArg::Text),
-                            output_format: Some(OutputFormatArg::Markdown),
+                        response: OutputContentArgs {
+                            output_content_format: Some(OutputContentFormatArg::Text),
                         },
                     }
                 }
@@ -20811,8 +19979,8 @@ upload_spool_dir = "upload-spool"
             "17",
             "--output",
             "diff.patch",
-            "--output-format",
-            "json",
+            "--output-content-format",
+            "markdown",
         ])
         .unwrap_err();
         assert_eq!(unsupported.kind(), clap::error::ErrorKind::UnknownArgument);
@@ -20895,8 +20063,6 @@ upload_spool_dir = "upload-spool"
                 "view-approval",
                 "group/project",
                 "17",
-                "--output-format",
-                "markdown",
             ],
             vec![
                 "agent-access",
@@ -21192,7 +20358,7 @@ upload_spool_dir = "upload-spool"
                 "Please simplify this.",
                 "--content-format",
                 "markdown",
-                "--read-content-format",
+                "--output-content-format",
                 "text",
             ],
             vec![
@@ -21219,10 +20385,8 @@ upload_spool_dir = "upload-spool"
                 "20",
                 "--page-token",
                 "next",
-                "--read-content-format",
+                "--output-content-format",
                 "markdown",
-                "--output-format",
-                "json",
             ],
             vec![
                 "agent-access",
@@ -21232,7 +20396,7 @@ upload_spool_dir = "upload-spool"
                 "group/project",
                 "17",
                 "8",
-                "--output-format",
+                "--output-content-format",
                 "markdown",
             ],
             vec![
@@ -21811,68 +20975,6 @@ upload_spool_dir = "upload-spool"
     }
 
     #[test]
-    fn response_option_resolution_obeys_precedence_and_capabilities() {
-        let settings =
-            response_test_settings(ReadContentFormat::Markdown, ResponseFormat::Markdown);
-        let ambient_conflict =
-            resolve_response_options(&settings, None, None, true, true, "jira.issue.view")
-                .unwrap_err();
-        assert!(format!("{ambient_conflict:#}").contains("explicitly select --output-format"));
-
-        let explicit_whole = resolve_response_options(
-            &settings,
-            None,
-            Some(OutputFormatArg::Markdown),
-            true,
-            true,
-            "jira.issue.view",
-        )
-        .unwrap();
-        assert_eq!(
-            explicit_whole.read_content_format,
-            ReadContentFormat::Native
-        );
-        assert_eq!(explicit_whole.response_format, ResponseFormat::Markdown);
-
-        let explicit = resolve_response_options(
-            &settings,
-            Some(ReadContentFormatArg::Text),
-            Some(OutputFormatArg::Json),
-            true,
-            true,
-            "jira.issue.view",
-        )
-        .unwrap();
-        assert_eq!(explicit.read_content_format, ReadContentFormat::Text);
-        assert_eq!(explicit.response_format, ResponseFormat::Json);
-
-        let embedded_only =
-            resolve_response_options(&settings, None, None, true, false, "jira.issue.create")
-                .unwrap();
-        assert_eq!(
-            embedded_only.read_content_format,
-            ReadContentFormat::Markdown
-        );
-        assert_eq!(embedded_only.response_format, ResponseFormat::Json);
-
-        let omitted =
-            resolve_response_options(&settings, None, None, false, false, "jira.comment.delete")
-                .unwrap();
-        assert_eq!(omitted, ResponseOptions::default());
-
-        let unsupported = resolve_response_options(
-            &settings,
-            Some(ReadContentFormatArg::Text),
-            Some(OutputFormatArg::Json),
-            false,
-            false,
-            "jira.comment.delete",
-        )
-        .unwrap_err();
-        assert!(format!("{unsupported:#}").contains("does not support --read-content-format"));
-    }
-
-    #[test]
     fn mutation_verification_failure_remains_an_error_envelope() {
         let typed = Cli::try_parse_from([
             "agent-access",
@@ -21929,8 +21031,14 @@ upload_spool_dir = "upload-spool"
             &envelope
         ));
         assert!(is_mutation_verification_failure(&envelope));
-        assert_eq!(markdown_result_value(&envelope).unwrap(), None);
-        validate_embedded_invoke_result(&envelope, ReadContentFormat::Markdown, &[], &[]).unwrap();
+        validate_invoke_result(
+            409,
+            &envelope,
+            Some(OutputContentFormat::Markdown),
+            &[],
+            &[],
+        )
+        .unwrap();
         assert_eq!(
             envelope["result"]["safeLocators"],
             serde_json::json!({"discussionId": "discussion-1", "noteId": 12})
@@ -21970,9 +21078,14 @@ upload_spool_dir = "upload-spool"
                 &envelope
             ));
             assert!(!is_mutation_verification_failure(&envelope));
-            assert_eq!(markdown_result_value(&envelope).unwrap(), None);
-            validate_embedded_invoke_result(&envelope, ReadContentFormat::Markdown, &[], &[])
-                .unwrap();
+            validate_invoke_result(
+                409,
+                &envelope,
+                Some(OutputContentFormat::Markdown),
+                &[],
+                &[],
+            )
+            .unwrap();
             assert_eq!(
                 envelope["result"],
                 serde_json::json!({"inputCategory": category})
@@ -21984,541 +21097,26 @@ upload_spool_dir = "upload-spool"
         }
     }
 
-    fn owners(pointers: &[&str]) -> Vec<String> {
-        pointers
-            .iter()
-            .map(|pointer| (*pointer).to_string())
-            .collect()
-    }
-
     #[test]
-    fn embedded_result_validation_checks_companions_at_declared_owners() {
-        let issue = serde_json::json!({
-            "decision": "allow",
-            "result": {
-                "key": "SBC-1",
-                "description": {"type": "doc", "version": 1, "content": []},
-                "renderedBody": {"format": "markdown", "value": ""}
-            }
-        });
-        validate_embedded_invoke_result(
-            &issue,
-            ReadContentFormat::Markdown,
-            &owners(&["/result"]),
-            &[],
-        )
-        .unwrap();
-
-        let comments = serde_json::json!({
-            "decision": "allow",
-            "result": {
-                "comments": [
-                    {"body": {"type": "doc", "version": 1, "content": []},
-                     "renderedBody": {"format": "text", "value": "body"}},
-                    {"commentId": "11"}
-                ]
-            }
-        });
-        let comment_owners = owners(&["/result/comments/*"]);
-        validate_embedded_invoke_result(&comments, ReadContentFormat::Text, &comment_owners, &[])
-            .unwrap();
-
-        for (result, expected) in [
-            (
-                serde_json::json!({"comments": [{"renderedBody": {"format": "text"}}]}),
-                "missing renderedBody.value",
-            ),
-            (
-                serde_json::json!({"comments": [{"renderedBody": "text"}]}),
-                "renderedBody that is not an object",
-            ),
-            (
-                serde_json::json!({"comments": [{"renderedBody": {"format": "markdown", "value": ""}}]}),
-                "invalid renderedBody format",
-            ),
-            (
-                serde_json::json!({"comments": ["not an owner"]}),
-                "body owner is not an object",
-            ),
-            (
-                serde_json::json!({"comments": {"0": {}}}),
-                "body collection is not an array",
-            ),
-            (serde_json::json!({}), "missing body owner field comments"),
-        ] {
-            let envelope = serde_json::json!({"decision": "allow", "result": result});
-            let error = validate_embedded_invoke_result(
-                &envelope,
-                ReadContentFormat::Text,
-                &comment_owners,
-                &[],
-            )
-            .unwrap_err()
-            .to_string();
-            assert!(error.contains(expected), "{error} lacks {expected}");
-        }
-    }
-
-    #[test]
-    fn embedded_result_validation_only_skips_declared_optional_missing_fields() {
-        let body_owners = owners(&["/result", "/result/commentPage/comments/*"]);
-        let optional_prefixes = owners(&["/result/commentPage"]);
-        for result in [
-            serde_json::json!({"key": "PROJ-1"}),
-            serde_json::json!({"commentPage": {"comments": []}}),
-            serde_json::json!({"commentPage": {"comments": [
-                {"renderedBody": {"format": "text", "value": "reply"}}
-            ]}}),
-        ] {
-            let envelope = serde_json::json!({"decision": "allow", "result": result});
-            validate_embedded_invoke_result(
-                &envelope,
-                ReadContentFormat::Text,
-                &body_owners,
-                &optional_prefixes,
-            )
-            .unwrap();
-        }
-
-        for (result, expected) in [
-            (
-                serde_json::json!({"commentPage": null}),
-                "body owner parent is not an object",
-            ),
-            (
-                serde_json::json!({"commentPage": {}}),
-                "missing body owner field comments",
-            ),
-            (
-                serde_json::json!({"commentPage": {"comments": null}}),
-                "body collection is not an array",
-            ),
-            (
-                serde_json::json!({"commentPage": {"comments": [null]}}),
-                "body owner is not an object",
-            ),
-            (
-                serde_json::json!({"commentPage": {"comments": [
-                    {"renderedBody": {"format": "text"}}
-                ]}}),
-                "missing renderedBody.value",
-            ),
-        ] {
-            let envelope = serde_json::json!({"decision": "allow", "result": result});
-            let error = validate_embedded_invoke_result(
-                &envelope,
-                ReadContentFormat::Text,
-                &body_owners,
-                &optional_prefixes,
-            )
-            .unwrap_err()
-            .to_string();
-            assert!(error.contains(expected), "{error} lacks {expected}");
-        }
-
-        // An optional descendant cannot make its required parent optional.
-        let error = validate_embedded_invoke_result(
-            &serde_json::json!({"decision": "allow"}),
-            ReadContentFormat::Text,
-            &body_owners,
-            &optional_prefixes,
-        )
-        .unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("missing body owner field result")
-        );
-
-        // Match encoded wildcard paths exactly, without treating adjacent fields as optional.
-        let nested_owners = owners(&["/result/items/*/optional~1body"]);
-        let nested_optional = owners(&["/result/items/*/optional~1body"]);
-        let envelope = serde_json::json!({"decision": "allow", "result": {"items": [
-            {}, {"optional/body": {"renderedBody": {"format": "text", "value": "body"}}}
-        ]}});
-        validate_embedded_invoke_result(
-            &envelope,
-            ReadContentFormat::Text,
-            &nested_owners,
-            &nested_optional,
-        )
-        .unwrap();
-    }
-
-    #[test]
-    fn embedded_result_validation_ignores_renderedbody_keys_inside_native_content() {
-        let issue = serde_json::json!({
-            "decision": "allow",
-            "result": {
-                "key": "SBC-1",
-                "description": {
-                    "type": "doc",
-                    "version": 1,
-                    "content": [{
-                        "type": "extension",
-                        "attrs": {
-                            "extensionKey": "macro",
-                            "parameters": {"renderedBody": "foo"}
-                        }
-                    }]
-                },
-                "fields": {"renderedBody": 7},
-                "renderedBody": {"format": "markdown", "value": "macro"}
-            }
-        });
-        validate_embedded_invoke_result(
-            &issue,
-            ReadContentFormat::Markdown,
-            &owners(&["/result"]),
-            &[],
-        )
-        .unwrap();
-    }
-
-    #[test]
-    fn embedded_result_validation_preserves_native_and_error_envelopes() {
-        let unnormalized = serde_json::json!({
-            "decision": "allow",
-            "result": {"renderedBody": "not checked in native mode"}
-        });
-        validate_embedded_invoke_result(
-            &unnormalized,
-            ReadContentFormat::Native,
-            &owners(&["/result"]),
-            &[],
-        )
-        .unwrap();
-
-        let denied = serde_json::json!({
-            "decision": "deny",
-            "error": {"reasonCode": "right_missing", "message": "denied"}
-        });
-        validate_embedded_invoke_result(
-            &denied,
-            ReadContentFormat::Markdown,
-            &owners(&["/result"]),
-            &[],
-        )
-        .unwrap();
-    }
-
-    #[test]
-    fn generic_invoke_catalog_fetch_gate_has_zero_requests_at_defaults() {
-        assert!(!generic_invoke_needs_catalog(
-            ReadContentFormat::Native,
-            ResponseFormat::Json
-        ));
-        assert!(generic_invoke_needs_catalog(
-            ReadContentFormat::Markdown,
-            ResponseFormat::Json
-        ));
-        assert!(generic_invoke_needs_catalog(
-            ReadContentFormat::Native,
-            ResponseFormat::Markdown
-        ));
-    }
-
-    #[test]
-    fn generic_invoke_catalog_hidden_actions_drop_ambient_defaults_but_reject_explicit_flags() {
-        let settings =
-            response_test_settings(ReadContentFormat::Markdown, ResponseFormat::Markdown);
-        assert_eq!(
-            resolve_generic_response_options_from_action(
-                &settings,
-                None,
-                None,
-                None,
-                "jira.issue.view",
-            )
-            .unwrap(),
-            ResponseOptions::default()
-        );
-
-        let explicit = resolve_generic_response_options_from_action(
-            &settings,
-            None,
-            Some(ReadContentFormatArg::Markdown),
-            None,
-            "jira.issue.view",
-        )
-        .unwrap_err();
-        assert!(format!("{explicit:#}").contains("does not expose action jira.issue.view"));
-    }
-
-    #[test]
-    fn generic_invoke_nonadvertising_actions_drop_ambient_defaults_but_reject_explicit_formats() {
-        let settings =
-            response_test_settings(ReadContentFormat::Markdown, ResponseFormat::Markdown);
-        let action = response_test_action(&[], &[]);
-        assert_eq!(
-            resolve_generic_response_options_from_action(
-                &settings,
-                Some(&action),
-                None,
-                None,
-                "jira.issue.view",
-            )
-            .unwrap(),
-            ResponseOptions::default()
-        );
-        assert!(
-            resolve_generic_response_options_from_action(
-                &settings,
-                Some(&action),
-                None,
-                Some(OutputFormatArg::Markdown),
-                "jira.issue.view",
-            )
-            .unwrap_err()
-            .to_string()
-            .contains("does not support --output-format")
-        );
-    }
-
-    #[test]
-    fn generic_download_ignores_ambient_formats_and_rejects_explicit_conversion() {
-        let settings =
-            response_test_settings(ReadContentFormat::Markdown, ResponseFormat::Markdown);
-        let mut action = response_test_action(&["markdown"], &["markdown"]);
-        action.io = agent_access_provider::raw_download_io();
-        assert_eq!(
-            resolve_generic_response_options_from_action(
-                &settings,
-                Some(&action),
-                None,
-                None,
-                "reports.download",
-            )
-            .unwrap(),
-            ResponseOptions::default()
-        );
-        for (read, output) in [
-            (Some(ReadContentFormatArg::Markdown), None),
-            (Some(ReadContentFormatArg::Text), None),
-            (None, Some(OutputFormatArg::Markdown)),
-        ] {
-            assert!(
-                resolve_generic_response_options_from_action(
-                    &settings,
-                    Some(&action),
-                    read,
-                    output,
-                    "reports.download",
-                )
-                .is_err()
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn generic_invoke_default_options_do_not_contact_the_catalog() {
-        let mut settings = response_test_settings(ReadContentFormat::Native, ResponseFormat::Json);
-        settings.url = "http://127.0.0.1:0".into();
-        let ctx = CliContext {
-            settings: &settings,
-            output: None,
-        };
-        let plan = resolve_generic_invoke_options(&ctx, "reports", "download", None, None)
-            .await
-            .unwrap();
-        assert!(plan.action_spec.is_none());
-        assert_eq!(plan.options, ResponseOptions::default());
-    }
-
-    #[test]
-    fn config_default_presence_uses_toml_semantics() {
-        let section = std::env::temp_dir().join(format!(
-            "agent-access-cli-defaults-section-{}.toml",
-            Uuid::new_v4()
-        ));
-        fs::write(
-            &section,
-            "[defaults]\nread_content_format = \"native\"\noutput_format = \"json\"\n",
-        )
-        .unwrap();
-        assert!(cli_default_key_is_present(&section, "read_content_format").unwrap());
-        assert!(cli_default_key_is_present(&section, "output_format").unwrap());
-        fs::remove_file(section).unwrap();
-
-        let dotted = std::env::temp_dir().join(format!(
-            "agent-access-cli-defaults-dotted-{}.toml",
-            Uuid::new_v4()
-        ));
-        fs::write(&dotted, "defaults.output_format = \"markdown\"\n").unwrap();
-        assert!(cli_default_key_is_present(&dotted, "output_format").unwrap());
-        assert!(!cli_default_key_is_present(&dotted, "read_content_format").unwrap());
-        fs::remove_file(dotted).unwrap();
-
-        let inline = std::env::temp_dir().join(format!(
-            "agent-access-cli-defaults-inline-{}.toml",
-            Uuid::new_v4()
-        ));
-        fs::write(
-            &inline,
-            "defaults = { \"read_content_format\" = \"text\", output_format = \"markdown\" } # comment\n",
-        )
-        .unwrap();
-        assert!(cli_default_key_is_present(&inline, "read_content_format").unwrap());
-        assert!(cli_default_key_is_present(&inline, "output_format").unwrap());
-        fs::remove_file(inline).unwrap();
-
-        let quoted = std::env::temp_dir().join(format!(
-            "agent-access-cli-defaults-quoted-{}.toml",
-            Uuid::new_v4()
-        ));
-        fs::write(
-            &quoted,
-            "[\"defaults\"]\n\"read_content_format\" = \"markdown\"\n",
-        )
-        .unwrap();
-        assert!(cli_default_key_is_present(&quoted, "read_content_format").unwrap());
-        assert!(!cli_default_key_is_present(&quoted, "output_format").unwrap());
-        fs::remove_file(quoted).unwrap();
-
-        let invalid = std::env::temp_dir().join(format!(
-            "agent-access-cli-defaults-invalid-{}.toml",
-            Uuid::new_v4()
-        ));
-        fs::write(&invalid, "defaults = { output_format = \"markdown\"\n").unwrap();
-        assert!(cli_default_key_is_present(&invalid, "output_format").is_err());
-        fs::remove_file(invalid).unwrap();
-
-        let invalid_value = std::env::temp_dir().join(format!(
-            "agent-access-cli-defaults-invalid-value-{}.toml",
-            Uuid::new_v4()
-        ));
-        fs::write(&invalid_value, "[defaults]\noutput_format = \"yaml\"\n").unwrap();
-        assert!(load_config_or_default(&invalid_value, true).is_err());
-        fs::remove_file(invalid_value).unwrap();
-    }
-
-    #[test]
-    fn response_format_defaults_use_env_only_when_config_key_is_absent() {
-        static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _guard = ENV_LOCK.lock().unwrap();
-        let read_env = env::var_os("AGENT_ACCESS_READ_CONTENT_FORMAT");
-        let output_env = env::var_os("AGENT_ACCESS_OUTPUT_FORMAT");
-        let config_path = std::env::temp_dir().join(format!(
-            "agent-access-cli-defaults-precedence-{}.toml",
-            Uuid::new_v4()
-        ));
-
-        // SAFETY: access to these fixed process variables is serialized by
-        // ENV_LOCK for this test and their original values are restored below.
-        unsafe {
-            env::set_var("AGENT_ACCESS_READ_CONTENT_FORMAT", "text");
-            env::set_var("AGENT_ACCESS_OUTPUT_FORMAT", "markdown");
-        }
-        fs::write(&config_path, "[defaults]\noutput_format = \"json\"\n").unwrap();
-        assert_eq!(
-            resolve_read_content_format_default(&config_path, true, ReadContentFormat::Native,)
-                .unwrap(),
-            ReadContentFormat::Text
-        );
-        assert_eq!(
-            resolve_output_format_default(&config_path, true, ResponseFormat::Json).unwrap(),
-            ResponseFormat::Json
-        );
-
-        // Invalid environment defaults fail closed when the config does not
-        // define the corresponding key.
-        unsafe {
-            env::set_var("AGENT_ACCESS_READ_CONTENT_FORMAT", "html");
-        }
-        assert!(
-            resolve_read_content_format_default(&config_path, true, ReadContentFormat::Native,)
-                .unwrap_err()
-                .to_string()
-                .contains("must be one of native, markdown, or text")
-        );
-
-        fs::remove_file(config_path).unwrap();
-        // SAFETY: restore the exact pre-test process environment.
-        unsafe {
-            match read_env {
-                Some(value) => env::set_var("AGENT_ACCESS_READ_CONTENT_FORMAT", value),
-                None => env::remove_var("AGENT_ACCESS_READ_CONTENT_FORMAT"),
-            }
-            match output_env {
-                Some(value) => env::set_var("AGENT_ACCESS_OUTPUT_FORMAT", value),
-                None => env::remove_var("AGENT_ACCESS_OUTPUT_FORMAT"),
-            }
-        }
-    }
-
-    #[test]
-    fn markdown_output_extracts_only_valid_allow_results() {
-        let allowed = serde_json::json!({
-            "agentRequestId": "agent-1",
-            "brokerRequestId": "broker-1",
-            "decision": "allow",
-            "result": {"format": "markdown", "value": "# SBC-1\n"}
-        });
-        assert_eq!(markdown_result_value(&allowed).unwrap(), Some("# SBC-1\n"));
-
-        let conflict = serde_json::json!({
-            "agentRequestId": "agent-1",
-            "brokerRequestId": "broker-1",
-            "decision": "allow",
-            "reasonCode": "verification_mismatch",
-            "result": {"format": "markdown", "value": "# Verification\n"}
-        });
-        assert_eq!(
-            markdown_result_value(&conflict).unwrap(),
-            Some("# Verification\n")
-        );
-
-        let denied = serde_json::json!({
-            "agentRequestId": "agent-1",
-            "brokerRequestId": "broker-1",
-            "decision": "deny",
-            "error": {"reasonCode": "right_missing", "message": "denied"}
-        });
-        assert_eq!(markdown_result_value(&denied).unwrap(), None);
-
-        let malformed = serde_json::json!({
-            "agentRequestId": "agent-1",
-            "brokerRequestId": "broker-1",
-            "decision": "allow",
-            "result": {"format": "markdown"}
-        });
-        assert!(markdown_result_value(&malformed).is_err());
-    }
-
-    #[test]
-    fn send_invoke_accepts_explicit_response_options_without_ambient_injection() {
+    fn send_invoke_preserves_exact_and_preferred_selectors() {
         let explicit = parse_send_request(serde_json::json!({
-            "version": "agent-access.send.v1",
-            "kind": "invoke",
-            "service": "jira",
-            "action": "issue.view",
-            "inputs": {"issue": "SBC-1"},
-            "readContentFormat": "text",
-            "responseFormat": "markdown"
-        }))
-        .unwrap();
+            "version": SEND_SCHEMA_VERSION, "kind":"invoke", "service":"jira", "action":"issue.view",
+            "inputs":{"issue":"SBC-1"}, "outputContentFormat":"adf", "preferredOutputContentFormat":"text"
+        })).unwrap();
         assert!(matches!(
             explicit,
             SendRequest::Invoke {
-                read_content_format: ReadContentFormat::Text,
-                response_format: ResponseFormat::Markdown,
+                output_content_format: Some(OutputContentFormat::Adf),
+                preferred_output_content_format: Some(OutputContentFormat::Text),
                 ..
             }
         ));
-
-        let omitted = parse_send_request(serde_json::json!({
-            "version": "agent-access.send.v1",
-            "kind": "invoke",
-            "service": "jira",
-            "action": "issue.view",
-            "inputs": {"issue": "SBC-1"}
-        }))
-        .unwrap();
+        let omitted = parse_send_request(serde_json::json!({"version":SEND_SCHEMA_VERSION,"kind":"invoke","service":"jira","action":"issue.view","inputs":{}})).unwrap();
         assert!(matches!(
             omitted,
             SendRequest::Invoke {
-                read_content_format: ReadContentFormat::Native,
-                response_format: ResponseFormat::Json,
+                output_content_format: None,
+                preferred_output_content_format: None,
                 ..
             }
         ));
@@ -22970,7 +21568,9 @@ upload_spool_dir = "upload-spool"
             "ENG",
             "--title",
             "Runbook",
-            "--parent",
+            "--parent-kind",
+            "page",
+            "--parent-id",
             "123",
             "--content-file",
             "body.html",
@@ -22981,13 +21581,19 @@ upload_spool_dir = "upload-spool"
         let Command::Confluence {
             command:
                 ConfluenceCommand::Page {
-                    command: ConfluencePageCommand::Create { parent, .. },
+                    command:
+                        ConfluencePageCommand::Create {
+                            parent_kind,
+                            parent_id,
+                            ..
+                        },
                 },
         } = create.command
         else {
             panic!("expected confluence page create command");
         };
-        assert_eq!(parent.as_deref(), Some("123"));
+        assert_eq!(parent_kind, Some(ConfluenceParentKindArg::Page));
+        assert_eq!(parent_id.as_deref(), Some("123"));
 
         let draft_create = Cli::try_parse_from([
             "agent-access",
@@ -23067,7 +21673,9 @@ upload_spool_dir = "upload-spool"
             "ENG",
             "--title",
             "Runbook",
-            "--parent",
+            "--parent-kind",
+            "page",
+            "--parent-id",
             "123",
             "--parent-url",
             "https://example.atlassian.net/wiki/spaces/ENG/pages/123",
@@ -23078,6 +21686,39 @@ upload_spool_dir = "upload-spool"
         ])
         .unwrap_err();
         assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn confluence_creation_requires_typed_parent_pairs_without_legacy_alias() {
+        for command in [vec!["page", "create"], vec!["page", "draft", "create"]] {
+            let mut base = vec!["agent-access", "confluence"];
+            base.extend(command);
+            base.extend([
+                "--space",
+                "ENG",
+                "--title",
+                "Title",
+                "--content",
+                "Body",
+                "--content-format",
+                "storage",
+            ]);
+            for extra in [
+                vec!["--parent-id", "123"],
+                vec!["--parent-kind", "folder"],
+                vec!["--parent", "123"],
+                vec!["--parent-kind", "blog", "--parent-id", "123"],
+            ] {
+                let mut args = base.clone();
+                args.extend(extra);
+                assert!(Cli::try_parse_from(args).is_err());
+            }
+            for kind in ["page", "folder"] {
+                let mut args = base.clone();
+                args.extend(["--parent-kind", kind, "--parent-id", "123"]);
+                assert!(Cli::try_parse_from(args).is_ok());
+            }
+        }
     }
 
     #[test]
@@ -23338,6 +21979,16 @@ upload_spool_dir = "upload-spool"
     }
 
     #[test]
+    fn confluence_page_update_help_bounds_only_page_base_version() {
+        let page = cli_help(&["confluence", "page", "update"]);
+        assert!(page.contains("from 1 through 2147483646"));
+        let blog = cli_help(&["confluence", "blog", "update"]);
+        assert!(!blog.contains("2147483646"));
+        let comment = cli_help(&["confluence", "page", "footer-comment", "update"]);
+        assert!(!comment.contains("2147483646"));
+    }
+
+    #[test]
     fn confluence_content_help_uses_normalized_write_vocabulary() {
         let help = Cli::try_parse_from(["agent-access", "confluence", "page", "create", "--help"])
             .unwrap_err()
@@ -23354,11 +22005,16 @@ upload_spool_dir = "upload-spool"
         let mut create_inputs = serde_json::Map::new();
         confluence_optional_parent_locator_inputs(
             &mut create_inputs,
+            Some(ConfluenceParentKindArg::Folder),
             Some("123"),
             None,
             "confluence page create",
         );
-        assert_eq!(create_inputs["parentPageId"], "123");
+        assert_eq!(
+            create_inputs["parent"],
+            serde_json::json!({ "kind": "folder", "id": "123" })
+        );
+        assert!(!create_inputs.contains_key("parentPageId"));
 
         let mut move_inputs = confluence_page_argument_locator_inputs(
             None,
@@ -23452,7 +22108,7 @@ upload_spool_dir = "upload-spool"
     #[test]
     fn send_envelope_shape_validation_runs_before_catalog_dependent_checks() {
         let missing_kind = serde_json::json!({
-            "version": "agent-access.send.v1",
+            "version": "agent-access.send.v2",
             "service": "fake",
             "action": "echo"
         });
@@ -23460,7 +22116,7 @@ upload_spool_dir = "upload-spool"
         assert!(format!("{missing_kind_error:#}").contains("missing field `kind`"));
 
         let body_null = serde_json::json!({
-            "version": "agent-access.send.v1",
+            "version": "agent-access.send.v2",
             "kind": "http",
             "method": "POST",
             "route": "/v1/credentials",
@@ -23476,7 +22132,7 @@ upload_spool_dir = "upload-spool"
             std::env::temp_dir().join(format!("agent-access-send-secret-{}.txt", Uuid::new_v4()));
         fs::write(&temp_secret, "secret-token").unwrap();
         let mut request = serde_json::json!({
-            "version": "agent-access.send.v1",
+            "version": "agent-access.send.v2",
             "kind": "http",
             "method": "PUT",
             "route": "/v1/credentials/connections/{connection}",
@@ -23507,7 +22163,7 @@ upload_spool_dir = "upload-spool"
         fs::remove_file(temp_secret).unwrap();
 
         let inline = serde_json::json!({
-            "version": "agent-access.send.v1",
+            "version": "agent-access.send.v2",
             "kind": "http",
             "method": "PUT",
             "route": "/v1/credentials/connections/{connection}",
@@ -23528,7 +22184,7 @@ upload_spool_dir = "upload-spool"
     #[test]
     fn send_secret_sources_reject_undeclared_sensitive_pointers() {
         let mut request = serde_json::json!({
-            "version": "agent-access.send.v1",
+            "version": "agent-access.send.v2",
             "kind": "http",
             "method": "PUT",
             "route": "/v1/credentials/connections/{connection}",
@@ -23598,11 +22254,11 @@ upload_spool_dir = "upload-spool"
                     io: ActionIo::Json,
                     response_kind: agent_access_core::ResponseKind::ResponseEnvelope,
                     exit_policy: ExitPolicy::InvokeDecision,
-                    read_content_formats: Vec::new(),
-                    response_formats: Vec::new(),
-                    rendered_body_owners: Vec::new(),
-                    optional_rendered_body_owner_prefixes: Vec::new(),
                     result_schemas: None,
+                    output_content_formats: Vec::new(),
+                    native_output_content_format: None,
+                    default_output_content_format: None,
+                    body_fields: Vec::new(),
                 }],
             }],
             routes: Vec::new(),
@@ -23612,7 +22268,7 @@ upload_spool_dir = "upload-spool"
             },
         };
         let inline = serde_json::json!({
-            "version": "agent-access.send.v1",
+            "version": "agent-access.send.v2",
             "kind": "invoke",
             "service": "api",
             "action": "call",
@@ -23631,7 +22287,7 @@ upload_spool_dir = "upload-spool"
         assert!(format!("{error:#}").contains("use secretSources"));
 
         let mut sourced = serde_json::json!({
-            "version": "agent-access.send.v1",
+            "version": "agent-access.send.v2",
             "kind": "invoke",
             "service": "api",
             "action": "call",
@@ -23840,8 +22496,7 @@ upload_spool_dir = "upload-spool"
             identity_header: "Authorization".to_string(),
             identity_scheme: "Bearer".to_string(),
             allow_insecure_broker_http: false,
-            read_content_format: ReadContentFormat::Native,
-            output_format: ResponseFormat::Json,
+            preferred_output_content_format: None,
         };
         let ctx = CliContext {
             settings: &settings,
@@ -23852,7 +22507,7 @@ upload_spool_dir = "upload-spool"
             .unwrap()
             .http_route_specs();
         let request = serde_json::json!({
-            "version": "agent-access.send.v1",
+            "version": "agent-access.send.v2",
             "kind": "http",
             "method": "GET",
             "route": "/v1/admin/policy/grants"
@@ -23863,7 +22518,7 @@ upload_spool_dir = "upload-spool"
         assert!(format!("{error:#}").contains("management routes do not accept --token-value"));
 
         let request = serde_json::json!({
-            "version": "agent-access.send.v1",
+            "version": "agent-access.send.v2",
             "kind": "http",
             "method": "GET",
             "route": "/v1/services/{service}"
@@ -23874,7 +22529,7 @@ upload_spool_dir = "upload-spool"
     #[tokio::test]
     async fn send_http_rejects_raw_json_routes_before_dispatch() {
         let server = wiremock::MockServer::start().await;
-        let mut settings = response_test_settings(ReadContentFormat::Native, ResponseFormat::Json);
+        let mut settings = response_test_settings(None);
         settings.url = server.uri();
         let ctx = CliContext {
             settings: &settings,
@@ -23935,7 +22590,7 @@ upload_spool_dir = "upload-spool"
             matchers::{method, path},
         };
         let server = MockServer::start().await;
-        let mut settings = response_test_settings(ReadContentFormat::Native, ResponseFormat::Json);
+        let mut settings = response_test_settings(None);
         settings.url = server.uri();
         let ctx = CliContext {
             settings: &settings,

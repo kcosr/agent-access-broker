@@ -584,7 +584,8 @@ async fn built_providers_need_the_approved_command_and_accepted_metadata() {
             .resolve_scopes(scope.request())
             .await
             .unwrap()
-            .into_scopes(),
+            .into_scopes()
+            .unwrap(),
         BTreeMap::from([("project".to_owned(), vec!["OPS".to_owned()])])
     );
     let search = agent_access_provider::test_support::ScopeRequestFixture::new(
@@ -598,6 +599,7 @@ async fn built_providers_need_the_approved_command_and_accepted_metadata() {
             .await
             .unwrap()
             .scopes()
+            .unwrap()
             .is_empty()
     );
     let invalid = agent_access_provider::test_support::ScopeRequestFixture::new(

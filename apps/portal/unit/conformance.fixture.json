@@ -217,6 +217,7 @@
     "lookupCredentialConfigured": false,
     "resourceScopes": {
       "item": {
+        "matching": "scalar",
         "resourceType": "conformance_item",
         "selectors": [
           "exact",

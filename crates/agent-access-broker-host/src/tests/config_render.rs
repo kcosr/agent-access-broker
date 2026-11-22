@@ -4,7 +4,10 @@
 //! is rendered, and [`super::ConfigDoc::from_config`] checks that the
 //! document parses back to exactly the same configuration.
 use agent_access_cloudbees_ci::{CloudbeesCiControllerConfig, CloudbeesCiProviderConfig};
-use agent_access_confluence::{ConfluenceContentConfig, ConfluenceProviderConfig};
+use agent_access_confluence::{
+    ConfluenceContentAccessConfig, ConfluenceContentConfig, ConfluenceContentSearchConfig,
+    ConfluenceProviderConfig,
+};
 use agent_access_conformance::ConformanceConfig;
 use agent_access_core::{
     AggregateInvocationLimitConfig, ApplicationConfig, AttributionConfig, AuditConfig,
@@ -819,6 +822,7 @@ pub(super) fn resource_value(resource: &ResourceDefinition) -> Value {
     let ResourceDefinition {
         id,
         display_name,
+        browser_url,
         resource_type,
         selector,
         allowed_execution_contexts,
@@ -827,6 +831,7 @@ pub(super) fn resource_value(resource: &ResourceDefinition) -> Value {
     Fields::default()
         .put("id", id.as_str())
         .opt("display_name", display_name.clone())
+        .opt("browser_url", browser_url.clone())
         .put("resource_type", resource_type.as_str())
         .put(
             "selector",
@@ -1144,6 +1149,7 @@ fn jira_value(jira: &JiraProviderConfig) -> Value {
         custom_fields,
     } = jira;
     let JiraContentConfig {
+        preferred_output_format,
         comment_formats,
         max_body_bytes,
     } = content;
@@ -1173,6 +1179,10 @@ fn jira_value(jira: &JiraProviderConfig) -> Value {
         .put(
             "content",
             Fields::default()
+                .opt(
+                    "preferred_output_format",
+                    preferred_output_format.map(|format| format.as_str()),
+                )
                 .put("comment_formats", strings(comment_formats))
                 .int("max_body_bytes", *max_body_bytes)
                 .value(),
@@ -1242,13 +1252,27 @@ fn confluence_value(confluence: &ConfluenceProviderConfig) -> Value {
         attachments,
         content,
         search,
+        content_access,
+        content_search,
     } = confluence;
     let ConfluenceContentConfig {
+        preferred_output_format,
         page_formats,
         blog_formats,
         comment_formats,
         max_body_bytes,
     } = content;
+    let ConfluenceContentAccessConfig {
+        max_metadata_requests,
+        max_metadata_bytes,
+    } = content_access;
+    let ConfluenceContentSearchConfig {
+        max_candidate_pages,
+        max_candidates,
+        max_upstream_requests,
+        max_scan_bytes,
+        max_encoded_request_target_bytes,
+    } = content_search;
     Fields::default()
         .put("tenant_host", tenant_host.as_str())
         .opt("cloud_id", cloud_id.clone())
@@ -1261,6 +1285,10 @@ fn confluence_value(confluence: &ConfluenceProviderConfig) -> Value {
         .put(
             "content",
             Fields::default()
+                .opt(
+                    "preferred_output_format",
+                    preferred_output_format.map(|format| format.as_str()),
+                )
                 .put("page_formats", strings(page_formats))
                 .put("blog_formats", strings(blog_formats))
                 .put("comment_formats", strings(comment_formats))
@@ -1277,6 +1305,26 @@ fn confluence_value(confluence: &ConfluenceProviderConfig) -> Value {
                 .value(),
         )
         .put("search", search_value(search))
+        .put(
+            "content_access",
+            Fields::default()
+                .int("max_metadata_requests", *max_metadata_requests)
+                .int("max_metadata_bytes", *max_metadata_bytes)
+                .value(),
+        )
+        .put(
+            "content_search",
+            Fields::default()
+                .int("max_candidate_pages", *max_candidate_pages)
+                .int("max_candidates", *max_candidates)
+                .int("max_upstream_requests", *max_upstream_requests)
+                .int("max_scan_bytes", *max_scan_bytes)
+                .int(
+                    "max_encoded_request_target_bytes",
+                    *max_encoded_request_target_bytes,
+                )
+                .value(),
+        )
         .value()
 }
 
@@ -1350,6 +1398,7 @@ fn gitlab_value(gitlab: &GitlabProviderConfig) -> Value {
         allow_disable_ssl_verification,
     } = webhooks;
     let GitlabContentConfig {
+        preferred_output_format,
         max_body_bytes,
         max_commit_actions,
         max_file_bytes,
@@ -1394,6 +1443,10 @@ fn gitlab_value(gitlab: &GitlabProviderConfig) -> Value {
         .put(
             "content",
             Fields::default()
+                .opt(
+                    "preferred_output_format",
+                    preferred_output_format.map(|format| format.as_str()),
+                )
                 .int("max_body_bytes", *max_body_bytes)
                 .int("max_commit_actions", *max_commit_actions)
                 .int("max_file_bytes", *max_file_bytes)

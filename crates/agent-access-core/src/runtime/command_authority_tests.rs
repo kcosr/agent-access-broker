@@ -257,6 +257,7 @@ fn project(
     ResourceDefinition {
         id: id.into(),
         display_name: None,
+        browser_url: None,
         resource_type: project_type(),
         selector,
         allowed_execution_contexts: contexts.iter().map(|context| (*context).into()).collect(),
@@ -458,7 +459,10 @@ fn imported_listing_metadata_maps_the_accepted_type_id_and_preserves_unscoped_ac
             .action_resource_scope("projects.enumerate")
             .unwrap()
             .1
-            .resource_type,
+            .as_scalar()
+            .unwrap()
+            .0
+            .clone(),
         broker_type
     );
     assert!(descriptor.actions[1].listing_of.is_none());
@@ -578,7 +582,11 @@ fn imported_descriptors_carry_the_adapter_declared_audit_inputs_and_fail_closed(
     let unreadable = descriptor.action("issue.unreadable").unwrap();
     assert!(unreadable.audit_inputs.is_empty());
     assert_eq!(
-        descriptor.resource_scopes[unreadable.resource_scope.as_deref().unwrap()].resource_type,
+        descriptor.resource_scopes[unreadable.resource_scope.as_deref().unwrap()]
+            .as_scalar()
+            .unwrap()
+            .0
+            .clone(),
         *UNRESOLVED_RESOURCE_TYPE.id()
     );
 }
@@ -987,7 +995,11 @@ fn descriptors_map_declarations_to_scopes_who_checks_them_and_action_modes() {
     // A type the import did not accept, or a declaration that cannot be
     // read, binds the unresolved type and authorizes nothing.
     assert_eq!(
-        descriptor.resource_scopes["retired"].resource_type,
+        descriptor.resource_scopes["retired"]
+            .as_scalar()
+            .unwrap()
+            .0
+            .clone(),
         *UNRESOLVED_RESOURCE_TYPE.id()
     );
     let corrupt = descriptor.action("issue.corrupt").unwrap();
@@ -995,7 +1007,11 @@ fn descriptors_map_declarations_to_scopes_who_checks_them_and_action_modes() {
     // modes stay valid; it never reaches a resource.
     assert!(corrupt.native_search.is_none());
     assert_eq!(
-        descriptor.resource_scopes[corrupt.resource_scope.as_deref().unwrap()].resource_type,
+        descriptor.resource_scopes[corrupt.resource_scope.as_deref().unwrap()]
+            .as_scalar()
+            .unwrap()
+            .0
+            .clone(),
         *UNRESOLVED_RESOURCE_TYPE.id()
     );
     let imported = ImportedCatalog {
@@ -1034,7 +1050,11 @@ fn descriptors_map_declarations_to_scopes_who_checks_them_and_action_modes() {
         assert!(action.native_search.is_none());
         assert!(!action.reports_universal_reach);
         assert_eq!(
-            unlinked.resource_scopes[action.resource_scope.as_deref().unwrap()].resource_type,
+            unlinked.resource_scopes[action.resource_scope.as_deref().unwrap()]
+                .as_scalar()
+                .unwrap()
+                .0
+                .clone(),
             *UNRESOLVED_RESOURCE_TYPE.id()
         );
         assert!(
@@ -1661,10 +1681,17 @@ async fn agent_token_restrictions_intersect_every_passed_grant() {
         .iter()
         .find(|entry| entry.action == "issue.search" && entry.execution_context == context())
         .unwrap();
-    assert!(entry.clauses.iter().any(|clause| clause.matches("ENG")));
+    assert!(
+        entry
+            .clauses()
+            .unwrap()
+            .iter()
+            .any(|clause| clause.matches("ENG"))
+    );
     assert!(
         !entry
-            .clauses
+            .clauses()
+            .unwrap()
             .iter()
             .any(|clause| clause.matches("SEC") || clause.matches("OPS"))
     );
@@ -2392,7 +2419,11 @@ async fn an_action_naming_a_dropped_type_fails_closed_alone() {
     credentials_present(&mut runtime);
     let descriptor = &runtime.services[SERVICE];
     assert_eq!(
-        descriptor.resource_scopes["legacy"].resource_type,
+        descriptor.resource_scopes["legacy"]
+            .as_scalar()
+            .unwrap()
+            .0
+            .clone(),
         *UNRESOLVED_RESOURCE_TYPE.id()
     );
     // The unresolved ID is reserved, so no registered type can answer for
@@ -2404,7 +2435,11 @@ async fn an_action_naming_a_dropped_type_fails_closed_alone() {
             .is_none()
     );
     assert_eq!(
-        descriptor.resource_scopes["project"].resource_type,
+        descriptor.resource_scopes["project"]
+            .as_scalar()
+            .unwrap()
+            .0
+            .clone(),
         project_type()
     );
     let caller = identity(None);

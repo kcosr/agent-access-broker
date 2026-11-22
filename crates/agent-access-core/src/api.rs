@@ -1,17 +1,18 @@
 use crate::ExecutionContext;
+use agent_access_provider::presentation::{BodyField, OutputContentFormat};
 use agent_access_provider::{
     ActionDescriptor, ActionIo, MultipartUploadSpec, RESULT_METADATA_HEADER, ServiceDescriptor,
     ServiceSurface, is_action_name, is_service_name,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 mod imports;
 mod schema_refs;
 pub(crate) use schema_refs::relocate_local_schema_refs;
 
-pub const API_CATALOG_VERSION: &str = "agent-access.catalog.v2";
-pub const SEND_SCHEMA_VERSION: &str = "agent-access.send.v1";
+pub const API_CATALOG_VERSION: &str = "agent-access.catalog.v3";
+pub const SEND_SCHEMA_VERSION: &str = "agent-access.send.v2";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -52,13 +53,9 @@ pub struct ApiServiceSpec {
     pub actions: Vec<ApiActionSpec>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct ApiResourceScopeSpec {
-    pub resource_type: agent_access_provider::ResourceType,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub selectors: Vec<String>,
-}
+/// Resource scopes preserve the SDK's explicit scalar/containment discriminator.
+/// The catalog exposes no service location-entry capability or instance origin.
+pub type ApiResourceScopeSpec = agent_access_provider::ResourceScopeCapabilities;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -95,18 +92,14 @@ pub struct ApiActionSpec {
     pub response_kind: ResponseKind,
     pub exit_policy: ExitPolicy,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub read_content_formats: Vec<String>,
+    pub output_content_formats: Vec<OutputContentFormat>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_output_content_format: Option<OutputContentFormat>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_output_content_format: Option<OutputContentFormat>,
+    /// Exact locations and presence rules for the action's selected rich bodies.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub response_formats: Vec<String>,
-    /// JSON pointers into the response envelope to the objects that carry a
-    /// `renderedBody` companion under a non-native `readContentFormat`; a `*`
-    /// segment matches every element of an array.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub rendered_body_owners: Vec<String>,
-    /// Prefixes of `rendered_body_owners` ending at optional object fields.
-    /// Only an absent property at these prefixes may be skipped.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub optional_rendered_body_owner_prefixes: Vec<String>,
+    pub body_fields: Vec<BodyField>,
     /// The provider payload schemas the action declares, from which MCP
     /// output schemas and typed OpenAPI responses are composed; omitted when
     /// it declares none.
@@ -311,7 +304,14 @@ pub fn api_service_spec(
     let actions = descriptor
         .actions
         .iter()
-        .filter_map(|action| api_action_spec(&descriptor.service, action))
+        .filter_map(|action| {
+            let mut spec = api_action_spec(&descriptor.service, action)?;
+            crate::mcp::apply_action_output_content_preference(
+                &mut spec,
+                descriptor.preferred_output_content_format,
+            );
+            Some(spec)
+        })
         .collect::<Vec<_>>();
     Some(ApiServiceSpec {
         availability: None,
@@ -320,19 +320,7 @@ pub fn api_service_spec(
         display_name: descriptor.display_name.clone(),
         surface: "invoke".to_string(),
         scope_types: descriptor.resource_scopes.keys().cloned().collect(),
-        resource_scopes: descriptor
-            .resource_scopes
-            .iter()
-            .map(|(name, scope)| {
-                (
-                    name.clone(),
-                    ApiResourceScopeSpec {
-                        resource_type: scope.resource_type.clone(),
-                        selectors: scope.selectors.clone(),
-                    },
-                )
-            })
-            .collect(),
+        resource_scopes: descriptor.resource_scopes.clone(),
         actions,
     })
 }
@@ -351,42 +339,14 @@ pub(crate) fn api_action_spec(service: &str, action: &ActionDescriptor) -> Optio
         _ => return None,
     };
     let sensitive_input_pointers = sensitive_input_pointers_from_schema(&action.input_schema);
-    let response_capabilities =
-        agent_access_provider::presentation::response_capabilities(action.presentation.as_ref());
-    let mut rendered_body_owners = Vec::new();
-    let mut optional_rendered_body_owner_prefixes = Vec::new();
-    let mut body_paths = Vec::new();
-    for body in action
+    let response_capabilities = agent_access_provider::presentation::response_capabilities(
+        action.presentation.as_ref(),
+        None,
+    );
+    let body_fields = action
         .presentation
-        .iter()
-        .flat_map(|presentation| presentation.embedded_bodies())
-    {
-        let pointer = format!("/result{}", body.owner_pointer());
-        let optional_prefixes = body
-            .owner_optional_prefixes()
-            .into_iter()
-            .map(|prefix| format!("/result{prefix}"))
-            .collect::<Vec<_>>();
-        for prefix in &optional_prefixes {
-            if !optional_rendered_body_owner_prefixes.contains(prefix) {
-                optional_rendered_body_owner_prefixes.push(prefix.clone());
-            }
-        }
-        body_paths.push((pointer.clone(), optional_prefixes));
-        if !rendered_body_owners.contains(&pointer) {
-            rendered_body_owners.push(pointer);
-        }
-    }
-    // A shared prefix is optional only if every path through it declares it so.
-    optional_rendered_body_owner_prefixes.retain(|prefix| {
-        body_paths.iter().all(|(pointer, optional)| {
-            !(pointer == prefix
-                || pointer
-                    .strip_prefix(prefix.as_str())
-                    .is_some_and(|suffix| suffix.starts_with('/')))
-                || optional.contains(prefix)
-        })
-    });
+        .as_ref()
+        .map_or_else(Vec::new, |presentation| presentation.body_fields());
     Some(ApiActionSpec {
         scoped_mcp_name: action
             .raw_scoped_mcp_name()
@@ -408,20 +368,13 @@ pub(crate) fn api_action_spec(service: &str, action: &ActionDescriptor) -> Optio
         io,
         response_kind,
         exit_policy,
-        read_content_formats: response_capabilities
-            .read_content_formats
+        output_content_formats: response_capabilities
+            .output_content_formats
             .unwrap_or_default()
-            .iter()
-            .map(|format| (*format).to_string())
-            .collect(),
-        response_formats: response_capabilities
-            .response_formats
-            .unwrap_or_default()
-            .iter()
-            .map(|format| (*format).to_string())
-            .collect(),
-        rendered_body_owners,
-        optional_rendered_body_owner_prefixes,
+            .to_vec(),
+        native_output_content_format: response_capabilities.native_output_content_format,
+        default_output_content_format: response_capabilities.default_output_content_format,
+        body_fields,
         result_schemas: action
             .result_schemas
             .as_ref()
@@ -685,6 +638,23 @@ pub fn openapi_from_catalog(
                     responses[status] = json!({"description":description,"content":{"application/json":{"schema":envelope_schema(ResponseKind::ManagementEnvelope)}}});
                 }
             }
+            if matches!(
+                route.operation.as_str(),
+                "resource_access.describe"
+                    | "admin.policy.effective_access"
+                    | "tokens.effective_access"
+                    | "admin.tokens.effective_access_principal_agent"
+                    | "tokens.options"
+                    | "admin.principals.agent_tokens.options"
+            ) {
+                operation.get_mut("responses").expect("route responses")["422"] = json!({
+                    "description":"The complete resource-access response exceeds its byte limit (resource_access_too_complex); no partial result is returned.",
+                    "content":{"application/json":{"schema":envelope_schema(
+                        if route.response_kind == ResponseKind::ManagementEnvelope { ResponseKind::ManagementEnvelope }
+                        else { ResponseKind::ResponseEnvelope }
+                    )}}
+                });
+            }
             if route.access == RouteAccess::BrowserManagement {
                 operation.insert("description".into(), json!("Requires a signed-in browser session; writes require the configured CSRF header. Broker API tokens cannot use this personal OAuth route."));
                 if matches!(auth, RenderAuthMode::Include) {
@@ -820,14 +790,7 @@ fn action_request_body_content(action: &ApiActionSpec) -> Value {
 fn invoke_request_schema(action: &ApiActionSpec) -> Value {
     let mut properties =
         serde_json::Map::from_iter([("inputs".to_string(), action.input_schema.clone())]);
-    properties.insert(
-        "readContentFormat".to_string(),
-        invoke_format_schema(&action.read_content_formats, "native"),
-    );
-    properties.insert(
-        "responseFormat".to_string(),
-        invoke_format_schema(&action.response_formats, "json"),
-    );
+    add_invoke_content_properties(&mut properties, action);
     json!({
         "type": "object",
         "additionalProperties": false,
@@ -835,11 +798,24 @@ fn invoke_request_schema(action: &ApiActionSpec) -> Value {
     })
 }
 
-fn invoke_format_schema(advertised: &[String], default: &str) -> Value {
-    if advertised.is_empty() {
-        json!({ "enum": [default] })
-    } else {
-        json!({ "enum": advertised })
+fn add_invoke_content_properties(properties: &mut Map<String, Value>, action: &ApiActionSpec) {
+    properties.insert(
+        "preferredOutputContentFormat".to_string(),
+        json!({
+            "type": "string",
+            "enum": ["markdown", "text", "adf", "storage"],
+            "description": "Preferred output body format when outputContentFormat is omitted. An unsupported preference selects the action's native format; ignored by actions without rich bodies."
+        }),
+    );
+    if !action.output_content_formats.is_empty() {
+        properties.insert(
+            "outputContentFormat".to_string(),
+            json!({
+                "type": "string",
+                "enum": action.output_content_formats,
+                "description": "Exact format of every returned rich body. Unsupported selections fail before execution. When omitted, the client preference, service preference, or Markdown is selected, with native fallback when unsupported."
+            }),
+        );
     }
 }
 
@@ -916,8 +892,8 @@ pub fn generic_send_schema() -> Value {
                     "files": { "type": "array", "items": { "$ref": "#/definitions/fileDescriptor" } },
                     "secretSources": { "$ref": "#/definitions/secretSources" },
                     "responseMode": { "enum": ["json", "stream"], "default": "json" },
-                    "readContentFormat": { "enum": ["native", "markdown", "text"] },
-                    "responseFormat": { "enum": ["json", "markdown"] },
+                    "outputContentFormat": { "type": "string", "enum": ["markdown", "text", "adf", "storage"] },
+                    "preferredOutputContentFormat": { "type": "string", "enum": ["markdown", "text", "adf", "storage"] },
                     "output": { "$ref": "#/definitions/output" },
                     "metadataOutput": { "$ref": "#/definitions/metadataOutput" }
                 }
@@ -1100,8 +1076,11 @@ fn route_response_schema(route: &HttpRouteSpec, resource_type_ids: &[String]) ->
                     "id":{"enum":resource_type_ids},
                     "label":{"type":"string"},"pluralLabel":{"type":"string"},"example":{"type":"string"},
                     "supportsExclusions":{"type":"boolean","description":"Whether resources of this type may be excluded from resource groups."},
-                    "selectors":{"type":"array","items":{"enum":["exact","namespace","all"]}},
+                    "selectors":{"type":"array","items":{"enum":["exact","namespace","all","subtree"]}},
                     "namespace":{"type":"object","additionalProperties":false,
+                        "required":["label","membersLabel","example"],
+                        "properties":{"label":{"type":"string"},"membersLabel":{"type":"string"},"example":{"type":"string"}}},
+                    "subtree":{"type":"object","additionalProperties":false,
                         "required":["label","membersLabel","example"],
                         "properties":{"label":{"type":"string"},"membersLabel":{"type":"string"},"example":{"type":"string"}}},
                     "attributes":{"type":"array","items":{"type":"object","additionalProperties":false,
@@ -1148,6 +1127,21 @@ fn resource_access_response_schema(resource_type_ids: &[String]) -> Value {
             }
         }
     });
+    let location_coverage = json!({"type":"array", "items":{
+        "type":"object","additionalProperties":false,
+        "required":["resourceType","selector","restricted","conditional"],
+        "properties":{
+            "resourceType":{"enum":resource_type_ids},
+            "selector":{"oneOf":[
+                {"type":"object","additionalProperties":false,"required":["kind","value"],
+                    "properties":{"kind":{"enum":["exact","subtree"]},"value":{"type":"string"}}},
+                {"type":"object","additionalProperties":false,"required":["kind"],
+                    "properties":{"kind":{"const":"all"}}}
+            ]},
+            "restricted":{"type":"boolean","description":"Some targets inside are withheld; denied identities are not named."},
+            "conditional":{"type":"boolean","description":"Current content ancestry must be checked at invocation."}
+        }
+    }});
     let access = json!({"type":"array","items":{"oneOf":[
         {"type":"object","additionalProperties":false,
             "required":["action","scope"],
@@ -1159,6 +1153,17 @@ fn resource_access_response_schema(resource_type_ids: &[String]) -> Value {
                 "resourceType":{"enum":resource_type_ids},
                 "enforcement":{"enum":["request","results","command"],"description":"Authority is checked for the complete request, enforced over native results, or delegated to the approved command."},
                 "coverage":coverage
+            }
+        },
+        {"type":"object","additionalProperties":false,
+            "required":["action","scope","resourceTypes","domain","enforcement","containmentVerification","coverage"],
+            "properties":{
+                "action":{"type":"string"},"scope":{"const":"location"},
+                "resourceTypes":{"type":"array","items":{"enum":resource_type_ids}},
+                "domain":{"type":"string"},
+                "enforcement":{"enum":["request","results"]},
+                "containmentVerification":{"const":"at_invocation"},
+                "coverage":location_coverage
             }
         }
     ]}});
@@ -1867,6 +1872,71 @@ fn resource_policy_route_specs(
     resource_types: &agent_access_provider::ResourceTypeRegistry,
 ) -> Vec<HttpRouteSpec> {
     let mut routes = Vec::new();
+    let locations = "/v1/admin/policy/resource-locations";
+    let normalize = "/v1/admin/policy/resource-locations/normalize";
+    routes.push(get_management_route(
+        locations,
+        "admin.policy.resource_locations.list",
+        RouteAccess::PolicyRead,
+    ));
+    routes.push(body_route(
+        "POST",
+        normalize,
+        "admin.policy.resource_locations.normalize",
+        RouteAccess::PolicyRead,
+        ResponseKind::ManagementEnvelope,
+        ExitPolicy::ManagementOk,
+        Vec::new(),
+    ));
+    set_request_body_schema(
+        &mut routes,
+        "POST",
+        normalize,
+        json!({
+            "type":"object", "additionalProperties":false, "required":["service","url","coverage"],
+            "properties": {
+                "service":service_name_schema(),
+                "url":{"type":"string","minLength":1,"description":"HTTPS browser location on the selected service's configured site. Normalization performs no upstream lookup."},
+                "coverage":{"enum":["space","exact","subtree"]}
+            }
+        }),
+    );
+    set_result_schema(
+        &mut routes,
+        "GET",
+        locations,
+        json!({
+            "type":"object", "required":["services"], "additionalProperties":false,
+            "properties":{"services":{"type":"array","items":{
+                "type":"object", "additionalProperties":false,
+                "required":["service","resourceTypes","siteHost","locationKinds","coverageKinds","normalizationRoute"],
+                "properties":{
+                    "service":service_name_schema(),
+                    "resourceTypes":{"type":"array","items":{"type":"string"}},
+                    "siteHost":{"type":"string"},
+                    "locationKinds":{"type":"array","items":{"type":"string"}},
+                    "coverageKinds":{"type":"array","items":{"type":"string"}},
+                    "normalizationRoute":{"const":normalize}
+                }
+            }}}
+        }),
+    );
+    set_result_schema(
+        &mut routes,
+        "POST",
+        normalize,
+        json!({
+            "type":"object", "additionalProperties":false,
+            "required":["resourceType","selector","locationKind","verification"],
+            "properties":{
+                "resourceType":{"type":"string"},
+                "selector":{"type":"object","additionalProperties":false,"required":["kind","value"],
+                    "properties":{"kind":{"enum":["exact","subtree"]},"value":{"type":"string","minLength":1}}},
+                "locationKind":{"type":"string"},
+                "verification":{"const":"not_checked"}
+            }
+        }),
+    );
     for (path, operation) in [
         ("resources", "resources"),
         ("resource-groups", "resource_groups"),
@@ -1963,7 +2033,8 @@ fn resource_policy_route_specs(
             Vec::new(),
         ));
         let schema = if path == "/v1/admin/policy/effective-access" {
-            json!({"type":"object","additionalProperties":false,"required":["service","actions","executionContexts","resources"],"properties":{
+            json!({"type":"object","additionalProperties":false,"required":["service","actions","executionContexts","resources","credentialMode"],"properties":{
+                "credentialMode":{"enum":["service","per_user"]},
                 "service":service_name_schema(),"actions":{"type":"array","items":{"type":"string"},"minItems":1,"uniqueItems":true},
                 "executionContexts":execution_contexts_schema(),"resources":resource_selection_schema()
             }})
@@ -2010,20 +2081,16 @@ fn resource_mutation_schema(
         .ids()
         .map(|id| id.as_str().to_string())
         .collect::<Vec<_>>();
-    let without_namespace = resource_types
-        .descriptors()
-        .filter(|descriptor| descriptor.namespace().is_none())
-        .map(|descriptor| descriptor.id().as_str().to_string())
-        .collect::<Vec<_>>();
     let ids = json!({"type":"array","uniqueItems":true,"items":resource_id_schema()});
     let mut properties = if group {
         json!({"name":{"type":"string","minLength":1},"includedResourceIds":ids,"excludedResourceIds":ids})
     } else {
         json!({
             "displayName":{"type":["string","null"]},
+            "browserUrl":{"type":["string","null"],"minLength":1,"maxLength":4096,"description":"Optional navigation URL, at most 4096 UTF-8 bytes, for a resource type with stable location identity. It must normalize to this resource's exact site, content kind and ID with the same coverage. It does not change access. Omission preserves the stored URL on update; null clears it."},
             "resourceType":{"type":"string","enum":type_ids},
             "selector":{"oneOf":[
-                {"type":"object","additionalProperties":false,"required":["kind","value"],"properties":{"kind":{"enum":["exact","namespace"]},"value":{"type":"string","minLength":1}}},
+                {"type":"object","additionalProperties":false,"required":["kind","value"],"properties":{"kind":{"enum":["exact","namespace","subtree"]},"value":{"type":"string","minLength":1}}},
                 {"type":"object","additionalProperties":false,"required":["kind"],"properties":{"kind":{"const":"all"}}}
             ]},
             "allowedExecutionContexts":execution_contexts_schema(),"enabled":{"type":"boolean"},
@@ -2061,17 +2128,15 @@ fn resource_mutation_schema(
                 })
                 .collect::<serde_json::Map<_, _>>();
         schema["properties"]["attributes"] = json!({"type":"object","additionalProperties":false,"properties":properties,"writeOnly":true});
-        let mut conditions = vec![
-            json!({
-                "if":{"required":["resourceType"],"properties":{"resourceType":{"enum":without_namespace}}},
-                "then":{"properties":{"selector":{"properties":{"kind":{"enum":["exact","all"]}}}}}
-            }),
-            json!({
-                "if":{"required":["selector"],"properties":{"selector":{"properties":{"kind":{"enum":["all","namespace"]}}}}},
-                "then":{"properties":{"attributes":{"maxProperties":0}}}
-            }),
-        ];
+        let mut conditions = vec![json!({
+            "if":{"required":["selector"],"properties":{"selector":{"properties":{"kind":{"enum":["all","namespace","subtree"]}}}}},
+            "then":{"properties":{"attributes":{"maxProperties":0}}}
+        })];
         for descriptor in resource_types.descriptors() {
+            conditions.push(json!({
+                "if":{"required":["resourceType"],"properties":{"resourceType":{"const":descriptor.id().as_str()}}},
+                "then":{"properties":{"selector":{"properties":{"kind":{"enum":descriptor.selector_kinds()}}}}}
+            }));
             conditions.push(json!({
                 "if":{"required":["resourceType"],"properties":{"resourceType":{"const":descriptor.id().as_str()}}},
                 "then":{"properties":{"attributes":attribute_schema(descriptor)}}
@@ -4010,14 +4075,7 @@ fn invoke_send_variant(service: &str, action: &ApiActionSpec) -> Value {
     if let ActionIo::MultipartUpload { plan } = &action.io {
         properties.insert("files".to_string(), multipart_upload_files_schema(plan));
     }
-    properties.insert(
-        "readContentFormat".to_string(),
-        invoke_format_schema(&action.read_content_formats, "native"),
-    );
-    properties.insert(
-        "responseFormat".to_string(),
-        invoke_format_schema(&action.response_formats, "json"),
-    );
+    add_invoke_content_properties(&mut properties, action);
     let mut schema = json!({
         "type": "object",
         "additionalProperties": false,

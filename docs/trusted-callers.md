@@ -99,9 +99,12 @@ Even an administrator token cannot override the username assertion.
 
 The user header is rejected on every other route, including health, browser,
 management, REST invocation and Git. No URL, query parameter, tool input, cookie
-or session ID selects a username. MCP accepts only the presentation-only
-[`outputSchemas`](mcp.md#output-schemas) query and rejects every other query,
-including an empty `?`.
+or session ID selects a username. MCP accepts only the presentation controls
+[`outputSchemas`](mcp.md#output-schemas),
+[`preferredOutputContentFormat`](mcp.md#output-content-formats) and
+[`includeTextCopy`](mcp.md#tool-result-text-copies), each at most once with a
+literal value. Malformed queries, including an empty `?`, retain the audited
+`identity_assertion_invalid` admission envelope for trusted-username ingress.
 Repeat the credential and username on every MCP request, including initialization,
 notifications, discovery, calls, cancellation and DELETE. Sessions cannot change
 identity; see [MCP identity lifetime](mcp.md#trusted-identity-and-session-lifetime).
@@ -199,6 +202,10 @@ result. The reserved combinations are:
 | `context.authorize` | `execution_context_denied`, `broker_token_class_denied` | 403 | `deny` | No |
 | `request.admit` | `rate_limited`, `concurrency_limited` | 429 | `error` | Yes |
 | `request.admit` | `identity_unavailable`, `audit_unavailable` | 503 | `error` | Yes |
+
+Malformed HTTP MCP output-content preference queries use the same audited
+`identity_assertion_invalid` admission envelope as invalid endpoint paths.
+Valid preferences preserve the admitted username and execution context.
 
 Username denials deliberately conceal whether the binding, human or pause gate
 caused rejection; a disabled binding is denied like an unknown name. Fingerprint

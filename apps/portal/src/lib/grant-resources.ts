@@ -8,7 +8,7 @@ export function grantResourceChoices(
   selection: ResourceSelection,
   executionContexts: string[]
 ) {
-  const types = service ? new Set(Object.values(service.resourceScopes).map((scope) => scope.resourceType)) : null;
+  const types = service ? new Set(Object.values(service.resourceScopes).flatMap((scope) => scope.matching === "scalar" ? [scope.resourceType] : Object.keys(scope.selectorsByType))) : null;
   const byId = new Map(catalog.resources.map((resource) => [resource.id, resource]));
   const compatible = (resource: ResourceDefinition) => types === null || types.has(resource.resourceType);
   const compatibleIds = (ids: string[]) => ids.filter((id) => {

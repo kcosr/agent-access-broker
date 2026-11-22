@@ -131,7 +131,7 @@ fn plain_schemas_keep_fields_requirements_and_content_formats() {
     for comments in [false, true] {
         let descriptor = jira_descriptor(&config(comments));
         assert_eq!(descriptor.validate(), Ok(()));
-        assert_eq!(descriptor.actions.len(), if comments { 25 } else { 22 });
+        assert_eq!(descriptor.actions.len(), if comments { 27 } else { 24 });
         for action in &descriptor.actions {
             let schema = &action.input_schema;
             assert_eq!(schema["type"], "object", "{}", action.action);

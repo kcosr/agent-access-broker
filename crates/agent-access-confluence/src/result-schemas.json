@@ -1,5 +1,15 @@
 {
   "definitions": {
+    "parent": {
+      "type": "object",
+      "properties": {"kind": {"enum": ["page", "folder"]}, "id": {"type": "string"}},
+      "required": ["kind", "id"]
+    },
+    "nullableParent": {
+      "type": ["object", "null"],
+      "properties": {"kind": {"enum": ["page", "folder"]}, "id": {"type": "string"}},
+      "required": ["kind", "id"]
+    },
     "author": {
       "type": ["object", "null"],
       "properties": {"accountId": {"type": ["string", "null"]}, "displayName": {"type": ["string", "null"]}},
@@ -22,7 +32,7 @@
       "required": ["representation", "value"]
     },
     "bodyMap": {
-      "description": "Native bodies keyed by representation, per the configured or requested formats; may be empty.",
+      "description": "Native bodies keyed by representation, per the configured or requested formats. The body property is absent when no body is projected.",
       "type": "object",
       "properties": {
         "storage": {"$ref": "#/definitions/storageBody"},
@@ -166,7 +176,7 @@
       ]
     },
     "pageConflict": {
-      "description": "Result of a version_conflict failure.",
+      "description": "Version conflict before or during a page update.",
       "type": "object",
       "properties": {
         "pageId": {"type": "string"},
@@ -204,7 +214,7 @@
         "pageId": {"type": "string"},
         "space": {"type": "string"},
         "spaceId": {"type": "string"},
-        "parentPageId": {"type": ["string", "null"]},
+        "parent": {"$ref": "#/definitions/nullableParent"},
         "spaceUrl": {"type": "string"},
         "webUrl": {"type": "string"},
         "title": {"type": "string"},
@@ -228,7 +238,7 @@
         }
       },
       "required": [
-        "operation", "contentType", "pageId", "space", "spaceId", "parentPageId", "spaceUrl", "webUrl",
+        "operation", "contentType", "pageId", "space", "spaceId", "parent", "spaceUrl", "webUrl",
         "title", "version", "createdAt", "updatedAt", "createdBy", "updatedBy", "lifecycle", "status",
         "draftHandle", "draftOrigin"
       ]
@@ -241,7 +251,7 @@
         "pageId": {"type": "string"},
         "space": {"type": "string"},
         "spaceId": {"type": "string"},
-        "parentPageId": {"type": ["string", "null"]},
+        "parent": {"$ref": "#/definitions/nullableParent"},
         "spaceUrl": {"type": "string"},
         "webUrl": {"type": "string"},
         "title": {"type": "string"},
@@ -260,7 +270,7 @@
         }
       },
       "required": [
-        "operation", "contentType", "pageId", "space", "spaceId", "parentPageId", "spaceUrl", "webUrl",
+        "operation", "contentType", "pageId", "space", "spaceId", "parent", "spaceUrl", "webUrl",
         "title", "version", "createdAt", "updatedAt", "createdBy", "updatedBy", "lifecycle", "status",
         "draftVersion", "publishedAttachmentIds"
       ]
@@ -272,11 +282,12 @@
         "pageId": {"type": "string"},
         "space": {"type": "string"},
         "spaceId": {"type": "string"},
+        "parent": {"$ref": "#/definitions/nullableParent"},
         "expectedBaseVersion": {"type": "integer"},
         "draftVersion": {"type": "integer"},
         "lifecycle": {"const": "draft"}
       },
-      "required": ["pageId", "space", "spaceId", "expectedBaseVersion", "draftVersion", "lifecycle"]
+      "required": ["pageId", "space", "spaceId", "parent", "expectedBaseVersion", "draftVersion", "lifecycle"]
     },
     "blogDraft": {
       "type": "object",
@@ -288,7 +299,6 @@
         "blogId": {"type": "string"},
         "space": {"type": "string"},
         "spaceId": {"type": "string"},
-        "parentPageId": {"type": ["string", "null"]},
         "spaceUrl": {"type": "string"},
         "webUrl": {"type": "string"},
         "title": {"type": "string"},
@@ -312,7 +322,7 @@
         }
       },
       "required": [
-        "operation", "contentType", "blogId", "space", "spaceId", "parentPageId", "spaceUrl", "webUrl",
+        "operation", "contentType", "blogId", "space", "spaceId", "spaceUrl", "webUrl",
         "title", "version", "createdAt", "updatedAt", "createdBy", "updatedBy", "lifecycle", "status",
         "draftHandle", "draftOrigin"
       ]
@@ -325,7 +335,6 @@
         "blogId": {"type": "string"},
         "space": {"type": "string"},
         "spaceId": {"type": "string"},
-        "parentPageId": {"type": ["string", "null"]},
         "spaceUrl": {"type": "string"},
         "webUrl": {"type": "string"},
         "title": {"type": "string"},
@@ -344,7 +353,7 @@
         }
       },
       "required": [
-        "operation", "contentType", "blogId", "space", "spaceId", "parentPageId", "spaceUrl", "webUrl",
+        "operation", "contentType", "blogId", "space", "spaceId", "spaceUrl", "webUrl",
         "title", "version", "createdAt", "updatedAt", "createdBy", "updatedBy", "lifecycle", "status",
         "draftVersion", "publishedAttachmentIds"
       ]
@@ -381,7 +390,7 @@
       },
       "required": [
         "commentId", "kind", "containerType", "space", "pageId", "status", "resolutionStatus", "version",
-        "author", "createdAt", "updatedAt", "parentCommentId", "body"
+        "author", "createdAt", "updatedAt", "parentCommentId"
       ]
     },
     "pageCommentList": {
@@ -452,7 +461,7 @@
       },
       "required": [
         "commentId", "kind", "containerType", "space", "blogId", "spaceId", "status", "resolutionStatus",
-        "version", "author", "createdAt", "updatedAt", "parentCommentId", "body"
+        "version", "author", "createdAt", "updatedAt", "parentCommentId"
       ]
     },
     "blogCommentList": {
@@ -572,7 +581,7 @@
         },
         "required": [
           "id", "title", "space", "spaceUrl", "webUrl", "version", "createdAt", "updatedAt", "createdBy",
-          "updatedBy", "body"
+          "updatedBy"
         ]
       }
     },
@@ -582,12 +591,13 @@
         "properties": {
           "pages": {"type": "array", "items": {"$ref": "#/definitions/pageSummary"}},
           "maxResults": {"type": "integer"},
+          "scanStatus": {"enum": ["exhausted", "more", "scan_budget"], "description": "Whether the bounded authorized-content scan has more candidates or reached its work budget."},
           "nextPageToken": {
             "description": "Sealed continuation for the same inputs; null when there are no more results.",
             "type": ["string", "null"]
           }
         },
-        "required": ["pages", "maxResults", "nextPageToken"]
+        "required": ["pages", "maxResults", "nextPageToken", "scanStatus"]
       }
     },
     "page.create": {
@@ -598,7 +608,7 @@
           "space": {"type": "string"},
           "spaceUrl": {"type": "string"},
           "webUrl": {"type": "string"},
-          "parentPageId": {"type": "string"},
+          "parent": {"$ref": "#/definitions/parent"},
           "placement": {"enum": ["requested_parent", "space_homepage"]},
           "verification": {"$ref": "#/definitions/placementVerified"},
           "version": {"type": "integer"},
@@ -608,7 +618,7 @@
           "updatedBy": {"$ref": "#/definitions/author"}
         },
         "required": [
-          "pageId", "space", "spaceUrl", "webUrl", "parentPageId", "placement", "verification", "version",
+          "pageId", "space", "spaceUrl", "webUrl", "parent", "placement", "verification", "version",
           "createdAt", "updatedAt", "createdBy", "updatedBy"
         ]
       }
@@ -783,12 +793,13 @@
           "blogs": {"type": "array", "items": {"$ref": "#/definitions/blogSummary"}},
           "count": {"type": "integer"},
           "maxResults": {"type": "integer"},
+          "scanStatus": {"enum": ["exhausted", "more", "scan_budget"], "description": "Whether the bounded authorized-content scan has more candidates or reached its work budget."},
           "nextPageToken": {
             "description": "Sealed continuation for the same inputs; null when there are no more results.",
             "type": ["string", "null"]
           }
         },
-        "required": ["operation", "blogs", "count", "maxResults", "nextPageToken"]
+        "required": ["operation", "blogs", "count", "maxResults", "nextPageToken", "scanStatus"]
       }
     },
     "blog.create": {
@@ -951,7 +962,21 @@
     },
     "page.draft.view": {"success": {"$ref": "#/definitions/pageDraft"}},
     "page.draft.update": {"success": {"$ref": "#/definitions/pageDraft"}},
-    "page.draft.publish": {"success": {"$ref": "#/definitions/pageDraftPublished"}},
+    "page.draft.publish": {
+      "success": {"$ref": "#/definitions/pageDraftPublished"},
+      "error": {
+        "type": "object",
+        "description": "The published version changed after this draft was staged; no publish was attempted.",
+        "properties": {
+          "pageId": {"type": "string"},
+          "space": {"type": "string"},
+          "spaceId": {"type": "string"},
+          "expectedBaseVersion": {"type": "integer"},
+          "currentVersion": {"type": "integer"}
+        },
+        "required": ["pageId", "space", "spaceId", "expectedBaseVersion", "currentVersion"]
+      }
+    },
     "page.draft.discard": {
       "success": {
         "type": "object",
@@ -993,9 +1018,10 @@
           "space": {"type": "string"},
           "spaceId": {"type": "string"},
           "lifecycle": {"const": "draft"},
-          "pageId": {"type": "string"}
+          "pageId": {"type": "string"},
+          "parent": {"$ref": "#/definitions/nullableParent"}
         },
-        "required": ["operation", "verification", "space", "spaceId", "lifecycle", "pageId"]
+        "required": ["operation", "verification", "space", "spaceId", "lifecycle", "pageId", "parent"]
       }
     },
     "page.draft.attachment.add": {
@@ -1089,7 +1115,21 @@
     },
     "blog.draft.view": {"success": {"$ref": "#/definitions/blogDraft"}},
     "blog.draft.update": {"success": {"$ref": "#/definitions/blogDraft"}},
-    "blog.draft.publish": {"success": {"$ref": "#/definitions/blogDraftPublished"}},
+    "blog.draft.publish": {
+      "success": {"$ref": "#/definitions/blogDraftPublished"},
+      "error": {
+        "type": "object",
+        "description": "The published version changed after this draft was staged; no publish was attempted.",
+        "properties": {
+          "blogId": {"type": "string"},
+          "space": {"type": "string"},
+          "spaceId": {"type": "string"},
+          "expectedBaseVersion": {"type": "integer"},
+          "currentVersion": {"type": "integer"}
+        },
+        "required": ["blogId", "space", "spaceId", "expectedBaseVersion", "currentVersion"]
+      }
+    },
     "blog.draft.discard": {
       "success": {
         "type": "object",

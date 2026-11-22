@@ -7,8 +7,8 @@ use wiremock::{
 
 fn catalog() -> Value {
     json!({
-        "version":"agent-access.catalog.v2", "identity":{}, "routes":[],
-        "send":{"version":"agent-access.send.v1","catalogRequired":true},
+        "version":"agent-access.catalog.v3", "identity":{}, "routes":[],
+        "send":{"version":"agent-access.send.v2","catalogRequired":true},
         "services":[{
             "service":"jira", "displayName":"Jira", "surface":"invoke", "scopedMcpReady":true,
             "scopeTypes":[], "actions":[{
@@ -16,7 +16,7 @@ fn catalog() -> Value {
                 "requiredScopeTypes":[], "credentialModes":[],
                 "inputSchema":{"type":"object"}, "io":{"type":"json"},
                 "responseKind":"response_envelope", "exitPolicy":"invoke_decision",
-                "responseFormats":["json", "markdown"]
+                "outputContentFormats":[]
             }]
         }]
     })
@@ -34,7 +34,17 @@ async fn malformed_read_output_preserves_destination_and_exits_five() {
             },
             false,
         ),
-        (catalog(), true),
+        (
+            {
+                let mut c = catalog();
+                c["services"][0]["actions"][0]["outputContentFormats"] = json!(["markdown"]);
+                c["services"][0]["actions"][0]["nativeOutputContentFormat"] = json!("markdown");
+                c["services"][0]["actions"][0]["defaultOutputContentFormat"] = json!("markdown");
+                c["services"][0]["actions"][0]["bodyFields"] = json!([{"ownerPath":"/result","field":"description","optionalOwnerPrefixes":[],"nullableOwnerPrefixes":[],"optional":false,"nullable":false}]);
+                c
+            },
+            true,
+        ),
     ] {
         let broker = MockServer::start().await;
         Mock::given(method("GET"))
@@ -47,7 +57,7 @@ async fn malformed_read_output_preserves_destination_and_exits_five() {
             .and(path("/v1/invoke/jira/issue.view"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "agentRequestId":"test", "brokerRequestId":"test", "decision":"allow",
-                "result":{"format":"markdown", "value":42}
+                "result":{"description":{"format":"markdown", "value":42}}
             })))
             .expect(if markdown { 1 } else { 0 })
             .mount(&broker)
@@ -67,12 +77,19 @@ async fn malformed_read_output_preserves_destination_and_exits_five() {
         ]);
         command.arg("--output").arg(&destination);
         if markdown {
-            command.args(["--output-format", "markdown"]);
+            command.args(["--output-content-format", "markdown"]);
         }
         let output = command.output().unwrap();
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert_eq!(output.status.code(), Some(5), "{stderr}");
-        assert!(stderr.contains("malformed broker response"), "{stderr}");
+        assert!(
+            stderr.contains(if markdown {
+                "response_content_invalid"
+            } else {
+                "malformed broker response"
+            }),
+            "{stderr}"
+        );
         assert_eq!(std::fs::read(&destination).unwrap(), b"existing content");
         broker.verify().await;
     }
@@ -156,7 +173,7 @@ async fn mutation_file_output_reports_success_and_local_failure_without_repeatin
                     ]);
                 }
                 "send" => {
-                    command.args(["send", "--request-json", &json!({"version":"agent-access.send.v1","kind":"invoke","service":"jira","action":"issue.update","inputs":{"issue":"ABC-1","summary":"updated"}}).to_string()]);
+                    command.args(["send", "--request-json", &json!({"version":"agent-access.send.v2","kind":"invoke","service":"jira","action":"issue.update","inputs":{"issue":"ABC-1","summary":"updated"}}).to_string()]);
                 }
                 _ => unreachable!(),
             }
@@ -320,7 +337,7 @@ async fn multipart_upload_responses_can_be_saved_by_typed_and_send_commands() {
                 .arg("--output")
                 .arg(&destination);
         } else {
-            command.args(["send", "--request-json", &json!({"version":"agent-access.send.v1","kind":"invoke","service":"jira","action":"attachment.add","inputs":{"issue":"ABC-1"},"files":[{"role":"attachment","path":upload}],"output":{"type":"file","path":destination},"metadataOutput":{"type":"file","path":metadata}}).to_string()]);
+            command.args(["send", "--request-json", &json!({"version":"agent-access.send.v2","kind":"invoke","service":"jira","action":"attachment.add","inputs":{"issue":"ABC-1"},"files":[{"role":"attachment","path":upload}],"output":{"type":"file","path":destination},"metadataOutput":{"type":"file","path":metadata}}).to_string()]);
         }
         let output = command.output().unwrap();
         assert!(
@@ -366,7 +383,7 @@ async fn send_stdout_is_emitted_before_metadata_destination_failure() {
         .expect(1)
         .mount(&broker)
         .await;
-    let request = json!({"version":"agent-access.send.v1","kind":"invoke","service":"jira","action":"issue.view","inputs":{},"output":{"type":"stdout"},"metadataOutput":{"type":"file","path":metadata}});
+    let request = json!({"version":"agent-access.send.v2","kind":"invoke","service":"jira","action":"issue.view","inputs":{},"output":{"type":"stdout"},"metadataOutput":{"type":"file","path":metadata}});
     let output = Command::new(env!("CARGO_BIN_EXE_agent-access"))
         .args([
             "--url",
@@ -452,7 +469,7 @@ async fn invalid_response_and_metadata_destinations_prevent_sensitive_mutation_d
                         ])
                         .arg(&body);
                 } else {
-                    let mut request = json!({"version":"agent-access.send.v1","kind":"invoke","service":"gitlab","action":"project.access_token.create","inputs":{},"output":{"type":"file","path":body}});
+                    let mut request = json!({"version":"agent-access.send.v2","kind":"invoke","service":"gitlab","action":"project.access_token.create","inputs":{},"output":{"type":"file","path":body}});
                     if metadata {
                         request["metadataOutput"] = json!({"type":"file","path":invalid});
                     }
@@ -519,7 +536,7 @@ async fn failed_send_response_releases_body_and_metadata_reservations() {
         let metadata = directory.path().join("metadata.json");
         std::fs::write(&output, "original body").unwrap();
         std::fs::write(&metadata, "original metadata").unwrap();
-        let request = json!({"version":"agent-access.send.v1","kind":"invoke","service":"jira","action":"issue.view","inputs":{},"output":{"type":"file","path":output},"metadataOutput":{"type":"file","path":metadata}});
+        let request = json!({"version":"agent-access.send.v2","kind":"invoke","service":"jira","action":"issue.view","inputs":{},"output":{"type":"file","path":output},"metadataOutput":{"type":"file","path":metadata}});
         let result = Command::new(env!("CARGO_BIN_EXE_agent-access"))
             .args([
                 "--url",
@@ -576,7 +593,7 @@ async fn missing_upload_diagnostic_keeps_path_and_filesystem_cause_without_dispa
     std::fs::write(&destination, "original response").unwrap();
     std::fs::write(&metadata, "original metadata").unwrap();
     let cause = std::fs::metadata(&upload).unwrap_err().to_string();
-    let request = json!({"version":"agent-access.send.v1","kind":"invoke","service":"jira","action":"attachment.add","inputs":{"issue":"ABC-1"},"files":[{"role":"attachment","path":upload}],"output":{"type":"file","path":destination},"metadataOutput":{"type":"file","path":metadata}});
+    let request = json!({"version":"agent-access.send.v2","kind":"invoke","service":"jira","action":"attachment.add","inputs":{"issue":"ABC-1"},"files":[{"role":"attachment","path":upload}],"output":{"type":"file","path":destination},"metadataOutput":{"type":"file","path":metadata}});
     let result = Command::new(env!("CARGO_BIN_EXE_agent-access"))
         .args([
             "--url",

@@ -295,8 +295,8 @@ mod tests {
                     "source": {"revision": COMMIT, "provenance": "evidence"}
                 }],
                 "inventoryFingerprint": fingerprint,
-                "catalogVersion": "agent-access.catalog.v2",
-                "sendSchemaVersion": "agent-access.send.v1"
+                "catalogVersion": "agent-access.catalog.v3",
+                "sendSchemaVersion": "agent-access.send.v2"
             })
         );
     }

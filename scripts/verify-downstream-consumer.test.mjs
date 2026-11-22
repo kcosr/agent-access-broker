@@ -587,7 +587,7 @@ test("the recomputed inventory fingerprint matches the host's", () => {
 });
 
 test("the status must match the assembly's identity, locked sources and fingerprint exactly", () => {
-  const reported = { ...expectedStatus(), catalogVersion: "agent-access.catalog.v2", sendSchemaVersion: "agent-access.send.v1" };
+  const reported = { ...expectedStatus(), catalogVersion: "agent-access.catalog.v3", sendSchemaVersion: "agent-access.send.v2" };
   assertAssemblyStatus(reported, expectedStatus());
   for (const corrupt of [
     (status) => { status.assembly.qualification = "unqualified"; },

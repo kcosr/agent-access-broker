@@ -2,6 +2,7 @@
 //! No transport, credentials, filesystem access, or policy decisions belong here.
 use crate::{ApiActionSpec, ApiCatalog};
 use agent_access_provider::ActionIo;
+use agent_access_provider::presentation::{OutputContentFormat, validate_body_fields};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 mod registry;
@@ -144,13 +145,80 @@ fn json_pointer_unescape(value: &str) -> String {
     value.replace("~1", "/").replace("~0", "~")
 }
 
-fn add_presentation_properties(properties: &mut Value, action: &ApiActionSpec) {
-    if !action.read_content_formats.is_empty() {
-        properties["readContentFormat"] =
-            json!({"type":"string", "enum":action.read_content_formats});
+/// Applies a connection preference to an owned catalog projection. A missing
+/// preference retains each canonical service-resolved default.
+pub fn apply_output_content_preference(
+    catalog: &mut ApiCatalog,
+    preference: Option<OutputContentFormat>,
+) {
+    for service in &mut catalog.services {
+        for action in &mut service.actions {
+            apply_action_output_content_preference(action, preference);
+        }
     }
-    if !action.response_formats.is_empty() {
-        properties["responseFormat"] = json!({"type":"string", "enum":action.response_formats});
+}
+
+/// Resolves a connection preference using the action's published capabilities,
+/// without changing those capabilities or its native format.
+pub fn apply_action_output_content_preference(
+    action: &mut ApiActionSpec,
+    preference: Option<OutputContentFormat>,
+) {
+    let Some(preference) = preference else {
+        return;
+    };
+    if !action.output_content_formats.is_empty() {
+        action.default_output_content_format =
+            if action.output_content_formats.contains(&preference) {
+                Some(preference)
+            } else {
+                action.native_output_content_format
+            };
+    }
+}
+
+/// Adds the selected-content metadata from this catalog projection to an
+/// action-detail object. The catalog supplies the effective connection default.
+pub fn merge_action_content_detail(detail: &mut Value, action: &ApiActionSpec) {
+    let Some(detail) = detail.as_object_mut() else {
+        return;
+    };
+    for key in [
+        "outputContentFormats",
+        "nativeOutputContentFormat",
+        "defaultOutputContentFormat",
+        "bodyFields",
+    ] {
+        detail.remove(key);
+    }
+    if !action.output_content_formats.is_empty() {
+        detail.insert(
+            "outputContentFormats".into(),
+            json!(action.output_content_formats),
+        );
+        detail.insert(
+            "nativeOutputContentFormat".into(),
+            json!(action.native_output_content_format),
+        );
+        detail.insert(
+            "defaultOutputContentFormat".into(),
+            json!(action.default_output_content_format),
+        );
+        detail.insert("bodyFields".into(), json!(action.body_fields));
+    }
+}
+
+fn add_presentation_properties(properties: &mut Value, action: &ApiActionSpec) {
+    if !action.output_content_formats.is_empty() {
+        let default = action
+            .default_output_content_format
+            .map(|format| format.as_str())
+            .unwrap_or("markdown");
+        properties["outputContentFormat"] = json!({
+            "type":"string",
+            "enum":action.output_content_formats,
+            "description": format!("Exact format for every returned rich body; unsupported selections fail before execution. Omit to use this connection's preference (currently resolves to {default}).")
+        });
     }
 }
 
@@ -203,6 +271,40 @@ pub fn validate_catalog_action(
     {
         return Err(ProjectionError(
             "runtime catalog contains an invalid action identifier",
+        ));
+    }
+    let formats = &action.output_content_formats;
+    let known = |format: &OutputContentFormat| {
+        matches!(
+            format,
+            OutputContentFormat::Markdown
+                | OutputContentFormat::Text
+                | OutputContentFormat::Adf
+                | OutputContentFormat::Storage
+        )
+    };
+    let valid_format = |format: Option<OutputContentFormat>| {
+        format.is_some_and(|format| formats.contains(&format))
+    };
+    let valid = if formats.is_empty() {
+        action.native_output_content_format.is_none()
+            && action.default_output_content_format.is_none()
+            && action.body_fields.is_empty()
+    } else {
+        formats.len() <= 4
+            && formats.iter().all(known)
+            && formats
+                .iter()
+                .enumerate()
+                .all(|(index, format)| !formats[..index].contains(format))
+            && valid_format(action.native_output_content_format)
+            && valid_format(action.default_output_content_format)
+            && !action.body_fields.is_empty()
+            && validate_body_fields(&action.body_fields).is_ok()
+    };
+    if !valid {
+        return Err(ProjectionError(
+            "runtime catalog contains invalid output content metadata",
         ));
     }
     Ok(())
@@ -274,13 +376,7 @@ pub fn input_schema(action: &ApiActionSpec, mode: ProjectionMode) -> Value {
     if action.supports_json_file_output() {
         properties["outputPath"] = json_output_path_schema();
     }
-    if !action.read_content_formats.is_empty() {
-        properties["readContentFormat"] =
-            json!({"type":"string","enum":action.read_content_formats});
-    }
-    if !action.response_formats.is_empty() {
-        properties["responseFormat"] = json!({"type":"string","enum":action.response_formats});
-    }
+    add_presentation_properties(&mut properties, action);
     // Keep the top level a plain object: clients that render input schemas as
     // type declarations replace one with a top-level oneOf/anyOf/allOf by an
     // untyped map, hiding every argument. `not` forbids sending both inputs
@@ -670,7 +766,7 @@ mod tests {
             "action":name,"scopedMcpName":name,"description":"Read or change project data","readOnly":false,"requiredScopeTypes":["project"],"credentialModes":["service"],
             "inputSchema":{"type":"object","additionalProperties":false,"required":["project","secret"],"$defs":{"Secret":{"type":"string","minLength":1}},"properties":{"project":{"type":"string"},"secret":{"$ref":"#/$defs/Secret","writeOnly":true}}},
             "sensitiveInputPointers":["/inputs/secret"],"sensitiveOutputPointers":["/result/issuedToken"],
-            "io":io,"responseKind":"response_envelope","exitPolicy":"invoke_decision", "responseFormats":["json"]
+            "io":io,"responseKind":"response_envelope","exitPolicy":"invoke_decision"
         })).unwrap()
     }
 
@@ -689,12 +785,134 @@ mod tests {
         catalog
     }
 
+    fn content_action() -> ApiActionSpec {
+        let mut action = action("issue.view", json!({"type":"json"}));
+        action.output_content_formats = vec![
+            OutputContentFormat::Markdown,
+            OutputContentFormat::Text,
+            OutputContentFormat::Adf,
+        ];
+        action.native_output_content_format = Some(OutputContentFormat::Adf);
+        action.default_output_content_format = Some(OutputContentFormat::Text);
+        action.body_fields = vec![
+            agent_access_provider::presentation::BodyField::new("/result", "description")
+                .nullable(),
+        ];
+        action
+    }
+
+    #[test]
+    fn connection_preference_changes_only_projection_defaults_and_detail_overlay() {
+        let mut canonical = catalog();
+        canonical.services[0].actions.insert(0, content_action());
+        let original = canonical.clone();
+        let mut projection = canonical.clone();
+        apply_output_content_preference(&mut projection, None);
+        assert_eq!(projection, canonical);
+        apply_output_content_preference(&mut projection, Some(OutputContentFormat::Storage));
+        assert_eq!(
+            projection.services[0].actions[0].default_output_content_format,
+            Some(OutputContentFormat::Adf)
+        );
+        assert_eq!(
+            projection.services[0].actions[1].default_output_content_format,
+            None
+        );
+        assert_eq!(canonical, original);
+        apply_output_content_preference(&mut projection, Some(OutputContentFormat::Markdown));
+        let action = &projection.services[0].actions[0];
+        assert_eq!(
+            action.default_output_content_format,
+            Some(OutputContentFormat::Markdown)
+        );
+        assert_eq!(
+            action.native_output_content_format,
+            Some(OutputContentFormat::Adf)
+        );
+        assert_eq!(
+            action.output_content_formats,
+            canonical.services[0].actions[0].output_content_formats
+        );
+        let mut detail =
+            json!({"action":"issue.view","defaultOutputContentFormat":"text","other":"retained"});
+        merge_action_content_detail(&mut detail, action);
+        assert_eq!(detail["defaultOutputContentFormat"], "markdown");
+        assert_eq!(detail["other"], "retained");
+        assert_eq!(detail["bodyFields"], json!(action.body_fields));
+    }
+
+    #[test]
+    fn mcp_exposes_only_strict_output_selector_and_no_schema_default() {
+        let action = content_action();
+        for mode in [ProjectionMode::Http, ProjectionMode::Stdio] {
+            let schema = input_schema(&action, mode);
+            let props = &schema["properties"];
+            assert_eq!(
+                props["outputContentFormat"]["enum"],
+                json!(["markdown", "text", "adf"])
+            );
+            assert!(props["outputContentFormat"].get("default").is_none());
+            assert!(
+                props["outputContentFormat"]["description"]
+                    .as_str()
+                    .unwrap()
+                    .contains("text")
+            );
+            for absent in [
+                "preferredOutputContentFormat",
+                "readContentFormat",
+                "responseFormat",
+            ] {
+                assert!(props.get(absent).is_none());
+            }
+            let validator = jsonschema::validator_for(&schema).unwrap();
+            let mut request = json!({"inputs":{"project":"team/repo","secret":"value"}});
+            assert!(validator.is_valid(&request));
+            request["outputContentFormat"] = json!("adf");
+            assert!(validator.is_valid(&request));
+            for invalid in [Value::Null, json!("native"), json!("storage")] {
+                request["outputContentFormat"] = invalid;
+                assert!(!validator.is_valid(&request));
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_content_metadata_is_rejected_before_tool_publication() {
+        let action = content_action();
+        validate_catalog_action("example", &action).unwrap();
+        let mut invalid = Vec::new();
+        let mut a = action.clone();
+        a.body_fields.clear();
+        invalid.push(a);
+        let mut a = action.clone();
+        a.native_output_content_format = None;
+        invalid.push(a);
+        let mut a = action.clone();
+        a.default_output_content_format = Some(OutputContentFormat::Storage);
+        invalid.push(a);
+        let mut a = action.clone();
+        a.output_content_formats.push(OutputContentFormat::Adf);
+        invalid.push(a);
+        let mut a = action.clone();
+        a.body_fields.push(a.body_fields[0].clone());
+        invalid.push(a);
+        let mut a = action.clone();
+        a.output_content_formats.clear();
+        invalid.push(a);
+        for action in invalid {
+            assert!(validate_catalog_action("example", &action).is_err());
+        }
+    }
+
     #[test]
     fn http_schema_preserves_required_sensitive_values_and_rejects_local_sources() {
         let action = action("file.write", json!({"type":"json"}));
         let schema = input_schema(&action, ProjectionMode::Http);
         let validator = jsonschema::validator_for(&schema).unwrap();
-        assert!(validator.is_valid(&json!({"inputs":{"project":"team/repo","secret":"new secret"}, "responseFormat":"json"})));
+        assert!(
+            validator.is_valid(&json!({"inputs":{"project":"team/repo","secret":"new secret"}}))
+        );
         for invalid in [
             json!({"inputs":{"project":"team/repo"}}),
             json!({"inputs":{"project":"team/repo","secret":""}}),
@@ -991,14 +1209,14 @@ mod tests {
     #[test]
     fn unsupported_arguments_are_named_only_as_identifiers_and_never_echo_values() {
         let schema = json!({"type":"object","properties":{
-            "responseFormat":{},"inputs":{},"requestFile":{}
+            "outputContentFormat":{},"inputs":{},"requestFile":{}
         }});
         let message = |arguments: Value| {
             check_declared_arguments(arguments.as_object().unwrap(), &schema)
                 .unwrap_err()
                 .to_string()
         };
-        let accepts = "this tool accepts: inputs, requestFile, responseFormat";
+        let accepts = "this tool accepts: inputs, outputContentFormat, requestFile";
         assert_eq!(
             message(json!({"readContentFormat":"markdown"})),
             format!("unsupported argument `readContentFormat`; {accepts}")
@@ -1048,7 +1266,7 @@ mod tests {
         }
         assert!(
             check_declared_arguments(
-                json!({"inputs":{},"responseFormat":"json"})
+                json!({"inputs":{},"outputContentFormat":"markdown"})
                     .as_object()
                     .unwrap(),
                 &schema

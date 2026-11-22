@@ -21,6 +21,90 @@ fn configurations() -> Vec<ConfluenceProviderConfig> {
     vec![default, disabled, text, object, all, bounded, other_tenant]
 }
 
+fn retired_output_guidance(documentation: &Value) -> Vec<&'static str> {
+    let text = documentation.to_string().to_ascii_lowercase();
+    let words: String = text.chars().filter(char::is_ascii_alphanumeric).collect();
+    let mut retired = [
+        ("whole-result", "wholeresult"),
+        ("responseFormat", "responseformat"),
+        ("readContentFormat", "readcontentformat"),
+        ("renderedBody", "renderedbody"),
+    ]
+    .into_iter()
+    .filter_map(|(name, normalized)| words.contains(normalized).then_some(name))
+    .collect::<Vec<_>>();
+    if text.contains("--output-format") {
+        retired.push("--output-format");
+    }
+    retired
+}
+
+fn mentions_exact_output_selector(documentation: &Value) -> bool {
+    documentation
+        .to_string()
+        .to_ascii_lowercase()
+        .split(|character: char| {
+            !character.is_ascii_alphanumeric() && !matches!(character, '_' | '-')
+        })
+        .any(|word| {
+            matches!(
+                word,
+                "outputcontentformat" | "output_content_format" | "--output-content-format"
+            )
+        })
+}
+
+#[test]
+fn documentation_never_advertises_retired_output_interfaces() {
+    let bundled: Value =
+        serde_json::from_str(include_str!("../action-documentation.json")).unwrap();
+    let mut violations = Vec::new();
+    for (action, documentation) in bundled.as_object().unwrap() {
+        for retired in retired_output_guidance(documentation) {
+            violations.push(format!("bundled {action}: {retired}"));
+        }
+    }
+    for (configuration, config) in configurations().iter().enumerate() {
+        for action in confluence_descriptor(config).actions {
+            for retired in retired_output_guidance(action.documentation.as_ref().unwrap()) {
+                violations.push(format!(
+                    "configuration {configuration} {}: {retired}",
+                    action.action
+                ));
+            }
+        }
+    }
+    assert!(violations.is_empty(), "{}", violations.join("\n"));
+}
+
+#[test]
+fn documentation_output_selector_guidance_matches_configured_body_capabilities() {
+    let bundled: Value =
+        serde_json::from_str(include_str!("../action-documentation.json")).unwrap();
+    let all = confluence_descriptor(&confluence_config());
+    let mut violations = Vec::new();
+    for (name, documentation) in bundled.as_object().unwrap() {
+        let action = all
+            .action(name)
+            .expect("every bundled action is published with all sources");
+        if mentions_exact_output_selector(documentation) != action.presentation.is_some() {
+            violations.push(format!(
+                "bundled {name}: selector guidance does not match body capability"
+            ));
+        }
+    }
+    for (configuration, config) in configurations().iter().enumerate() {
+        for action in confluence_descriptor(config).actions {
+            if mentions_exact_output_selector(action.documentation.as_ref().unwrap())
+                != action.presentation.is_some()
+            {
+                violations.push(format!("configuration {configuration} {}: selector guidance does not match body capability", action.action));
+            }
+        }
+    }
+    assert!(violations.is_empty(), "{}", violations.join("\n"));
+}
+
 fn provider(config: ConfluenceProviderConfig) -> ConfluenceProvider {
     ConfluenceProvider::with_backend(
         config,
@@ -141,9 +225,9 @@ fn parse_example(
             } else {
                 ConfluenceSearchContentKind::BlogPost
             };
-            build_confluence_search_query_for_kind(
+            build_fixture_search_query(
                 &parsed.query,
-                &EffectiveSearchScope::Finite(spaces),
+                &FixtureSpaces::Finite(spaces),
                 &config.search,
                 kind,
             )
@@ -224,7 +308,7 @@ fn substitute_draft_handle(action: &str, inputs: &mut Value, config: &Confluence
         )
         .unwrap();
     assert_eq!(opened, handle);
-    ensure_authorized_draft_handle(&opened, request.resource_scopes().unwrap()).unwrap();
+    ensure_authorized_draft_handle(&opened, "ENG").unwrap();
     inputs["draftHandle"] = json!(token);
 }
 

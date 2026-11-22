@@ -54,6 +54,8 @@ pub struct GitlabWebhooksConfig {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GitlabContentConfig {
+    #[serde(default)]
+    pub preferred_output_format: Option<OutputContentFormat>,
     #[serde(default = "default_gitlab_body_max_bytes")]
     pub max_body_bytes: u64,
     #[serde(default = "default_gitlab_max_commit_actions")]
@@ -69,6 +71,7 @@ pub struct GitlabContentConfig {
 impl Default for GitlabContentConfig {
     fn default() -> Self {
         Self {
+            preferred_output_format: None,
             max_body_bytes: default_gitlab_body_max_bytes(),
             max_commit_actions: default_gitlab_max_commit_actions(),
             max_file_bytes: default_gitlab_file_max_bytes(),

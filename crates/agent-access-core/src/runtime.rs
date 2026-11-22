@@ -28,6 +28,8 @@ pub use command_authority::{
     ResourcesCheckedBy,
 };
 mod command_dispatch;
+mod containment;
+use containment::{candidate_is_universe, containment_contract_error};
 mod discovery;
 mod gateway_access;
 mod gateway_verification;
@@ -74,6 +76,8 @@ pub use owned::InvocationControl;
 mod resource_access;
 mod resource_management;
 mod resource_types;
+#[cfg(test)]
+use crate::ResourceDefinition;
 use crate::fs_permissions;
 use crate::imports::*;
 use crate::microsoft_oidc::{MicrosoftOidcRuntimeConfig, MicrosoftOidcRuntimeConfigError};
@@ -91,14 +95,16 @@ use crate::{
     ManagedPolicySubjectCatalog, ManagedResourceCatalog, ManagedStore, ManagedStoreError,
     ManagedStoreOpenMode, NormalizedPolicyGrant, NormalizedPolicyGrantIssueField,
     NormalizedPolicyGrantValidationIssue, PolicyGrantConfig, PolicyReadScope,
-    PolicyValidationIssue, PolicyWriteScope, ResourceBoundary, ResourceCatalog, ResourceDefinition,
+    PolicyValidationIssue, PolicyWriteScope, ResourceBoundary, ResourceCatalog,
     ResourceGroupDefinition, ResourceSelection, ResponseEnvelope, api_service_spec,
     credential_mode_available, gateway_upstream_authorization, is_safe_identifier,
     is_safe_principal, normalized_policy_grant_validation_issues, validate_broker_config,
 };
 use crate::{ConfigError, HostConfigError, load_secret_ref_value};
 use agent_access_provider::host::{ContractViolation, HookContext, with_provider_context};
-use agent_access_provider::presentation::ActionPresentation;
+use agent_access_provider::presentation::{
+    OutputContentFormat, ResolvedPresentation, ResponseOptions,
+};
 use agent_access_provider::*;
 use agent_access_provider::{
     ActionDescriptor, CredentialDescriptor, Decision, LookupRequirement, ReasonCode,
@@ -108,6 +114,10 @@ use agent_access_provider::{
 use arc_swap::ArcSwap;
 use bytes::Bytes;
 use chrono::Utc;
+pub use containment::{
+    ContainmentVerification, LocationAccess, LocationAccessClause, LocationBoundary,
+    LocationCoverage, LocationProjection, LocationProjectionFailure, LocationSelector,
+};
 pub use discovery::{
     ActionList, ActionResourceAccess, DiscoveredResource, LiveResourceListing,
     RegisteredResourcePage, RegisteredResourceSource, ResourceAccessDescription,
@@ -119,7 +129,8 @@ pub use gateway_access::{GatewayUpstreamPresentation, GatewayUpstreamRejection};
 use http::HeaderMap;
 use lookup_access::{PreScopeLookup, PreScopeLookupPlan};
 pub use resource_access::{
-    EffectiveAccessClause, EffectiveAccessEntry, EffectiveAccessPreview, ResourceGroupOption,
+    EffectiveAccessClause, EffectiveAccessEntry, EffectiveAccessPreview, EffectiveAccessScope,
+    ResourceGroupOption,
 };
 pub(crate) use resource_types::EffectiveResourceTypes;
 use serde::{Deserialize, Serialize};
@@ -363,13 +374,27 @@ pub struct GovernedIdentityFailureContext {
 #[serde(rename_all = "camelCase")]
 pub struct AgentTokenOptions {
     pub policy_generation: u64,
-    pub resources: Vec<ResourceDefinition>,
+    pub resources: Vec<AgentTokenResourceOption>,
     pub resource_groups: Vec<ResourceGroupOption>,
     pub execution_contexts: Vec<ExecutionContext>,
     pub services: Vec<AgentTokenServiceOption>,
     /// Where an issued token connects MCP clients; see
     /// [`crate::agent_token_mcp_url`]. Not policy-derived.
     pub mcp: Option<AgentTokenMcpEndpoint>,
+}
+
+/// Resource fields needed to select token restrictions. Administrative navigation
+/// metadata is deliberately absent, including for authored exclusion references.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentTokenResourceOption {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    pub resource_type: ResourceType,
+    pub selector: ResourceSelector,
+    pub allowed_execution_contexts: Vec<String>,
+    pub enabled: bool,
 }
 
 /// The HTTP MCP endpoint that accepts an issued token as `Authorization: Bearer`.
@@ -400,11 +425,56 @@ pub struct AgentTokenActionOption {
     /// false for actions the backend or import review has not classified.
     pub read_only: bool,
     pub required_scope_types: Vec<String>,
-    /// None for an explicit action grant with no resource selector.
-    pub resource_type: Option<ResourceType>,
     pub execution_contexts: Vec<ExecutionContext>,
-    pub effective_access_by_execution_context:
-        BTreeMap<ExecutionContext, Vec<EffectiveAccessClause>>,
+    #[serde(flatten)]
+    pub scope: AgentTokenActionScope,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "scope", rename_all = "snake_case")]
+pub enum AgentTokenActionScope {
+    Unscoped,
+    Resource {
+        #[serde(rename = "resourceType")]
+        resource_type: ResourceType,
+        #[serde(rename = "effectiveAccessByExecutionContext")]
+        effective_access_by_execution_context:
+            BTreeMap<ExecutionContext, Vec<EffectiveAccessClause>>,
+    },
+    Location {
+        #[serde(rename = "resourceTypes")]
+        resource_types: Vec<ResourceType>,
+        domain: String,
+        #[serde(rename = "effectiveAccessByExecutionContext")]
+        effective_access_by_execution_context: BTreeMap<ExecutionContext, LocationAccess>,
+    },
+}
+
+impl AgentTokenActionOption {
+    pub fn resource_types(&self) -> Vec<&ResourceType> {
+        match &self.scope {
+            AgentTokenActionScope::Unscoped => Vec::new(),
+            AgentTokenActionScope::Resource { resource_type, .. } => vec![resource_type],
+            AgentTokenActionScope::Location { resource_types, .. } => {
+                resource_types.iter().collect()
+            }
+        }
+    }
+    pub fn resource_type(&self) -> Option<&ResourceType> {
+        match &self.scope {
+            AgentTokenActionScope::Resource { resource_type, .. } => Some(resource_type),
+            _ => None,
+        }
+    }
+    pub fn scalar_access(&self) -> Option<&BTreeMap<ExecutionContext, Vec<EffectiveAccessClause>>> {
+        match &self.scope {
+            AgentTokenActionScope::Resource {
+                effective_access_by_execution_context,
+                ..
+            } => Some(effective_access_by_execution_context),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -436,6 +506,51 @@ pub struct SearchAuthorizationPlan {
     pub scope: SearchAuthorizationScope,
     pub credential_mode: String,
     pub matched_grants: Vec<MatchedGrantAudit>,
+}
+
+/// Protected collection admission. Scalar and location records are distinct
+/// current contracts; neither is converted into the other's authority model.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum SearchAuthorizationAudit {
+    Scalar(SearchAuthorizationPlan),
+    Location(LocationSearchAuthorizationPlan),
+}
+
+impl From<SearchAuthorizationPlan> for SearchAuthorizationAudit {
+    fn from(plan: SearchAuthorizationPlan) -> Self {
+        Self::Scalar(plan)
+    }
+}
+
+impl SearchAuthorizationAudit {
+    pub fn matched_grants(&self) -> &[MatchedGrantAudit] {
+        match self {
+            Self::Scalar(plan) => &plan.matched_grants,
+            Self::Location(plan) => &plan.matched_grants,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LocationSearchAuthorizationPlan {
+    pub scope: LocationSearchScope,
+    pub scope_type: String,
+    pub resource_types: Vec<ResourceType>,
+    pub domain: String,
+    pub evidence_level: ContainmentEvidenceLevel,
+    pub grant_boundaries: Vec<LocationBoundary>,
+    pub token_boundary: Option<LocationBoundary>,
+    pub authority_digest: String,
+    pub credential_mode: String,
+    pub matched_grants: Vec<MatchedGrantAudit>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LocationSearchScope {
+    Location,
 }
 
 fn search_scope_from_boundary(boundary: &ResourceBoundary) -> SearchAuthorizationScope {
@@ -622,10 +737,18 @@ pub struct CapabilityBundle {
 pub struct InvokeRequest {
     #[serde(default = "empty_json_object")]
     pub inputs: Value,
-    #[serde(default)]
-    pub read_content_format: agent_access_provider::presentation::ReadContentFormat,
-    #[serde(default)]
-    pub response_format: agent_access_provider::presentation::ResponseFormat,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_content_format"
+    )]
+    pub output_content_format: Option<OutputContentFormat>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_content_format"
+    )]
+    pub preferred_output_content_format: Option<OutputContentFormat>,
     #[serde(skip)]
     pub body_parts: Vec<BrokerBodyPart>,
 }
@@ -634,18 +757,25 @@ impl InvokeRequest {
     pub fn new(inputs: Value) -> Self {
         Self {
             inputs,
-            read_content_format: agent_access_provider::presentation::ReadContentFormat::Native,
-            response_format: agent_access_provider::presentation::ResponseFormat::Json,
+            output_content_format: None,
+            preferred_output_content_format: None,
             body_parts: Vec::new(),
         }
     }
 
-    fn response_options(&self) -> agent_access_provider::presentation::ResponseOptions {
-        agent_access_provider::presentation::ResponseOptions::new(
-            self.read_content_format,
-            self.response_format,
+    fn response_options(&self) -> ResponseOptions {
+        ResponseOptions::new(
+            self.output_content_format,
+            self.preferred_output_content_format,
         )
     }
+}
+
+fn present_content_format<'de, D>(deserializer: D) -> Result<Option<OutputContentFormat>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    OutputContentFormat::deserialize(deserializer).map(Some)
 }
 
 fn empty_json_object() -> Value {
@@ -1514,21 +1644,26 @@ fn preserve_result_metadata_on_error(
 }
 
 fn present_provider_outcome(
-    presentation: Option<&ActionPresentation>,
-    options: agent_access_provider::presentation::ResponseOptions,
+    presentation: &ResolvedPresentation,
     max_body_bytes: u64,
     max_result_bytes: u64,
     outcome: Result<ProviderResult, ProviderError>,
 ) -> Result<ProviderResult, ProviderError> {
     match outcome {
         Ok(mut provider_result) => {
-            if let Err(error) = agent_access_provider::presentation::present_result(
+            let recovery_receipt = provider_result.presentation_recovery_receipt.take();
+            if let Err(mut error) = agent_access_provider::presentation::present_result(
                 presentation,
                 &mut provider_result.result,
-                options,
                 max_body_bytes,
                 max_result_bytes,
             ) {
+                if let Some(receipt) = recovery_receipt {
+                    if receipt.status() == agent_access_provider::MutationStatus::Applied {
+                        error.message = "The mutation completed, but its response could not be produced. Do not repeat the operation.".to_owned();
+                    }
+                    error = error.with_mutation_receipt(receipt);
+                }
                 return Err(preserve_result_metadata_on_error(
                     error,
                     provider_result.audit,
@@ -1540,7 +1675,14 @@ fn present_provider_outcome(
             Ok(provider_result)
         }
         Err(mut provider_error)
-            if provider_error.decision() == Decision::Allow && provider_error.result.is_some() =>
+            if provider_error.decision() == Decision::Allow
+                && provider_error.result.is_some()
+                // A compact outcome receipt is not a successful body payload,
+                // even when its provider outcome uses the allow decision.
+                && !provider_error
+                    .result
+                    .as_deref()
+                    .is_some_and(|result| result.get("mutationStatus").is_some()) =>
         {
             let mut result = *provider_error
                 .result
@@ -1549,7 +1691,6 @@ fn present_provider_outcome(
             if let Err(error) = agent_access_provider::presentation::present_result(
                 presentation,
                 &mut result,
-                options,
                 max_body_bytes,
                 max_result_bytes,
             ) {
@@ -1910,7 +2051,8 @@ pub struct PreparedInvocation {
     /// are consumed separately after admission.
     body_parts: Vec<BrokerBodyPart>,
     state: Option<ProviderState>,
-    response_options: agent_access_provider::presentation::ResponseOptions,
+    presentation: ResolvedPresentation,
+    presentation_body_limit: u64,
     body_part_specs: Vec<BrokerBodyPartSpec>,
     finalize_context: FinalizeContext,
 }
@@ -2028,7 +2170,8 @@ enum AuditAppendMode {
 #[derive(Clone)]
 struct FinalizeContext {
     admission: Option<InvocationAdmissionAudit>,
-    search_authorization: Option<SearchAuthorizationPlan>,
+    search_authorization: Option<SearchAuthorizationAudit>,
+    location_authorization: Option<Value>,
     /// A command-import call from admission on: its authority, the resources
     /// its request names and its process facts, which finalization audits
     /// after any outcome, including a host interruption.
@@ -3361,6 +3504,7 @@ impl BrokerRuntime {
             FinalizeContext {
                 admission: None,
                 search_authorization: None,
+                location_authorization: None,
                 command: None,
                 agent_request_id: context.agent_request_id,
                 broker_request_id: context.broker_request_id,
@@ -3414,6 +3558,7 @@ impl BrokerRuntime {
             FinalizeContext {
                 admission: admission_audit,
                 search_authorization: None,
+                location_authorization: None,
                 command: None,
                 agent_request_id: operation.agent_request_id,
                 broker_request_id: operation.broker_request_id,
@@ -3614,6 +3759,17 @@ impl BrokerRuntime {
         action: &str,
         token: Option<&ParsedAgentInvokeTokenCaveats<'_>>,
     ) -> bool {
+        if self.action_containment_scope(service, action).is_some() {
+            return self.containment_has_access(
+                snapshot,
+                identity,
+                context,
+                service,
+                action,
+                token,
+                |_| true,
+            );
+        }
         if self.action_resource_scope(service, action).is_none() {
             // Resource restrictions cannot authorize a scope-free action.
             // Use the same explicit grant/credential-mode selection as invocation.
@@ -3745,50 +3901,88 @@ impl BrokerRuntime {
         service: &ServiceDescriptor,
         action: &ActionDescriptor,
     ) -> Option<AgentTokenActionOption> {
-        let resource_type = service
-            .action_resource_scope(&action.action)
-            .map(|(_, binding)| binding.resource_type.clone());
-        let mut effective_access_by_execution_context = BTreeMap::new();
-        for execution_context in configured_contexts {
+        let resource_type = self.action_resource_type(&service.service, &action.action);
+        let location = self.action_containment_scope(&service.service, &action.action);
+        let mut scalar_access = BTreeMap::new();
+        let mut location_access = BTreeMap::new();
+        let mut execution_contexts = Vec::new();
+        for context in configured_contexts {
             let authored = policy_snapshot.grants.iter().any(|grant| {
                 subject_rank(&grant.subject, identity).is_some()
                     && grant.service == service.service
                     && grant.actions.contains(&action.action)
-                    && grant.execution_contexts.contains(execution_context)
+                    && grant.execution_contexts.contains(context)
             });
-            if authored
-                && (resource_type.is_some()
-                    || self.scope_free_action_admitted(
+            if !authored {
+                continue;
+            }
+            if location.is_some() {
+                let projection = self
+                    .containment_access_projection(
                         policy_snapshot,
                         identity,
-                        execution_context,
+                        context,
                         &service.service,
                         &action.action,
-                    ))
-            {
-                let clauses = self.effective_resource_clauses(
-                    policy_snapshot,
-                    identity,
-                    execution_context,
-                    &service.service,
-                    &action.action,
-                    None,
+                        None,
+                    )
+                    .expect("containment action");
+                if projection.is_empty() {
+                    continue;
+                }
+                location_access.insert(context.clone(), projection);
+            } else if resource_type.is_some() {
+                scalar_access.insert(
+                    context.clone(),
+                    self.effective_resource_clauses(
+                        policy_snapshot,
+                        identity,
+                        context,
+                        &service.service,
+                        &action.action,
+                        None,
+                    ),
                 );
-                effective_access_by_execution_context.insert(execution_context.clone(), clauses);
+            } else if !self.scope_free_action_admitted(
+                policy_snapshot,
+                identity,
+                context,
+                &service.service,
+                &action.action,
+            ) {
+                continue;
             }
+            execution_contexts.push(context.clone());
         }
-        let execution_contexts = effective_access_by_execution_context
-            .keys()
-            .cloned()
-            .collect::<Vec<_>>();
-        (!execution_contexts.is_empty()).then(|| AgentTokenActionOption {
+        if execution_contexts.is_empty() {
+            return None;
+        }
+        let scope = if let Some(location) = location {
+            AgentTokenActionScope::Location {
+                resource_types: location
+                    .contract
+                    .selectors_by_type
+                    .keys()
+                    .cloned()
+                    .collect(),
+                domain: location.contract.domain,
+                effective_access_by_execution_context: location_access,
+            }
+        } else if let Some(resource_type) = resource_type {
+            AgentTokenActionScope::Resource {
+                resource_type,
+                effective_access_by_execution_context: scalar_access,
+            }
+        } else {
+            AgentTokenActionScope::Unscoped
+        };
+        Some(AgentTokenActionOption {
             action: action.action.clone(),
             description: action.description.clone(),
             read_only: action.read_only,
             required_scope_types: action.required_scope_types(),
-            resource_type,
             execution_contexts,
-            effective_access_by_execution_context,
+            scope,
         })
     }
 
@@ -4091,6 +4285,7 @@ impl BrokerRuntime {
                     FinalizeContext {
                         admission: admission_audit,
                         search_authorization: None,
+                        location_authorization: None,
                         command: None,
                         agent_request_id,
                         broker_request_id,
@@ -4123,6 +4318,7 @@ impl BrokerRuntime {
                     FinalizeContext {
                         admission: admission_audit,
                         search_authorization: None,
+                        location_authorization: None,
                         command: None,
                         agent_request_id,
                         broker_request_id,
@@ -4156,6 +4352,7 @@ impl BrokerRuntime {
                     FinalizeContext {
                         admission: admission_audit,
                         search_authorization: None,
+                        location_authorization: None,
                         command: None,
                         agent_request_id,
                         broker_request_id,
@@ -4189,6 +4386,7 @@ impl BrokerRuntime {
                     FinalizeContext {
                         admission: admission_audit,
                         search_authorization: None,
+                        location_authorization: None,
                         command: None,
                         agent_request_id,
                         broker_request_id,
@@ -4228,6 +4426,7 @@ impl BrokerRuntime {
                         FinalizeContext {
                             admission: admission_audit,
                             search_authorization: None,
+                            location_authorization: None,
                             command: None,
                             agent_request_id,
                             broker_request_id,
@@ -4267,6 +4466,7 @@ impl BrokerRuntime {
                     FinalizeContext {
                         admission: admission_audit,
                         search_authorization: None,
+                        location_authorization: None,
                         command: None,
                         agent_request_id,
                         broker_request_id,
@@ -4307,6 +4507,7 @@ impl BrokerRuntime {
                     FinalizeContext {
                         admission: admission_audit,
                         search_authorization: None,
+                        location_authorization: None,
                         command: None,
                         agent_request_id,
                         broker_request_id,
@@ -4346,6 +4547,7 @@ impl BrokerRuntime {
                         FinalizeContext {
                             admission: admission_audit,
                             search_authorization: None,
+                            location_authorization: None,
                             command: None,
                             agent_request_id,
                             broker_request_id,
@@ -4380,6 +4582,7 @@ impl BrokerRuntime {
                     FinalizeContext {
                         admission: admission_audit,
                         search_authorization: None,
+                        location_authorization: None,
                         command: None,
                         agent_request_id,
                         broker_request_id,
@@ -4415,6 +4618,7 @@ impl BrokerRuntime {
             finalize_context: FinalizeContext {
                 admission: admission_audit,
                 search_authorization: None,
+                location_authorization: None,
                 command: None,
                 agent_request_id,
                 broker_request_id,
@@ -4727,6 +4931,7 @@ impl BrokerRuntime {
                 FinalizeContext {
                     admission: admission_audit,
                     search_authorization: None,
+                    location_authorization: None,
                     command: None,
                     agent_request_id,
                     broker_request_id,
@@ -4756,6 +4961,7 @@ impl BrokerRuntime {
                 FinalizeContext {
                     admission: admission_audit,
                     search_authorization: None,
+                    location_authorization: None,
                     command: None,
                     agent_request_id,
                     broker_request_id,
@@ -4792,6 +4998,7 @@ impl BrokerRuntime {
                     FinalizeContext {
                         admission: admission_audit,
                         search_authorization: None,
+                        location_authorization: None,
                         command: None,
                         agent_request_id,
                         broker_request_id,
@@ -4823,6 +5030,7 @@ impl BrokerRuntime {
                 FinalizeContext {
                     admission: admission_audit,
                     search_authorization: None,
+                    location_authorization: None,
                     command: None,
                     agent_request_id,
                     broker_request_id,
@@ -4850,39 +5058,170 @@ impl BrokerRuntime {
         // Every later outcome records the declared inputs' supplied values.
         let audit_inputs = capture_audit_inputs(&action_descriptor.audit_inputs, &request.inputs);
         let upstream_resource_ownership = action_descriptor.upstream_resource_ownership;
-        if response_options != agent_access_provider::presentation::ResponseOptions::default()
-            && let Err(error) = agent_access_provider::presentation::validate_response_options(
-                action_descriptor.presentation.as_ref(),
-                response_options,
-            )
-        {
-            return Err(Box::new(owned::PreparationFailure::new(
-                FinalizeContext {
-                    admission: admission_audit,
-                    search_authorization: None,
-                    command: None,
-                    agent_request_id,
-                    broker_request_id,
-                    policy_generation,
-                    identity,
-                    service,
-                    action,
-                    upstream_resource_ownership: None,
-                    resource_scopes: ResourceScopes::new(),
-                    credential_mode: None,
-                    matched_grant: None,
-                    source,
-                    execution_context: Some(execution_context.clone()),
-                    redact_error_resource_scopes: false,
-                    personal_lookup_connection: None,
-                    audit_inputs: audit_inputs.clone(),
-                    started,
-                },
-                Err(error),
-            )));
-        }
+        let presentation = match agent_access_provider::presentation::resolve_response_options(
+            action_descriptor.presentation,
+            service_descriptor
+                .as_ref()
+                .and_then(|service| service.preferred_output_content_format),
+            response_options,
+        ) {
+            Ok(presentation) => presentation,
+            Err(error) => {
+                return Err(Box::new(owned::PreparationFailure::new(
+                    FinalizeContext {
+                        admission: admission_audit,
+                        search_authorization: None,
+                        location_authorization: None,
+                        command: None,
+                        agent_request_id,
+                        broker_request_id,
+                        policy_generation,
+                        identity,
+                        service,
+                        action,
+                        upstream_resource_ownership: None,
+                        resource_scopes: ResourceScopes::new(),
+                        credential_mode: None,
+                        matched_grant: None,
+                        source,
+                        execution_context: Some(execution_context.clone()),
+                        redact_error_resource_scopes: false,
+                        personal_lookup_connection: None,
+                        audit_inputs: audit_inputs.clone(),
+                        started,
+                    },
+                    Err(error),
+                )));
+            }
+        };
+        let presentation_body_limit = self.presentation_body_limit(&service);
 
         let lookup_scopes_before_policy = action_descriptor.lookup.before_policy();
+        let containment_scope = self.action_containment_scope(&service, &action);
+        let (containment_evidence_level, containment_roots) = self.containment_lookup_requirements(
+            &policy_snapshot,
+            &identity,
+            &execution_context,
+            &service,
+            &action,
+            token_caveats.as_ref(),
+        );
+        let containment_root_provenance = self.containment_root_provenance(
+            &policy_snapshot,
+            &identity,
+            &execution_context,
+            &service,
+            &action,
+            token_caveats.as_ref(),
+            &containment_roots,
+        );
+        let initial_context = FinalizeContext {
+            admission: admission_audit,
+            search_authorization: None,
+            location_authorization: None,
+            command: None,
+            agent_request_id: agent_request_id.clone(),
+            broker_request_id: broker_request_id.clone(),
+            policy_generation,
+            identity: identity.clone(),
+            service: service.clone(),
+            action: action.clone(),
+            upstream_resource_ownership: None,
+            resource_scopes: ResourceScopes::new(),
+            credential_mode: None,
+            matched_grant: None,
+            source: source.clone(),
+            execution_context: Some(execution_context.clone()),
+            redact_error_resource_scopes: false,
+            personal_lookup_connection: None,
+            audit_inputs: audit_inputs.clone(),
+            started,
+        };
+        // This synchronous phase sees no credentials or upstream state. Do not
+        // expose local handle diagnostics until the action has a viable grant.
+        let scope_identity =
+            InvocationIdentity::new(identity.principal.clone(), identity.authenticated);
+        // The provider applies its related-root bound after resolving the
+        // operation's actual container; unrelated-space exclusions stay disjoint.
+        let locator_state = if action_descriptor.requires_scope_locator_validation {
+            if self.plan_pre_scope_lookup(
+                &policy_snapshot,
+                &identity,
+                &execution_context,
+                &service,
+                &action,
+            ) == PreScopeLookupPlan::UsePerUserCredential
+                && let Err(error) = self
+                    .check_action_credential_eligibility(&service, &action, "per_user", &identity)
+            {
+                return Err(Box::new(owned::PreparationFailure::new(
+                    initial_context.clone(),
+                    Err(error),
+                )));
+            }
+            if self
+                .policy_candidates_for_action(
+                    &policy_snapshot,
+                    &identity,
+                    &execution_context,
+                    &service,
+                    &action,
+                )
+                .is_empty()
+            {
+                return Err(Box::new(owned::PreparationFailure::new(
+                    initial_context.clone(),
+                    Err(lookup_scope_denial()),
+                )));
+            }
+            let result = with_provider_context(
+                correlation.clone(),
+                service.clone(),
+                action.clone(),
+                run_provider_hook(
+                    agent_access_provider::host::hook_context(
+                        &service,
+                        &action,
+                        HookPhase::ScopeLocatorValidation,
+                        domain_reasons,
+                    ),
+                    async {
+                        provider.validate_scope_locator(
+                            agent_access_provider::host::local_scope_request(
+                                agent_access_provider::host::LocalScopeRequestParts {
+                                    service: &service,
+                                    action: &action,
+                                    inputs: &request.inputs,
+                                    execution_context: execution_context.as_str(),
+                                    identity: &scope_identity,
+                                    correlation: &correlation,
+                                },
+                            ),
+                        )
+                    },
+                ),
+            )
+            .await;
+            match result {
+                Ok(Some(state)) => Some(state),
+                Ok(None) => {
+                    return Err(Box::new(owned::PreparationFailure::new(
+                        initial_context.clone(),
+                        Err(containment_contract_error()),
+                    )));
+                }
+                Err(error) => {
+                    return Err(Box::new(owned::PreparationFailure::new(
+                        initial_context.clone(),
+                        Err(agent_access_provider::host::strip_scope_locator_details(
+                            error,
+                        )),
+                    )));
+                }
+            }
+        } else {
+            None
+        };
 
         let pre_scope_lookup = match self
             .resolve_pre_scope_lookup_if_required(
@@ -4902,6 +5241,7 @@ impl BrokerRuntime {
                     FinalizeContext {
                         admission: admission_audit,
                         search_authorization: None,
+                        location_authorization: None,
                         command: None,
                         agent_request_id,
                         broker_request_id,
@@ -4929,107 +5269,41 @@ impl BrokerRuntime {
             self.personal_lookup_connection(&service, &pre_scope_lookup);
         let mut audit_search_authorization = None;
         let mut command_authorization = None;
-        let (scopes, policy, provider_state, search_authorization) =
-            if self.command_enforced(&service, &action) {
-                let admission = self
-                    .admit_command_enforced(command_authority::CommandAdmissionRequest {
-                        snapshot: &policy_snapshot,
-                        identity: &identity,
-                        context: &execution_context,
-                        service: &service,
-                        action: &action,
-                        token: token_caveats.as_ref(),
-                        inputs: &request.inputs,
-                        correlation: &correlation,
-                        provider: &provider,
-                        domain_reasons,
-                    })
-                    .await;
-                match admission {
-                    Ok(admission) => {
-                        command_authorization = Some(admission.authorization);
-                        (
-                            admission.scopes,
-                            admission.policy,
-                            admission.state,
-                            admission.search,
-                        )
-                    }
-                    Err(error) => {
-                        return Err(Box::new(owned::PreparationFailure::new(
-                            FinalizeContext {
-                                admission: admission_audit,
-                                search_authorization: None,
-                                command: None,
-                                agent_request_id,
-                                broker_request_id,
-                                policy_generation,
-                                identity,
-                                service,
-                                action,
-                                upstream_resource_ownership: None,
-                                resource_scopes: ResourceScopes::new(),
-                                credential_mode: None,
-                                matched_grant: None,
-                                source,
-                                execution_context: Some(execution_context.clone()),
-                                redact_error_resource_scopes: false,
-                                personal_lookup_connection: personal_lookup_connection.clone(),
-                                audit_inputs: audit_inputs.clone(),
-                                started,
-                            },
-                            Err(error),
-                        )));
-                    }
+        let mut containment_authority = None;
+        let mut audit_location_authorization = None;
+        let (scopes, policy, provider_state, search_authorization) = if self
+            .command_enforced(&service, &action)
+        {
+            let admission = self
+                .admit_command_enforced(command_authority::CommandAdmissionRequest {
+                    snapshot: &policy_snapshot,
+                    identity: &identity,
+                    context: &execution_context,
+                    service: &service,
+                    action: &action,
+                    token: token_caveats.as_ref(),
+                    inputs: &request.inputs,
+                    correlation: &correlation,
+                    provider: &provider,
+                    domain_reasons,
+                })
+                .await;
+            match admission {
+                Ok(admission) => {
+                    command_authorization = Some(admission.authorization);
+                    (
+                        admission.scopes,
+                        admission.policy,
+                        admission.state,
+                        admission.search,
+                    )
                 }
-            } else if action_descriptor.native_search.is_some() {
-                let mut search_authorization = match self.plan_search_authorization(
-                    &policy_snapshot,
-                    &identity,
-                    &execution_context,
-                    &service,
-                    &action,
-                ) {
-                    Ok(search_authorization) => search_authorization,
-                    Err(error) => {
-                        return Err(Box::new(owned::PreparationFailure::new(
-                            FinalizeContext {
-                                admission: admission_audit,
-                                search_authorization: None,
-                                command: None,
-                                agent_request_id,
-                                broker_request_id,
-                                policy_generation,
-                                identity,
-                                service,
-                                action,
-                                upstream_resource_ownership: None,
-                                resource_scopes: ResourceScopes::new(),
-                                credential_mode: None,
-                                matched_grant: None,
-                                source,
-                                execution_context: Some(execution_context.clone()),
-                                redact_error_resource_scopes: false,
-                                personal_lookup_connection: personal_lookup_connection.clone(),
-                                audit_inputs: audit_inputs.clone(),
-                                started,
-                            },
-                            Err(error),
-                        )));
-                    }
-                };
-                if let Err(error) = self.intersect_agent_invoke_token_search_authorization_with(
-                    &policy_snapshot,
-                    &execution_context,
-                    token_caveats.as_ref(),
-                    &service,
-                    &action,
-                    &mut search_authorization,
-                ) {
+                Err(error) => {
                     return Err(Box::new(owned::PreparationFailure::new(
                         FinalizeContext {
                             admission: admission_audit,
                             search_authorization: None,
+                            location_authorization: None,
                             command: None,
                             agent_request_id,
                             broker_request_id,
@@ -5051,112 +5325,47 @@ impl BrokerRuntime {
                         Err(error),
                     )));
                 }
-                let scopes = search_authorization.resource_scope_summary();
-                let matched_grant = search_authorization
-                    .matched_grants
-                    .first()
-                    .cloned()
-                    .expect("search authorization has at least one matched grant");
-                let policy = PolicyDecision {
-                    credential_mode: search_authorization.credential_mode.clone(),
-                    matched_grant,
-                };
-                let provider_search_authorization = search_authorization.authorization();
-                audit_search_authorization = Some(search_authorization);
-                (scopes, policy, None, Some(provider_search_authorization))
-            } else {
-                let scope_identity =
-                    InvocationIdentity::new(identity.principal.clone(), identity.authenticated);
-                let scope_resolution = match with_provider_context(
-                    correlation.clone(),
-                    service.clone(),
-                    action.clone(),
-                    run_provider_hook(
-                        agent_access_provider::host::hook_context(
-                            &service,
-                            &action,
-                            HookPhase::ScopeResolution,
-                            domain_reasons,
-                        ),
-                        provider.resolve_scopes(agent_access_provider::host::scope_request(
-                            agent_access_provider::host::ScopeRequestParts {
-                                service: &service,
-                                action: &action,
-                                inputs: &request.inputs,
-                                execution_context: execution_context.as_str(),
-                                identity: &scope_identity,
-                                correlation: &correlation,
-                                lookup_access: pre_scope_lookup.access(),
-                            },
-                        )),
-                    ),
-                )
-                .await
-                {
-                    Ok(scopes) => scopes,
-                    Err(error) => {
-                        let error = self
-                            .explain_input_denial_before_policy(
-                                &policy_snapshot,
-                                &identity,
-                                &execution_context,
-                                &service,
-                                &action,
-                                &request.inputs,
-                                error,
-                            )
-                            .await;
-                        return Err(Box::new(owned::PreparationFailure::new(
-                            FinalizeContext {
-                                admission: admission_audit,
-                                search_authorization: None,
-                                command: None,
-                                agent_request_id,
-                                broker_request_id,
-                                policy_generation,
-                                identity,
-                                service,
-                                action,
-                                upstream_resource_ownership: None,
-                                resource_scopes: ResourceScopes::new(),
-                                credential_mode: None,
-                                matched_grant: None,
-                                source,
-                                execution_context: Some(execution_context.clone()),
-                                redact_error_resource_scopes: lookup_scopes_before_policy,
-                                personal_lookup_connection: personal_lookup_connection.clone(),
-                                audit_inputs: audit_inputs.clone(),
-                                started,
-                            },
-                            Err(if lookup_scopes_before_policy {
-                                public_lookup_scope_error(error)
-                            } else {
-                                error
-                            }),
-                        )));
-                    }
-                };
-                let (scopes, provider_state) = scope_resolution.into_parts();
-
-                if let Err(error) = self.enforce_agent_invoke_token_resource_caveats_with(
-                    &policy_snapshot,
-                    &execution_context,
-                    token_caveats.as_ref(),
-                    &service,
-                    &action,
-                    &scopes,
-                ) {
-                    let error = if lookup_scopes_before_policy {
-                        let mut public = lookup_scope_denial();
-                        public.audit = error.audit;
-                        public
-                    } else {
-                        error
-                    };
+            }
+        } else if action_descriptor.native_search.is_some() && containment_scope.is_some() {
+            match self.admit_containment_collection(
+                &policy_snapshot,
+                &identity,
+                &execution_context,
+                &service,
+                &action,
+                token_caveats.as_ref(),
+            ) {
+                Ok(admission) => {
+                    containment_authority = Some(admission.authority);
+                    audit_location_authorization = Some(containment::with_root_provenance(
+                        admission.audit,
+                        containment_root_provenance.as_ref(),
+                    ));
+                    audit_search_authorization = admission.search_audit;
+                    (admission.scopes, admission.policy, None, None)
+                }
+                Err(error) => {
+                    return Err(Box::new(owned::PreparationFailure::new(
+                        initial_context.clone(),
+                        Err(error),
+                    )));
+                }
+            }
+        } else if action_descriptor.native_search.is_some() {
+            let mut search_authorization = match self.plan_search_authorization(
+                &policy_snapshot,
+                &identity,
+                &execution_context,
+                &service,
+                &action,
+            ) {
+                Ok(search_authorization) => search_authorization,
+                Err(error) => {
                     return Err(Box::new(owned::PreparationFailure::new(
                         FinalizeContext {
                             admission: admission_audit,
                             search_authorization: None,
+                            location_authorization: None,
                             command: None,
                             agent_request_id,
                             broker_request_id,
@@ -5165,7 +5374,143 @@ impl BrokerRuntime {
                             service,
                             action,
                             upstream_resource_ownership: None,
-                            resource_scopes: scopes,
+                            resource_scopes: ResourceScopes::new(),
+                            credential_mode: None,
+                            matched_grant: None,
+                            source,
+                            execution_context: Some(execution_context.clone()),
+                            redact_error_resource_scopes: false,
+                            personal_lookup_connection: personal_lookup_connection.clone(),
+                            audit_inputs: audit_inputs.clone(),
+                            started,
+                        },
+                        Err(error),
+                    )));
+                }
+            };
+            if let Err(error) = self.intersect_agent_invoke_token_search_authorization_with(
+                &policy_snapshot,
+                &execution_context,
+                token_caveats.as_ref(),
+                &service,
+                &action,
+                &mut search_authorization,
+            ) {
+                return Err(Box::new(owned::PreparationFailure::new(
+                    FinalizeContext {
+                        admission: admission_audit,
+                        search_authorization: None,
+                        location_authorization: None,
+                        command: None,
+                        agent_request_id,
+                        broker_request_id,
+                        policy_generation,
+                        identity,
+                        service,
+                        action,
+                        upstream_resource_ownership: None,
+                        resource_scopes: ResourceScopes::new(),
+                        credential_mode: None,
+                        matched_grant: None,
+                        source,
+                        execution_context: Some(execution_context.clone()),
+                        redact_error_resource_scopes: false,
+                        personal_lookup_connection: personal_lookup_connection.clone(),
+                        audit_inputs: audit_inputs.clone(),
+                        started,
+                    },
+                    Err(error),
+                )));
+            }
+            let scopes = search_authorization.resource_scope_summary();
+            let matched_grant = search_authorization
+                .matched_grants
+                .first()
+                .cloned()
+                .expect("search authorization has at least one matched grant");
+            let policy = PolicyDecision {
+                credential_mode: search_authorization.credential_mode.clone(),
+                matched_grant,
+            };
+            let provider_search_authorization = search_authorization.authorization();
+            audit_search_authorization = Some(search_authorization.into());
+            (scopes, policy, None, Some(provider_search_authorization))
+        } else {
+            let scope_identity =
+                InvocationIdentity::new(identity.principal.clone(), identity.authenticated);
+            let scope_resolution = match with_provider_context(
+                correlation.clone(),
+                service.clone(),
+                action.clone(),
+                run_provider_hook(
+                    agent_access_provider::host::hook_context(
+                        &service,
+                        &action,
+                        HookPhase::ScopeResolution,
+                        domain_reasons,
+                    ),
+                    provider.resolve_scopes(agent_access_provider::host::scope_request(
+                        agent_access_provider::host::ScopeRequestParts {
+                            service: &service,
+                            action: &action,
+                            inputs: &request.inputs,
+                            execution_context: execution_context.as_str(),
+                            identity: &scope_identity,
+                            correlation: &correlation,
+                            lookup_access: pre_scope_lookup.access(),
+                            containment_evidence_level,
+                            containment_roots: &containment_roots,
+                            locator_state: locator_state.as_ref(),
+                        },
+                    )),
+                ),
+            )
+            .await
+            {
+                Ok(scopes) => scopes,
+                Err(error) => {
+                    let error = self
+                        .explain_input_denial_before_policy(
+                            &policy_snapshot,
+                            &identity,
+                            &execution_context,
+                            &service,
+                            &action,
+                            &request.inputs,
+                            error,
+                        )
+                        .await;
+                    let root_diagnostic = containment::root_visibility_diagnostic(
+                        error.audit.as_deref(),
+                        containment_root_provenance.as_ref(),
+                        policy_generation,
+                    );
+                    let mut error = if lookup_scopes_before_policy {
+                        public_lookup_scope_error(error)
+                    } else {
+                        error
+                    };
+                    if let Some(diagnostic) = root_diagnostic {
+                        // Preserve only the bounded host-authored diagnostic across
+                        // pre-policy concealment; all provider details stay hidden.
+                        error.audit = Some(Box::new(json!({"locationAuthorization": {
+                            "finalCheck": "unresolved", "rootVisibility": diagnostic,
+                        }})));
+                    }
+                    return Err(Box::new(owned::PreparationFailure::new(
+                        FinalizeContext {
+                            admission: admission_audit,
+                            search_authorization: None,
+                            location_authorization: None,
+                            command: None,
+                            agent_request_id,
+                            broker_request_id,
+                            policy_generation,
+                            identity,
+                            service,
+                            action,
+                            upstream_resource_ownership: None,
+                            resource_scopes: ResourceScopes::new(),
                             credential_mode: None,
                             matched_grant: None,
                             source,
@@ -5178,21 +5523,100 @@ impl BrokerRuntime {
                         Err(error),
                     )));
                 }
-
-                let policy = match self.select_policy(
-                    &policy_snapshot,
-                    &identity,
-                    &execution_context,
-                    &service,
-                    &action,
-                    &scopes,
-                ) {
-                    Ok(policy) => policy,
-                    Err(error) => {
+            };
+            let (scope_evidence, provider_state) = scope_resolution.into_parts();
+            match scope_evidence {
+                ScopeEvidence::Containment(evidence) => {
+                    let valid = containment_scope.as_ref().is_some_and(|scope| {
+                        provider_state.is_some()
+                            && evidence.site_origin() == scope.site_origin
+                            && (!evidence.has_signed_locator()
+                                || action_descriptor.requires_scope_locator_validation
+                                    && locator_state.is_some())
+                            && evidence
+                                .validate(
+                                    &scope.contract,
+                                    self.resource_types.registry(),
+                                    containment_evidence_level,
+                                )
+                                .is_ok()
+                    });
+                    if !valid {
+                        return Err(Box::new(owned::PreparationFailure::new(
+                            initial_context.clone(),
+                            Err(containment_contract_error()),
+                        )));
+                    }
+                    let scopes = evidence.projection(
+                        &containment_scope
+                            .as_ref()
+                            .expect("validated containment scope")
+                            .scope,
+                    );
+                    match self.admit_containment_evidence(
+                        &policy_snapshot,
+                        &identity,
+                        &execution_context,
+                        &service,
+                        &action,
+                        token_caveats.as_ref(),
+                        evidence,
+                        containment_evidence_level,
+                    ) {
+                        Ok(admission) => {
+                            containment_authority = Some(admission.authority);
+                            audit_location_authorization = Some(containment::with_root_provenance(
+                                admission.audit,
+                                containment_root_provenance.as_ref(),
+                            ));
+                            (admission.scopes, admission.policy, provider_state, None)
+                        }
+                        Err(error) => {
+                            let mut context = initial_context.clone();
+                            context.resource_scopes = scopes;
+                            context.redact_error_resource_scopes = lookup_scopes_before_policy;
+                            context.personal_lookup_connection = personal_lookup_connection.clone();
+                            let error = if lookup_scopes_before_policy {
+                                let mut public = lookup_scope_denial();
+                                public.audit = error.audit;
+                                public
+                            } else {
+                                error
+                            };
+                            return Err(Box::new(owned::PreparationFailure::new(
+                                context,
+                                Err(error),
+                            )));
+                        }
+                    }
+                }
+                ScopeEvidence::Scalar(scopes) => {
+                    if containment_scope.is_some() {
+                        return Err(Box::new(owned::PreparationFailure::new(
+                            initial_context.clone(),
+                            Err(containment_contract_error()),
+                        )));
+                    }
+                    if let Err(error) = self.enforce_agent_invoke_token_resource_caveats_with(
+                        &policy_snapshot,
+                        &execution_context,
+                        token_caveats.as_ref(),
+                        &service,
+                        &action,
+                        &scopes,
+                    ) {
+                        let error = if lookup_scopes_before_policy {
+                            let mut public = lookup_scope_denial();
+                            public.audit = error.audit;
+                            public
+                        } else {
+                            error
+                        };
                         return Err(Box::new(owned::PreparationFailure::new(
                             FinalizeContext {
                                 admission: admission_audit,
                                 search_authorization: None,
+                                location_authorization: None,
                                 command: None,
                                 agent_request_id,
                                 broker_request_id,
@@ -5211,18 +5635,63 @@ impl BrokerRuntime {
                                 audit_inputs: audit_inputs.clone(),
                                 started,
                             },
-                            Err(if lookup_scopes_before_policy {
-                                lookup_scope_denial()
-                            } else {
-                                error
-                            }),
+                            Err(error),
                         )));
                     }
-                };
-                command_authorization =
-                    self.broker_command_authorization(&service, &action, &scopes, &policy);
-                (scopes, policy, provider_state, None)
-            };
+
+                    let policy = match self.select_policy(
+                        &policy_snapshot,
+                        &identity,
+                        &execution_context,
+                        &service,
+                        &action,
+                        &scopes,
+                    ) {
+                        Ok(policy) => policy,
+                        Err(error) => {
+                            return Err(Box::new(owned::PreparationFailure::new(
+                                FinalizeContext {
+                                    admission: admission_audit,
+                                    search_authorization: None,
+                                    location_authorization: None,
+                                    command: None,
+                                    agent_request_id,
+                                    broker_request_id,
+                                    policy_generation,
+                                    identity,
+                                    service,
+                                    action,
+                                    upstream_resource_ownership: None,
+                                    resource_scopes: scopes,
+                                    credential_mode: None,
+                                    matched_grant: None,
+                                    source,
+                                    execution_context: Some(execution_context.clone()),
+                                    redact_error_resource_scopes: lookup_scopes_before_policy,
+                                    personal_lookup_connection: personal_lookup_connection.clone(),
+                                    audit_inputs: audit_inputs.clone(),
+                                    started,
+                                },
+                                Err(if lookup_scopes_before_policy {
+                                    lookup_scope_denial()
+                                } else {
+                                    error
+                                }),
+                            )));
+                        }
+                    };
+                    command_authorization =
+                        self.broker_command_authorization(&service, &action, &scopes, &policy);
+                    (scopes, policy, provider_state, None)
+                }
+                _ => {
+                    return Err(Box::new(owned::PreparationFailure::new(
+                        initial_context.clone(),
+                        Err(containment_contract_error()),
+                    )));
+                }
+            }
+        };
         // A command import's admission is recorded for every later outcome.
         // A command-enforced call may pass several grants' credentials and
         // reports one mode only when its grants share it.
@@ -5276,6 +5745,7 @@ impl BrokerRuntime {
                     FinalizeContext {
                         admission: admission_audit,
                         search_authorization: audit_search_authorization,
+                        location_authorization: audit_location_authorization,
                         command,
                         agent_request_id,
                         broker_request_id,
@@ -5289,7 +5759,8 @@ impl BrokerRuntime {
                         matched_grant: Some(policy.matched_grant),
                         source,
                         execution_context: Some(execution_context.clone()),
-                        redact_error_resource_scopes: lookup_scopes_before_policy,
+                        redact_error_resource_scopes: lookup_scopes_before_policy
+                            && containment_scope.is_none(),
                         personal_lookup_connection: personal_lookup_connection.clone(),
                         audit_inputs: audit_inputs.clone(),
                         started,
@@ -5312,12 +5783,15 @@ impl BrokerRuntime {
                 Ok((
                     lookup,
                     admitted_credential_mode(&policy.credential_mode)?,
-                    admitted_authority(
-                        &action_descriptor,
-                        &scopes,
-                        search_authorization,
-                        self.command_enforced(&service, &action),
-                    )?,
+                    match containment_authority {
+                        Some(authority) => authority,
+                        None => admitted_authority(
+                            &action_descriptor,
+                            &scopes,
+                            search_authorization,
+                            self.command_enforced(&service, &action),
+                        )?,
+                    },
                 ))
             }) {
             Ok(selected) => selected,
@@ -5326,6 +5800,7 @@ impl BrokerRuntime {
                     FinalizeContext {
                         admission: admission_audit,
                         search_authorization: audit_search_authorization,
+                        location_authorization: audit_location_authorization,
                         command,
                         agent_request_id,
                         broker_request_id,
@@ -5339,7 +5814,8 @@ impl BrokerRuntime {
                         matched_grant: Some(policy.matched_grant),
                         source,
                         execution_context: Some(execution_context.clone()),
-                        redact_error_resource_scopes: lookup_scopes_before_policy,
+                        redact_error_resource_scopes: lookup_scopes_before_policy
+                            && containment_scope.is_none(),
                         personal_lookup_connection: personal_lookup_connection.clone(),
                         audit_inputs: audit_inputs.clone(),
                         started,
@@ -5355,7 +5831,8 @@ impl BrokerRuntime {
                     .as_ref()?
                     .resource_scopes
                     .get(scope)?
-                    .resource_type
+                    .as_scalar()?
+                    .0
                     .clone();
                 let targets = scopes.get(scope)?;
                 if targets.len() != 1 {
@@ -5385,16 +5862,28 @@ impl BrokerRuntime {
             token_caveats.as_ref(),
             &policy.credential_mode,
         );
-        let companion_reads_authorized = self.admitted_companion_reads(
-            &policy_snapshot,
-            &identity,
-            &execution_context,
-            &service,
-            &action_descriptor,
-            &scopes,
-            token_caveats.as_ref(),
-            &policy.credential_mode,
-        );
+        let companion_reads_authorized = match &authority {
+            InvocationAuthority::Containment(source) => self.admitted_containment_companion_reads(
+                &policy_snapshot,
+                &identity,
+                &execution_context,
+                &service,
+                &action_descriptor,
+                source,
+                token_caveats.as_ref(),
+                &policy.credential_mode,
+            ),
+            _ => self.admitted_companion_reads(
+                &policy_snapshot,
+                &identity,
+                &execution_context,
+                &service,
+                &action_descriptor,
+                &scopes,
+                token_caveats.as_ref(),
+                &policy.credential_mode,
+            ),
+        };
         let admitted = agent_access_provider::host::admitted_request(
             agent_access_provider::host::AdmittedRequestParts {
                 service: service.clone(),
@@ -5421,11 +5910,13 @@ impl BrokerRuntime {
             request: admitted,
             body_parts: request.body_parts,
             state: provider_state,
-            response_options,
+            presentation,
+            presentation_body_limit,
             body_part_specs: Vec::new(),
             finalize_context: FinalizeContext {
                 admission: admission_audit,
                 search_authorization: audit_search_authorization,
+                location_authorization: audit_location_authorization,
                 command,
                 agent_request_id,
                 broker_request_id,
@@ -5439,7 +5930,8 @@ impl BrokerRuntime {
                 matched_grant: Some(policy.matched_grant),
                 source,
                 execution_context: Some(execution_context),
-                redact_error_resource_scopes: lookup_scopes_before_policy,
+                redact_error_resource_scopes: lookup_scopes_before_policy
+                    && containment_scope.is_none(),
                 personal_lookup_connection: personal_lookup_connection.clone(),
                 audit_inputs,
                 started,
@@ -5532,7 +6024,8 @@ impl BrokerRuntime {
             request,
             body_parts: _,
             state,
-            response_options,
+            presentation,
+            presentation_body_limit,
             body_part_specs: _,
             finalize_context,
         } = prepared;
@@ -5691,21 +6184,13 @@ impl BrokerRuntime {
             result
         } else {
             present_provider_outcome(
-                self.action_presentation(&service, &action).as_ref(),
-                response_options,
-                self.presentation_body_limit(&service),
+                &presentation,
+                presentation_body_limit,
                 self.config.limits.max_upstream_response_bytes,
                 result,
             )
         };
         (finalize_context, result)
-    }
-
-    fn action_presentation(&self, service: &str, action: &str) -> Option<ActionPresentation> {
-        self.services
-            .get(service)
-            .and_then(|descriptor| descriptor.action(action))
-            .and_then(|action| action.presentation)
     }
 
     /// The domain reasons `service`'s native backend registered; none for an
@@ -5882,11 +6367,12 @@ impl BrokerRuntime {
     /// scoped and denies instead of becoming unscoped.
     fn action_resource_scope(&self, service: &str, action: &str) -> Option<ActionResourceScope> {
         let (scope, binding) = self.services.get(service)?.action_resource_scope(action)?;
+        let (resource_type, _) = binding.as_scalar()?;
         Some(ActionResourceScope {
             scope: scope.to_string(),
             resource_type: self
                 .resource_types
-                .get(&binding.resource_type)
+                .get(resource_type)
                 .cloned()
                 .unwrap_or_else(|| Arc::new(UNRESOLVED_RESOURCE_TYPE.clone())),
         })
@@ -5909,6 +6395,7 @@ impl BrokerRuntime {
             return Vec::new();
         }
         let resource_scope = self.action_resource_scope(service, action);
+        let containment_scope = self.action_containment_scope(service, action);
         policy_snapshot
             .grants
             .iter()
@@ -5917,21 +6404,42 @@ impl BrokerRuntime {
                 if grant.service != service
                     || !grant.actions.iter().any(|item| item == action)
                     || !grant.execution_contexts.contains(execution_context)
-                    || (resource_scope.is_none() && !grant.resources.is_empty())
+                    || (resource_scope.is_none()
+                        && containment_scope.is_none()
+                        && !grant.resources.is_empty())
                 {
                     return None;
                 }
                 let boundary = resource_scope.as_ref().map_or_else(
                     ResourceBoundary::default,
                     |resource_scope| {
-                        policy_snapshot.resources.resolve(
-                            &grant.resources,
-                            resource_scope.resource_type.id(),
-                            execution_context.as_str(),
-                        )
+                        policy_snapshot
+                            .resources
+                            .resolve(
+                                &grant.resources,
+                                resource_scope.resource_type.id(),
+                                execution_context.as_str(),
+                            )
+                            .expect("published scalar selectors remain valid")
                     },
                 );
-                if resource_scope.is_some() && boundary.is_empty() {
+                let containment = containment_scope.as_ref().map(|scope| {
+                    self.resolve_containment_boundary(
+                        policy_snapshot,
+                        execution_context,
+                        scope,
+                        &grant.resources,
+                    )
+                });
+                if resource_scope.is_some() && boundary.is_empty()
+                    || containment
+                        .as_ref()
+                        .zip(containment_scope.as_ref())
+                        .is_some_and(|(boundary, scope)| {
+                            boundary.prove_nonempty(&scope.contract, &scope.site_origin)
+                                == OfflineContainmentProof::Empty
+                        })
+                {
                     return None;
                 }
                 Some(PolicyCandidate {
@@ -5948,6 +6456,7 @@ impl BrokerRuntime {
                     resources: grant.resources.clone(),
                     resource_scope: resource_scope.clone(),
                     boundary,
+                    containment,
                     execution_contexts: grant.execution_contexts.clone(),
                 })
             })
@@ -6349,11 +6858,10 @@ impl BrokerRuntime {
         Some(self.action_resource_type(service, action).map_or_else(
             ResourceBoundary::default,
             |resource_type| {
-                policy_snapshot.resources.resolve(
-                    selection,
-                    &resource_type,
-                    execution_context.as_str(),
-                )
+                policy_snapshot
+                    .resources
+                    .resolve(selection, &resource_type, execution_context.as_str())
+                    .expect("published scalar selectors remain valid")
             },
         ))
     }
@@ -6548,6 +7056,7 @@ impl BrokerRuntime {
         let FinalizeContext {
             admission: admission_audit,
             search_authorization,
+            location_authorization,
             command,
             agent_request_id,
             broker_request_id,
@@ -6694,6 +7203,11 @@ impl BrokerRuntime {
         } else {
             provider_audit
         };
+        let provider_audit = containment::attach_containment_audit(
+            provider_audit,
+            location_authorization,
+            policy_generation,
+        );
         let provider_audit = attach_admission_audit(provider_audit, admission_audit);
         let credential_connection = self.audit_credential_connection(
             &service,
@@ -7894,6 +8408,7 @@ struct PolicyCandidate {
     execution_contexts: Vec<ExecutionContext>,
     resource_scope: Option<ActionResourceScope>,
     boundary: ResourceBoundary,
+    containment: Option<ContainmentBoundary>,
 }
 
 #[derive(Debug, Clone)]
@@ -8066,6 +8581,9 @@ fn has_per_user_setup_grant(
 }
 
 fn candidate_authorizes_scopes(candidate: &PolicyCandidate, resolved: &ResourceScopes) -> bool {
+    if candidate.containment.is_some() {
+        return false;
+    }
     let Some(resource_scope) = &candidate.resource_scope else {
         return resolved.is_empty();
     };
@@ -8647,7 +9165,7 @@ pub struct BrokerResponse<T> {
 #[serde(rename_all = "camelCase")]
 pub struct AuditRecord {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub search_authorization: Option<SearchAuthorizationPlan>,
+    pub search_authorization: Option<SearchAuthorizationAudit>,
     pub timestamp: String,
     pub agent_request_id: String,
     pub broker_request_id: String,
@@ -10458,3 +10976,7 @@ pub fn fake_service_credential(token_ref: impl Into<String>) -> CredentialConfig
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "runtime/presentation_tests.rs"]
+mod presentation_tests;

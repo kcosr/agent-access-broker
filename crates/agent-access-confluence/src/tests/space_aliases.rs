@@ -35,6 +35,27 @@ fn rails_page(link: &str) -> Value {
     )
 }
 
+fn v2_page(id: &str, version: u64) -> Value {
+    json!({"id":id,"type":"page","status":"current","title":"Deployment Notes",
+        "spaceId":SPACE_ID,"parentId":null,"parentType":null,"version":{"number":version}})
+}
+fn v2_space(link: Option<&str>) -> Value {
+    let mut space = json!({"id":SPACE_ID,"key":"ROCKET","status":"current","homepageId":"55555","currentActiveAlias":"VECTOR"});
+    if let Some(link) = link {
+        space["_links"] = json!({"webui":link});
+    }
+    space
+}
+async fn mount_page_location(server: &MockServer, id: &str) {
+    mount_json(server, format!("/wiki/api/v2/pages/{id}"), v2_page(id, 3)).await;
+    mount_json(
+        server,
+        format!("/wiki/api/v2/spaces/{SPACE_ID}"),
+        v2_space(Some("/spaces/VECTOR")),
+    )
+    .await;
+}
+
 fn alias_invocation(action: &str, inputs: Value) -> ProviderInvocation {
     let search = matches!(action, "search" | "blog.search");
     let mut resource_scopes = ResourceScopes::new();
@@ -186,7 +207,7 @@ async fn search_returns_aliased_links_and_replaces_a_foreign_one_without_failing
     )
     .await;
     let result = alias_provider(&server)
-        .invoke_checked(alias_invocation(
+        .invoke_fixture(alias_invocation(
             "search",
             json!({
                 "query": {
@@ -261,7 +282,7 @@ async fn blog_search_returns_aliased_links_and_replaces_a_foreign_one_without_fa
     )
     .await;
     let result = alias_provider(&server)
-        .invoke_checked(alias_invocation(
+        .invoke_fixture(alias_invocation(
             "blog.search",
             json!({
                 "query": { "type": "cql", "value": r#"text ~ "launch""# },
@@ -296,6 +317,7 @@ async fn blog_search_returns_aliased_links_and_replaces_a_foreign_one_without_fa
 #[tokio::test]
 async fn page_url_locators_with_an_alias_scope_the_space_key() {
     let server = MockServer::start().await;
+    mount_page_location(&server, PAGE_ID).await;
     mount_json(
         &server,
         format!("/wiki/rest/api/content/{PAGE_ID}"),
@@ -336,7 +358,7 @@ async fn page_url_locators_with_an_alias_scope_the_space_key() {
             ),
         ] {
             let scopes = provider
-                .lookup_scopes(action, &inputs, Some(&lookup()))
+                .fixture_space_lookup(action, &inputs, Some(&lookup()))
                 .await
                 .unwrap_or_else(|error| panic!("{action} {url}: {error:?}"));
             assert_eq!(scopes["space"], vec!["ROCKET"], "{action} {url}");
@@ -348,14 +370,14 @@ async fn page_url_locators_with_an_alias_scope_the_space_key() {
     let lowercase_url = format!("{SITE}/spaces/vector/pages/{PAGE_ID}/Deployment+Notes");
     for url in [&foreign_url, &lowercase_url] {
         let error = provider
-            .lookup_scopes("page.view", &json!({ "url": url }), Some(&lookup()))
+            .fixture_space_lookup("page.view", &json!({ "url": url }), Some(&lookup()))
             .await
             .unwrap_err();
         assert_eq!(error.decision(), Decision::Deny, "{url}");
         assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved, "{url}");
         assert_eq!(
             error.message,
-            "Confluence page URL space is neither the page's space key nor its URL alias"
+            "Confluence content location could not be confirmed"
         );
     }
 
@@ -370,7 +392,7 @@ async fn page_url_locators_with_an_alias_scope_the_space_key() {
     );
 
     let view = provider
-        .invoke_checked(alias_invocation("page.view", json!({ "url": aliased_url })))
+        .invoke_fixture(alias_invocation("page.view", json!({ "url": aliased_url })))
         .await
         .unwrap();
     assert_eq!(view.result["space"], "ROCKET");
@@ -448,24 +470,24 @@ async fn blog_url_locators_and_reads_use_the_v2_space_alias() {
         let aliased_url = format!("{SITE}{ALIASED_BLOG_LINK}");
         for action in ["blog.view", "blog.attachment.list"] {
             let scopes = provider
-                .lookup_scopes(action, &json!({ "url": aliased_url }), Some(&lookup()))
+                .fixture_space_lookup(action, &json!({ "url": aliased_url }), Some(&lookup()))
                 .await
                 .unwrap();
             assert_eq!(scopes["space"], vec!["ROCKET"], "{action} {space_link:?}");
         }
         let foreign_url = format!("{SITE}/spaces/OTHER/blog/2026/10/01/{BLOG_ID}/Release+notes");
         let error = provider
-            .lookup_scopes("blog.view", &json!({ "url": foreign_url }), Some(&lookup()))
+            .fixture_space_lookup("blog.view", &json!({ "url": foreign_url }), Some(&lookup()))
             .await
             .unwrap_err();
-        assert_eq!(error.reason_code(), ReasonCode::LocatorInvalid);
+        assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
         assert_eq!(
             error.message,
-            "Confluence blog URL space is neither the resolved blog's space key nor its URL alias"
+            "Confluence content location could not be confirmed"
         );
 
         let view = provider
-            .invoke_checked(alias_invocation("blog.view", json!({ "url": aliased_url })))
+            .invoke_fixture(alias_invocation("blog.view", json!({ "url": aliased_url })))
             .await
             .unwrap();
         assert_eq!(view.result["space"], "ROCKET");
@@ -568,9 +590,9 @@ fn fallback_audit_keeps_a_bounded_count_and_sample() {
     assert!(browser_link_shape(&long, &config).ends_with("/..."));
 }
 
-/// `page.create` reads the v2 space object before creating; the v2 create
-/// response names no space, so the created page's links take that space's
-/// alias, with or without a space browser link.
+/// `page.create` proves the current v2 space and homepage before creating.
+/// The response carries the numeric space ID; browser links retain the
+/// confirmed space key and alias, with or without a space browser link.
 #[tokio::test]
 async fn page_create_keeps_aliased_links_from_the_resolved_space() {
     const CREATED_LINK: &str = "/spaces/VECTOR/pages/900001/Child";
@@ -609,10 +631,15 @@ async fn page_create_keeps_aliased_links_from_the_resolved_space() {
             .expect(1)
             .mount(&server)
             .await;
-        mount_json(&server, "/wiki/api/v2/pages/900001".to_string(), created).await;
+        mount_json(
+            &server,
+            "/wiki/api/v2/pages/55555".to_string(),
+            v2_page("55555", 3),
+        )
+        .await;
 
         let result = alias_provider(&server)
-            .invoke_checked(alias_invocation(
+            .invoke_fixture(alias_invocation(
                 "page.create",
                 json!({
                     "space": "ROCKET",
@@ -642,22 +669,33 @@ async fn page_create_keeps_aliased_links_from_the_resolved_space() {
 async fn page_update_keeps_aliased_links_when_the_response_omits_the_space_link() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path(format!("/wiki/rest/api/content/{PAGE_ID}")))
-        .respond_with(ResponseTemplate::new(200).set_body_json(rails_page(ALIASED_PAGE_LINK)))
+        .and(path("/wiki/api/v2/pages"))
+        .and(query_param("id", PAGE_ID))
+        .and(query_param("status", "current"))
+        .and(query_param("subtype", "page"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"results":[v2_page(PAGE_ID,3)]})),
+        )
+        .expect(2)
         .mount(&server)
         .await;
-    let mut updated = rails_page(ALIASED_PAGE_LINK);
-    updated["space"] = json!({ "key": "ROCKET" });
-    updated["version"] = json!({ "number": 4 });
+    mount_json(
+        &server,
+        format!("/wiki/api/v2/spaces/{SPACE_ID}"),
+        v2_space(Some("/spaces/VECTOR")),
+    )
+    .await;
+    let mut updated = v2_page(PAGE_ID, 4);
+    updated["_links"] = json!({"webui":ALIASED_PAGE_LINK});
     Mock::given(method("PUT"))
-        .and(path(format!("/wiki/rest/api/content/{PAGE_ID}")))
+        .and(path(format!("/wiki/api/v2/pages/{PAGE_ID}")))
         .respond_with(ResponseTemplate::new(200).set_body_json(updated))
         .expect(1)
         .mount(&server)
         .await;
 
     let result = alias_provider(&server)
-        .invoke_checked(alias_invocation(
+        .invoke_fixture(alias_invocation(
             "page.update",
             json!({
                 "pageId": PAGE_ID,
@@ -711,29 +749,31 @@ async fn searches_naming_an_alias_are_checked_against_the_authorized_boundary() 
             "search",
             all_except(&[]),
             &alias_cql,
-            Some("type = page AND (space = VECTOR)"),
-            Ok(()),
+            Some("type = page AND ((((type = page)))) AND (space = VECTOR)"),
+            Ok(true),
         ),
         (
             "blog.search",
             all_except(&[]),
             &alias_cql,
-            Some("type = blogpost AND (space = VECTOR)"),
-            Ok(()),
+            Some("type = blogpost AND ((((type = blogpost)))) AND (space = VECTOR)"),
+            Ok(true),
         ),
         (
             "search",
             all_except(&[]),
             &alias_spaces,
-            Some("type = page AND space IN (VECTOR)"),
-            Ok(()),
+            Some("type = page AND ((((type = page)))) AND (space = \"VECTOR\")"),
+            Ok(true),
         ),
         (
             "search",
             finite(&["ENG", "ROCKET"]),
             &alias_cql,
-            Some("type = page AND space IN (ENG, ROCKET) AND (space = VECTOR)"),
-            Ok(()),
+            Some(
+                "type = page AND ((((space = \"ENG\" OR space = \"ROCKET\")))) AND (space = VECTOR)",
+            ),
+            Ok(true),
         ),
         // A finite boundary admits only granted keys in `spaces`.
         (
@@ -747,65 +787,71 @@ async fn searches_naming_an_alias_are_checked_against_the_authorized_boundary() 
             "search",
             finite(&["ENG"]),
             &alias_cql,
-            Some("type = page AND space IN (ENG) AND (space = VECTOR)"),
-            Err(ReasonCode::ScopeUnresolved),
+            Some("type = page AND ((((space = \"ENG\")))) AND (space = VECTOR)"),
+            Ok(false),
         ),
         (
             "search",
             all_except(&["ROCKET"]),
             &alias_cql,
-            Some("type = page AND space NOT IN (ROCKET) AND (space = VECTOR)"),
-            Err(ReasonCode::ScopeUnresolved),
+            Some(
+                "type = page AND ((((type = page) AND NOT (space = \"ROCKET\")))) AND (space = VECTOR)",
+            ),
+            Ok(false),
         ),
         (
             "search",
             all_except(&["ROCKET"]),
             &alias_spaces,
-            Some("type = page AND space IN (VECTOR)"),
-            Err(ReasonCode::ScopeUnresolved),
+            Some(
+                "type = page AND ((((type = page) AND NOT (space = \"ROCKET\")))) AND (space = \"VECTOR\")",
+            ),
+            Ok(false),
         ),
         (
             "blog.search",
             all_except(&["ROCKET"]),
             &alias_cql,
-            Some("type = blogpost AND space NOT IN (ROCKET) AND (space = VECTOR)"),
-            Err(ReasonCode::ScopeUnresolved),
+            Some(
+                "type = blogpost AND ((((type = blogpost) AND NOT (space = \"ROCKET\")))) AND (space = VECTOR)",
+            ),
+            Ok(false),
         ),
         (
             "search",
             finite(&["ENG", "ROCKET"]),
             &exclusion_cql,
             Some(
-                "type = page AND space IN (ENG, ROCKET) AND (space != ARCHIVE OR (space = VECTOR AND id NOT IN (12345)))",
+                "type = page AND ((((space = \"ENG\" OR space = \"ROCKET\")))) AND (space != ARCHIVE OR (space = VECTOR AND id NOT IN (12345)))",
             ),
-            Ok(()),
+            Ok(true),
         ),
         (
             "blog.search",
             finite(&["ENG", "ROCKET"]),
             &exclusion_cql,
             Some(
-                "type = blogpost AND space IN (ENG, ROCKET) AND (space != ARCHIVE OR (space = VECTOR AND id NOT IN (12345)))",
+                "type = blogpost AND ((((space = \"ENG\" OR space = \"ROCKET\")))) AND (space != ARCHIVE OR (space = VECTOR AND id NOT IN (12345)))",
             ),
-            Ok(()),
+            Ok(true),
         ),
         (
             "search",
             all_except(&["ROCKET"]),
             &exclusion_cql,
             Some(
-                "type = page AND space NOT IN (ROCKET) AND (space != ARCHIVE OR (space = VECTOR AND id NOT IN (12345)))",
+                "type = page AND ((((type = page) AND NOT (space = \"ROCKET\")))) AND (space != ARCHIVE OR (space = VECTOR AND id NOT IN (12345)))",
             ),
-            Err(ReasonCode::ScopeUnresolved),
+            Ok(false),
         ),
         (
             "blog.search",
             all_except(&["ROCKET"]),
             &exclusion_cql,
             Some(
-                "type = blogpost AND space NOT IN (ROCKET) AND (space != ARCHIVE OR (space = VECTOR AND id NOT IN (12345)))",
+                "type = blogpost AND ((((type = blogpost) AND NOT (space = \"ROCKET\")))) AND (space != ARCHIVE OR (space = VECTOR AND id NOT IN (12345)))",
             ),
-            Err(ReasonCode::ScopeUnresolved),
+            Ok(false),
         ),
     ] {
         let server = MockServer::start().await;
@@ -832,18 +878,43 @@ async fn searches_naming_an_alias_are_checked_against_the_authorized_boundary() 
             .lookup_credential(credential())
             .search(SearchAuthorization::new("space".to_string(), scope.clone()))
             .build();
-        let result = alias_provider(&server).invoke_checked(request).await;
+        let result = alias_provider(&server).invoke_fixture(request).await;
         let case = format!("{action} {scope:?} {inputs}");
         match outcome {
-            Ok(()) => {
+            Ok(allowed) => {
                 let result = result.unwrap_or_else(|error| panic!("{case}: {error:?}"));
                 let field = if action == "search" { "pages" } else { "blogs" };
-                assert_eq!(result.result[field][0]["space"], "ROCKET", "{case}");
-                assert_eq!(
-                    result.audit.as_ref().unwrap()["observedSpaces"],
-                    json!(["ROCKET"]),
-                    "{case}"
-                );
+                let rows = result.result[field].as_array().unwrap();
+                if allowed {
+                    assert_eq!(rows.len(), 1, "{case}");
+                    assert_eq!(rows[0]["space"], "ROCKET", "{case}");
+                    assert_eq!(
+                        result.audit.as_ref().unwrap()["observedSpaces"],
+                        json!(["ROCKET"]),
+                        "{case}"
+                    );
+                } else {
+                    assert!(rows.is_empty(), "{case}");
+                    assert_eq!(
+                        result.audit.as_ref().unwrap()["observedSpaces"],
+                        json!([]),
+                        "{case}"
+                    );
+                    assert_eq!(result.result["scanStatus"], "exhausted", "{case}");
+                    assert!(
+                        !result.result.to_string().contains("Deployment Notes"),
+                        "{case}"
+                    );
+                    assert!(
+                        !result
+                            .object_ids
+                            .as_ref()
+                            .unwrap()
+                            .to_string()
+                            .contains(PAGE_ID),
+                        "{case}"
+                    );
+                }
             }
             Err(reason) => {
                 let error = result.unwrap_err();

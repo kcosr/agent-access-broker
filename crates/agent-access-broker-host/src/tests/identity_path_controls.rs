@@ -890,7 +890,7 @@ async fn fingerprint_rest_read_only_path_filters_specs_and_denies_writes_before_
     let f = fixture().await;
     let send_request = |action: &str| {
         json!({
-            "version": "agent-access.send.v1", "kind": "invoke",
+            "version": "agent-access.send.v2", "kind": "invoke",
             "service": "fake", "action": action,
             "inputs": {"project": "TEST", "message": "synthetic"}
         })

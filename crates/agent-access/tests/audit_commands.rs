@@ -533,8 +533,8 @@ async fn generic_send_discovers_and_reads_both_audit_option_routes() {
     Mock::given(method("GET"))
         .and(path("/v1/spec/catalog"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "version": "agent-access.catalog.v2", "identity": {}, "services": [], "routes": routes,
-            "send": {"version": "agent-access.send.v1", "catalogRequired": true}
+            "version": "agent-access.catalog.v3", "identity": {}, "services": [], "routes": routes,
+            "send": {"version": "agent-access.send.v2", "catalogRequired": true}
         })))
         .mount(&server)
         .await;
@@ -555,7 +555,7 @@ async fn generic_send_discovers_and_reads_both_audit_option_routes() {
             .mount(&server)
             .await;
         let request = serde_json::json!({
-            "version": "agent-access.send.v1", "kind": "http", "method": "GET", "route": route
+            "version": "agent-access.send.v2", "kind": "http", "method": "GET", "route": route
         });
         let output = run(
             &server.uri(),

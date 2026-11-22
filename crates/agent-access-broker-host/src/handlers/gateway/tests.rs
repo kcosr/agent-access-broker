@@ -3443,6 +3443,7 @@ fn gateway_resource(
 ) -> agent_access_core::ResourceDefinition {
     agent_access_core::ResourceDefinition {
         id: id.to_string(),
+        browser_url: None,
         display_name: None,
         resource_type: agent_access_provider::GIT_REPOSITORY_RESOURCE.id().clone(),
         selector,

@@ -68,7 +68,7 @@ These traits are intentionally implementable:
 | `Provider` | Each provider instance: scope resolution, body admission, credential verification and invocation. |
 | `BackendConfig` | Each provider's parsed `[providers.<kind>]` table. |
 | `OAuthDialect` | An OAuth companion for one family of authorization servers. |
-| `EmbeddedBodyCodec`, `WholeResultRenderer` | Optional presentation of rich bodies and whole results. |
+| `EmbeddedBodyCodec` | Bounded selection of one concrete representation for a declared rich-content field. |
 | `host::UpstreamClientFactory`, `StableSigningKey`, `DelegatedLease` | The host, and deterministic doubles in provider tests. |
 
 Supported types are built through constructors and builders, never struct
@@ -323,17 +323,66 @@ must not apply one variant's restrictions to values another variant accepts.
 These are authoring conventions; descriptor validation continues to accept
 valid schemas using combinators.
 
-Embedded presentation paths use `presentation::BodyPathSegment::Field` for a
-required object field and `Each` for array elements. `OptionalField` skips a
-path only when that property is absent from an object, as with an unrequested
-Jira `commentPage`. A present value must satisfy the remaining path and body
-validation; null or malformed intermediate values still fail. Required `Field`
-segments retain their strict behavior. `EmbeddedBody::owner_optional_prefixes()`
-returns escaped pointer prefixes ending at optional fields, relative to the
-provider result. The catalog adds `/result` and exposes these as
-`optionalRenderedBodyOwnerPrefixes`, omitting an empty list. A shared prefix is
-optional only if every declared body path through it permits absence; ordinary
-`renderedBodyOwners` pointers are unchanged.
+Rich-content actions declare `presentation::ActionPresentation::new(bodies,
+formats, native)` with a nonempty list of `EmbeddedBody` declarations, supported
+`OutputContentFormat` values and a native value in that same set. The concrete
+formats are Markdown, text, ADF and Confluence storage. The enum is
+non-exhaustive; downstream matches must reject unknown variants. An action
+without configured body support has no presentation. Ordinary results remain
+JSON, with one `{format,value}` at each declared body field. ADF values are JSON
+objects; the other values are strings.
+
+Build each field with `EmbeddedBody::new(owner_path, field, codec)` and opt into
+terminal absence or null with `.optional()` and `.nullable()`. `field` is a
+literal property name. `BodyPathSegment::Field` requires an object property;
+`Each` traverses an array. `OptionalField` permits absence, `NullableField`
+permits null, and `OptionalNullableField` permits either. Other present shapes
+fail. `.owner_equals(&[(key, value), ...])` restricts a body to owners matching
+all of up to four direct string predicates, such as supported ADF custom fields.
+An optional declaration describes conditional body omission; the native provider
+still validates sources required by the specific invocation.
+
+A codec's `supported_formats()` must include every format its action advertises.
+`select(source, format, max_body_bytes, budget)` validates the native terminal
+value and returns `Some(SelectedContent)` or `None` for an absent optional source.
+It must validate every fetched source even when selecting only one, retain
+source and parser limits, and never fall back after malformed content or budget
+exhaustion. `SelectedContent::markdown`, `text`, `adf` and `storage` enforce
+format/value type pairing. Its fields are private; `adf` takes a JSON map.
+Use the content helper crate's separate `validate_*_bounded_with_budget` functions
+for preflight, and `select_*_bounded_with_budget` for final selection. Preflight
+never needs to allocate or clone selected native content.
+
+Set a soft service preference with
+`ServiceDescriptor::with_preferred_output_content_format(format)`.
+`ResponseOptions` carries optional exact `output_content_format` and soft
+`preferred_output_content_format` controls; present null and invalid values are
+rejected. The host calls `resolve_response_options` once before provider work.
+An exact choice must be supported. Otherwise the first available request,
+service or built-in Markdown preference wins; an unsupported preference selects
+the declared native format, without trying lower preference tiers. Body-free
+actions ignore preferences and reject exact choices. `ResolvedPresentation`
+privately retains the chosen format and matching descriptor for `present_result`.
+
+Catalog `bodyFields` metadata comes from `ActionPresentation::body_fields()`.
+It uses envelope-rooted owner pointers, explicit optional and nullable prefixes,
+a literal terminal field, terminal optional/null flags, and optional owner
+predicates. `validate_body_fields` bounds and checks this metadata;
+`validate_selected_content` checks a full successful envelope only at those
+locations. Exact selectors require the same returned tag. Soft preferences
+accept any recognized concrete tag with its correct value type, since capability
+may change between discovery and execution. No cached supported-format set is
+assumed. Compact errors and file/mutation receipts use their separate contracts.
+
+A provider-confirmed successful body-bearing mutation attaches
+`.with_presentation_recovery_receipt(MutationReceipt::applied())` to its
+`ProviderResult`. The receipt is nonserialized internal metadata. The host
+retains it independently before presentation and can return
+`mutationStatus: "applied", retrySafe: false` if selection or the final result
+size check fails, preserving the original reason code and upstream/audit facts.
+The fixed error message distinguishes completed mutation from unusable output.
+Read-only outcomes never receive a recovery receipt. Do not derive success from
+`read_only = false`, a generic `Ok`, or unvalidated upstream body fields.
 
 `listing_of(ResourceType)` declares ordinary live enumeration of canonical items
 of that type without a required query, such as a project collection. Query
@@ -423,12 +472,12 @@ of the action's success `result`, which for a raw download is its metadata
 `result`. Add `.with_error(error)` when the action's provider errors carry a
 `result` of their own, such as a batch's partial results. The schemas describe
 the provider's final JSON before presentation and before the Broker envelope:
-never the upstream API model, MCP wrappers, `renderedBody` companions or
-whole-result Markdown, which the host adds. The host composes them with the
-action's presentation, the shared failure fields and each transport's delivery
-shapes into the action's [MCP output schema](mcp.md#output-schemas), which
-MCP connections advertise when they select output schemas, its catalog
-`resultSchemas` and its typed
+never the upstream API model, MCP wrappers or the selected rich-text values
+that the host produces. The catalog exposes these raw payload schemas as
+`resultSchemas`. The host composes them with the action's selected-content
+presentation, the shared failure fields and each transport's delivery shapes
+into its [MCP output schema](mcp.md#output-schemas), advertised when the
+connection selects output schemas, and typed
 [OpenAPI responses](http-api.md#result-schemas-and-typed-responses). They are
 optional: an action without them publishes no output schema. Every shipped
 native action declares them, and a new provider should.
@@ -458,14 +507,32 @@ bundle.
   `$defs`, a remaining `$ref`, `format`, `pattern`, `allOf`, `oneOf`, `not`,
   `if`/`then`/`else`, tuple `items`, `prefixItems`, `contains`, `dependencies`,
   `dependent*`, `unevaluated*`, anchors, `title`, `default` and `examples`.
-- Both roots are `{"type": "object", ...}`.
+- The root describes the value the provider actually emits: object, array,
+  scalar or null. The Broker/MCP envelope remains an object independently of
+  the provider's `result` type.
 - The compact JSON of the success and error schemas together is at most 8,192
   bytes, after bundle references are inlined.
-- Every rendered-body owner path of the action's presentation resolves in the
-  success schema: each step names a declared property or array `items`,
-  following every `anyOf` branch, and the path reaches an object schema. The
-  host adds the optional `renderedBody` there, and in the error schema wherever
-  the path resolves.
+- Every declared `BodyField` resolves in the success schema through named
+  properties and array `items` to its terminal field. The host replaces that
+  field's native value schema with the four concrete selected `{format,value}`
+  alternatives, and does the same in error schemas wherever the field resolves.
+  Composition preserves optional/nullable owners and fields, and `ownerEquals`
+  predicates: a nonmatching owner's field
+  keeps its original schema.
+
+`presentation::selected_content_schema(&[OutputContentFormat])` constructs the
+concrete format/value alternatives. The composition helper
+`presentation::inject_selected_content_schema(&mut Value, &BodyField,
+&[OutputContentFormat])` updates a result schema and returns
+`Result<(), presentation::UnresolvedBodyField>`. Its owner paths start at
+`/result`, while the schema passed to it describes only that payload. Providers
+supply raw schemas; core uses these helpers for delivered representations.
+For provider failures, composition retains native fields for denials, ordinary
+errors and mutation receipts, and adds the selected form for allowed results
+that undergo presentation. Composed schemas cover all four concrete formats,
+so a valid preference-selected response after configuration reload can use a
+newly enabled format; the action's `outputContentFormats` still determines
+which exact per-call format selections are available.
 
 Write the schemas as action-wide supersets across every supported
 configuration and input; never narrow them to the current configuration. Mark a
@@ -539,8 +606,11 @@ attributes)` takes an identifier (`^[a-z][a-z0-9_]{0,63}$`), labels, an
 example, a canonical-target grammar and the type's private string attributes
 (`&[]` for none), and supports exact and all selectors.
 `with_namespace(NamespaceSelectorDescriptor::new(..))` adds namespace selectors
-and `with_action_inputs` adds an action-input projection. Exact selectors and every resolved target must
-satisfy the canonical grammar, which keeps namespace prefix matching sound.
+and `with_action_inputs` adds an action-input projection.
+`with_supports_all(false)` removes all selectors; `with_exact_validator` can
+supply a narrower exact grammar. `with_subtree(SubtreeSelectorDescriptor)`
+adds a distinct containment selector, never namespace prefix matching.
+Each supported kind validates its own canonical grammar.
 Policy validation, resource management, discovery and the portal read the
 published metadata.
 
@@ -605,6 +675,62 @@ such as CloudBees CI controller aliases, which discovery filters by each
 caller's coverage. Neither roots nor renderer support authorize anything. Each
 action has one resource scope, but that scope may name several resources that
 one grant must cover together, as GitLab cross-project operations do.
+
+### Typed containment contracts
+
+Native content providers can declare `ResourceScopeCapabilities::Containment`
+with a `ContainmentScopeCapabilities` contract: domain, allowed selector kinds
+per type, container types, target/ancestor kinds and effects. Effects distinguish
+content points, child placement and whole-subtree impact. Scalar scopes retain
+an explicit `Scalar` variant. Imported, command, gateway and private-attribute
+scopes cannot opt into native containment.
+
+`ResourceTypeDescriptor::with_selector_projection` supplies pure authored
+`ResourceSelectorProjection` values containing site origin and root kind. It does
+not assert the root's current containers. Core consumes `TypedResourceSelector`
+without parsing provider URLs; the scope contract declares container dimensions.
+Exact-container/content intersections can be Conditional offline. Retain all
+operands when proving grant, token and requested-container conjunctions. `with_location_normalizer` and a service's
+`LocationEntryCapability` enable management-only URL entry. The normalizer takes
+the configured canonical site from the service's `UpstreamAuthority`, has no
+network or credential capability, and reports `verification: "not_checked"`.
+Strict stored-selector validation remains separate from editor normalization.
+
+The host requests `ContainerOnly` or `CompleteLineage` evidence through
+`ScopeRequest::containment_evidence_level()` and supplies relevant typed roots.
+Return `ScopeResolution::containment(ContainmentEvidence)` with trusted point,
+child-placement or current/proposed-subtree obligations. Evidence has no caller
+JSON deserializer. Validation checks canonical identity, domain, site, kinds,
+containers, complete ancestry, cycles and budgets. Each `ContainmentAncestor`
+contains its identity and observed containers, which must agree with the target's
+complete container set. Repeated identities across an operation cannot contradict
+those facts. Ancestors remain evidence, not additional targets or grants. Missing
+required evidence is a contract error. ContainerOnly has no invented ancestry.
+A related root may use ContainerOnly only when observed containers prove it
+disjoint from every current/proposed subtree-impact region; other related roots
+need complete lineage. Keep at most 64 potentially overlapping roots, a raw
+256-entry defensive cap and 256 unique operation nodes including all classified
+roots and ordinary operation locations. Final comparison retains those witnesses.
+`ScopeResolution::scopes()` is checked and cannot flatten containment to scalars.
+
+`Provider::validate_scope_locator` is a synchronous local hook before credentials
+or upstream lookup. Use it only for fixed local input/handle failures that must
+remain recognizable. It can return private provisional state, never an admitted
+result or upstream scope. Ordinary upstream existence failures remain concealed
+until policy authorizes them.
+
+Core owns grant candidacy, precedence, token intersection and authority digests.
+`InvocationAuthority::Containment` carries validated operation evidence and
+`check_same_location` for the final fence. `ContainmentCollection` carries the
+winning-boundary union, independent token boundary, evidence level and digest;
+`matches_candidate` is checked and treats unknown evidence as an error. Providers
+must not rerank grants or select a lower credential during filtering.
+`uses_only_scalar_container_selectors()` inspects every winning grant and token
+inclusion/exclusion against the declared container types. Confluence uses it with
+ContainerOnly to retain its indexed scalar-space path; any content selector
+requires fresh initial/final candidate evidence. Confluence also compiles complete
+authority upstream to prevent caller filters from probing unrelated content. Keep private graph facts for kinds/edges omitted from public
+selectable ancestry and compare those at the final check.
 
 ### Scope resolution
 
@@ -795,7 +921,8 @@ sequenceDiagram
   scope unions clauses. Empty clauses admit nothing. Namespace selectors use the
   shared descendant matcher and retain exclusions local to each grant.
 
-`resource_scopes()` and `search_authorization()` return the expected variant,
+`resource_scopes()`, `search_authorization()`, `containment_authorization()` and
+`containment_collection_authorization()` return the expected variant,
 or an `AuthorityMismatch` that `?` turns into `broker_provider_contract_failed`.
 `UpstreamConstrained` providers constrain the upstream query before pagination
 and check every result. `ResultFiltered` providers may retrieve unauthorized
@@ -808,8 +935,10 @@ command enforcement from accepted resource declarations and input pointers.
 
 The SDK supplies normalized union/intersection, `covers` proofs over the complete
 union, and `exact_projection()` for consumers with exact/all resource types.
-Jira and Confluence use that strict projection to compose JQL/CQL; unexpected
-namespaces are contract errors. `ExactSearchProjection` is derived query data,
+Jira uses that strict projection to compose JQL; unexpected namespaces are
+contract errors. Confluence content collections use typed containment authority
+instead. `ScalarResourceSelector` owns scalar matching and algebra; checked
+conversion from a stored `ResourceSelector` rejects subtree without erasing it. `ExactSearchProjection` is derived query data,
 not an alternative accepted invocation authority. Core owns the command
 protocol's exact resources/any-except projection and preserves per-grant modes.
 
@@ -2114,8 +2243,8 @@ clients for requests that must not repeat.
 ### SDK test support
 
 Enable the SDK's `test-support` feature in a provider's development
-dependencies. It adds construction helpers only and never changes runtime
-behavior:
+dependencies. It adds construction and conformance helpers without changing
+production runtime behavior:
 
 - `TestHost` lends a `BuildContext` with configurable limits, attribution and
   stable signing key, and a deterministic, offline client factory. Its clients
@@ -2166,7 +2295,7 @@ point: a namespace-capable resource type with an action-input projection and
 configured roots, typed configuration, a managed credential profile, JSON,
 raw-download and multipart-upload actions (the upload token-only), a declared
 companion read guarded by `companion_reads_authorized()`, required and optional
-(`OptionalField`) embedded bodies, whole-result presentation, and an endpoint
+(`OptionalField`) embedded bodies with concrete output selection, and an endpoint
 type whose private key a single-attempt action consumes. It depends only on
 the SDK. Its unit tests show how to drive each
 shape with `TestHost`, `InvocationBuilder` and a mock upstream, and the host's
@@ -2719,7 +2848,7 @@ mod tests {
             json!({"notebook": "team-handbook", "note": "42"}),
         );
         let resolution = provider.resolve_scopes(fixture.request()).await.unwrap();
-        assert_eq!(resolution.scopes()["notebook"], ["team-handbook"]);
+        assert_eq!(resolution.scopes().unwrap()["notebook"], ["team-handbook"]);
         assert!(resolution.state().is_none());
     }
 

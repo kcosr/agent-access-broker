@@ -1,6 +1,6 @@
 use super::*;
 use agent_access_provider::presentation::{
-    ReadContentFormat, ResponseFormat, ResponseOptions, present_result,
+    OutputContentFormat, ResponseOptions, present_result, resolve_response_options,
 };
 use wiremock::matchers::{header, query_param};
 
@@ -129,14 +129,13 @@ async fn mount_source_reads(api: &MockServer, value: Value, include_links: bool)
         .await;
 }
 
-fn markdown(mut result: Value, limit: u64) -> Result<Value, ProviderError> {
-    present_result(
-        present::presentation("issue.view").as_ref(),
-        &mut result,
-        ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
-        4096,
-        limit,
+fn selected(mut result: Value, limit: u64) -> Result<Value, ProviderError> {
+    let resolved = resolve_response_options(
+        present::presentation("issue.view"),
+        None,
+        ResponseOptions::new(Some(OutputContentFormat::Markdown), None),
     )?;
+    present_result(&resolved, &mut result, 4096, limit)?;
     Ok(result)
 }
 
@@ -331,8 +330,8 @@ async fn issue_view_fetches_links_only_with_universal_reach_using_execution_acce
             let baseline = view_baseline(&issue_from_value(source).unwrap());
             assert_eq!(result.result, baseline);
             assert_eq!(
-                markdown(result.result.clone(), 16384).unwrap(),
-                markdown(baseline, 16384).unwrap()
+                selected(result.result.clone(), 16384).unwrap(),
+                selected(baseline, 16384).unwrap()
             );
             assert_eq!(
                 result.audit.as_ref().unwrap()["issueLinks"],
@@ -344,16 +343,12 @@ async fn issue_view_fetches_links_only_with_universal_reach_using_execution_acce
         for secret in ["CM-42", "Linked title", "private"] {
             assert!(!audit.contains(secret));
         }
-        let presented = markdown(result.result, 16384).unwrap();
+        let presented = selected(result.result, 16384).unwrap();
         assert!(!presented.to_string().contains("private"));
         if universal_reach {
-            assert!(
-                presented["value"]
-                    .as_str()
-                    .unwrap()
-                    .contains("- This issue blocks `CM-42` (type: Blocks; direction: outward")
-            );
+            assert_eq!(presented["issueLinks"], json!([expected_link()]));
         }
+
         let requests = api.received_requests().await.unwrap();
         assert_eq!(requests.len(), 2);
         assert!(requests.iter().all(|request| request.body.is_empty()));
@@ -576,41 +571,27 @@ async fn mutation_readbacks_and_search_ignore_unsolicited_links_and_custom_field
 }
 
 #[test]
-fn issue_links_markdown_has_omission_empty_metadata_escaping_and_bounds() {
+fn issue_links_remain_unchanged_with_selected_bodies_and_final_bounds() {
     let base = view_baseline(&visible_issue());
-    let absent = markdown(base.clone(), 16384).unwrap();
-    assert!(!absent["value"].as_str().unwrap().contains("## Issue links"));
+    let absent = selected(base.clone(), 16384).unwrap();
+    assert!(absent.get("issueLinks").is_none());
     let mut empty = base.clone();
     empty["issueLinks"] = json!([]);
-    assert!(
-        markdown(empty, 16384).unwrap()["value"]
-            .as_str()
-            .unwrap()
-            .contains("\n## Issue links\n\nNone.\n")
-    );
+    assert_eq!(selected(empty, 16384).unwrap()["issueLinks"], json!([]));
     let mut result = base;
     result["issueLinks"] = json!([{
-        "key": "CM-42", "type": "Blocks\n## private-forged",
-        "direction": "outward", "relationship": "blocks *work*",
-        "summary": "Fix **bug**\n# forged", "issueType": "Bug\n- forged"
+        "key":"CM-42", "type":"Blocks\n## literal", "direction":"outward",
+        "relationship":"blocks *work*", "summary":"Fix **bug**\n# literal", "issueType":"Bug"
     }, {
-        "key": "CM-42", "type": "Blocks", "direction": "inward",
-        "relationship": "is blocked by", "summary": null, "issueType": null
+        "key":"CM-42", "type":"Blocks", "direction":"inward",
+        "relationship":"is blocked by", "summary":null, "issueType":null
     }]);
-    let rendered = markdown(result.clone(), 16384).unwrap();
-    let text = rendered["value"].as_str().unwrap();
-    assert!(text.contains("- This issue blocks \\*work\\* `CM-42`"));
-    assert!(text.contains("type: Blocks ## private-forged; direction: outward"));
-    assert!(text.contains("issue type: Bug - forged"));
-    assert!(text.contains("Fix \\*\\*bug\\*\\* # forged"));
-    assert!(text.contains("- This issue is blocked by `CM-42` (type: Blocks; direction: inward)"));
-    assert!(!text.contains("\n## private-forged"));
-    assert!(!text.contains("\n# forged"));
-    assert!(!text.contains("\n- forged"));
+    let rendered = selected(result.clone(), 16384).unwrap();
+    assert_eq!(rendered["issueLinks"], result["issueLinks"]);
     let exact = serde_json::to_vec(&rendered).unwrap().len() as u64;
-    assert_eq!(markdown(result.clone(), exact).unwrap(), rendered);
+    assert_eq!(selected(result.clone(), exact).unwrap(), rendered);
     assert_eq!(
-        markdown(result, exact - 1).unwrap_err().reason_code(),
+        selected(result, exact - 1).unwrap_err().reason_code(),
         ReasonCode::UpstreamProtocolFailed
     );
 }
@@ -736,10 +717,8 @@ async fn custom_field_view_limits_fail_the_whole_response_without_partial_values
             "document-nodes" => {
                 let document = dense(65_536);
                 assert!(matches!(
-                    agent_access_content::render_adf_bounded_with_budget(
+                    agent_access_content::validate_adf_bounded_with_budget(
                         &document,
-                        ReadContentFormat::Native,
-                        config.content.max_body_bytes,
                         config.content.max_body_bytes,
                         &mut agent_access_provider::presentation::RenderBudget::default(),
                     ),
@@ -749,10 +728,8 @@ async fn custom_field_view_limits_fail_the_whole_response_without_partial_values
             }
             "shared-nodes" => {
                 let document = dense(50_000);
-                agent_access_content::render_adf_bounded_with_budget(
+                agent_access_content::validate_adf_bounded_with_budget(
                     &document,
-                    ReadContentFormat::Native,
-                    config.content.max_body_bytes,
                     config.content.max_body_bytes,
                     &mut agent_access_provider::presentation::RenderBudget::default(),
                 )
@@ -1016,10 +993,9 @@ async fn eligible_parent_and_subtask_absence_have_explicit_output_and_audit_sema
         for key in CONTEXT_KEYS {
             assert_eq!(response.result.get(*key), Some(&Value::Null));
         }
-        let rendered = markdown(response.result, 16384).unwrap();
-        let text = rendered["value"].as_str().unwrap();
-        assert!(text.contains("## Parent\n\nNo parent returned."));
-        assert_eq!(text.contains("## Subtasks"), expected_subtasks.is_some());
+        let rendered = selected(response.result, 16384).unwrap();
+        assert_eq!(rendered["parent"], Value::Null);
+        assert_eq!(rendered.get("subtasks"), expected_subtasks.as_ref());
         assert_eq!(api.received_requests().await.unwrap().len(), 2);
     }
 }
@@ -1064,7 +1040,7 @@ async fn provider_suppresses_hierarchy_from_a_backend_that_ignores_the_disclosur
         } else {
             assert!(response.result.get("parent").is_none());
             assert!(response.result.get("subtasks").is_none());
-            let text = markdown(response.result, 16384).unwrap().to_string();
+            let text = selected(response.result, 16384).unwrap().to_string();
             for secret in ["PARENT-42", "CHILD-42", "private"] {
                 assert!(!text.contains(secret));
             }

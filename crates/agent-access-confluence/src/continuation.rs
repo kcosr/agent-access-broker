@@ -1,11 +1,11 @@
-//! Confluence continuations: list and search page tokens and durable draft
+//! Confluence continuations: list page tokens and durable draft
 //! handles, sealed in SDK continuation envelopes.
 //!
 //! Every family binds the admitted service and execution context, the
 //! Confluence configuration it depends on and the execution material that
 //! reaches Confluence ([`bind_atlassian_access`]: the credential method, a
 //! static credential's kind or a delegated lease's binding, and the gateway
-//! cloud ID on gateway routes). List and search tokens bind the Atlassian
+//! cloud ID on gateway routes). List tokens bind the Atlassian
 //! route fingerprint (tenant host and cloud ID), because they relay
 //! Confluence's own route-relative cursors;
 //! draft handles bind the tenant host, because a draft's content ID names
@@ -14,9 +14,10 @@
 //! execution material, so they carry a keyed commitment to it that is
 //! checked once the handle is opened after admission. No family binds the
 //! effective grant boundary: the host authorizes every page and handle use
-//! again and the provider re-applies its containment checks.
+//! again and the provider re-applies its containment checks. Content search has
+//! its own confidential, authority-bound continuation in `content_search.rs`.
 //!
-//! List and search tokens relay Confluence's own cursor, so their size is
+//! List tokens relay Confluence's own cursor, so their size is
 //! bounded by the provider's upstream response limit, which bounds both the
 //! upstream response a cursor arrives in and the result its continuation
 //! leaves in; the broker adds no cursor cap of its own and never truncates.
@@ -26,7 +27,7 @@ use super::*;
 #[path = "continuation_tests.rs"]
 mod tests;
 
-/// How long list and search continuations stay valid after they are issued.
+/// How long list continuations stay valid after they are issued.
 const PAGE_TOKEN_TTL: Duration = Duration::from_secs(15 * 60);
 /// List continuations may be signed with the stable key shared by several
 /// broker instances, whose clocks may differ by up to a minute.
@@ -75,7 +76,7 @@ const COMMENT_LIST_PAGES: ContinuationFamily = ContinuationFamily::new(
 const DRAFT_ATTACHMENT_LIST_PAGES: ContinuationFamily = ContinuationFamily::new(
     "confluence",
     "draft-attachment-list-page",
-    4,
+    5,
     ContinuationLifetime::StableWhenConfigured,
     0,
 )
@@ -83,22 +84,8 @@ const DRAFT_ATTACHMENT_LIST_PAGES: ContinuationFamily = ContinuationFamily::new(
 .expires_after(PAGE_TOKEN_TTL)
 .clock_skew(PAGE_TOKEN_CLOCK_SKEW);
 
-/// `search` and `blog.search` pages: Confluence's search cursor with a keyed
-/// commitment to the composed upstream CQL. Signed with a key generated for
-/// each provider instance, so a reload or restart also invalidates them.
-/// Declared without a payload cap; [`ConfluenceContinuations::new`] sizes it
-/// from the response limit.
-const SEARCH_PAGES: ContinuationFamily = ContinuationFamily::new(
-    "confluence",
-    "search-page",
-    1,
-    ContinuationLifetime::Generation,
-    0,
-)
-.expires_after(PAGE_TOKEN_TTL);
-
 /// The visible prefix of a draft handle.
-pub(crate) const DRAFT_HANDLE_PREFIX: &str = "aab_confluence_draft_v4_";
+pub(crate) const DRAFT_HANDLE_PREFIX: &str = "aab_confluence_draft_v5_";
 /// A handle's payload: the commitment to the execution material it was
 /// minted under, then its facts (a space key of at most 255 bytes, numeric
 /// IDs and a version) as compact JSON. Far beyond any real draft.
@@ -116,7 +103,7 @@ const DRAFT_HANDLE_ACCESS_COMMITMENT: &str = "executionAccess";
 const DRAFT_HANDLES: ContinuationFamily = ContinuationFamily::new(
     "confluence",
     "draft-handle",
-    4,
+    5,
     ContinuationLifetime::Durable,
     DRAFT_HANDLE_PAYLOAD_MAX_BYTES,
 )
@@ -144,13 +131,11 @@ fn within_response_limit(
 pub(crate) struct ConfluenceContinuations {
     signer: ContinuationSigner,
     route: [u8; 32],
-    tenant_host: String,
     cloud_id: Option<String>,
     attachment_pages: ContinuationFamily,
     blog_attachment_pages: ContinuationFamily,
     comment_pages: ContinuationFamily,
     draft_attachment_pages: ContinuationFamily,
-    search_pages: ContinuationFamily,
 }
 
 /// The list families, for their error messages.
@@ -182,17 +167,15 @@ impl ConfluenceContinuations {
         Self {
             signer: ContinuationSigner::new(stable),
             route: config.site().route_fingerprint(),
-            tenant_host: config.tenant_host.clone(),
             cloud_id: config.cloud_id.clone(),
             attachment_pages: within_response_limit(ATTACHMENT_LIST_PAGES, limits),
             blog_attachment_pages: within_response_limit(BLOG_ATTACHMENT_LIST_PAGES, limits),
             comment_pages: within_response_limit(COMMENT_LIST_PAGES, limits),
             draft_attachment_pages: within_response_limit(DRAFT_ATTACHMENT_LIST_PAGES, limits),
-            search_pages: within_response_limit(SEARCH_PAGES, limits),
         }
     }
 
-    /// A list or search binding: the admitted context, the route
+    /// A list binding: the admitted context, the route
     /// fingerprint and the execution material that selects the route.
     fn route_binding(
         &self,
@@ -342,7 +325,14 @@ impl ConfluenceContinuations {
             .text("space", &handle.space)
             .text("spaceId", &handle.space_id)
             .text("origin", handle.origin.as_str())
-            .optional_text("parentPageId", handle.parent_page_id.as_deref())
+            .optional_text(
+                "parentKind",
+                handle.parent.as_ref().map(|parent| parent.kind.as_str()),
+            )
+            .optional_text(
+                "parentId",
+                handle.parent.as_ref().map(|parent| parent.id.as_str()),
+            )
             .optional_number("baseVersion", handle.base_version)
             .number("maxResults", u64::from(max_results)))
     }
@@ -394,52 +384,6 @@ impl ConfluenceContinuations {
             .map_err(|error| list_token_failure(pages, error))
     }
 
-    fn search_binding(
-        &self,
-        search: &SearchPageRequest<'_>,
-    ) -> Result<ContinuationBinding, ProviderError> {
-        Ok(self
-            .route_binding(&self.search_pages, search.context, search.access)?
-            .text("queryType", search.query.kind)
-            .text("query", &search.query.canonical_caller_cql)
-            .texts("spaces", search.requested_spaces.iter().map(String::as_str))
-            .number("maxResults", u64::from(search.max_results)))
-    }
-
-    /// Seals Confluence's `upstream` search cursor for this search, with a
-    /// commitment to the composed CQL it continues.
-    pub(crate) fn seal_search_page(
-        &self,
-        search: &SearchPageRequest<'_>,
-        upstream: &str,
-    ) -> Result<String, ProviderError> {
-        self.signer
-            .seal_relayed(
-                &self.search_binding(search)?,
-                Some(search.query.cql.as_bytes()),
-                upstream,
-            )
-            .map_err(|error| search_token_failure(search.context.action(), error))
-    }
-
-    /// Opens a continuation issued for this search and returns Confluence's
-    /// cursor, provided the current composed CQL is the one it was issued
-    /// for; otherwise the caller repeats the search, and Confluence never
-    /// sees its cursor with a different query.
-    pub(crate) fn open_search_page(
-        &self,
-        search: &SearchPageRequest<'_>,
-        token: &str,
-    ) -> Result<String, ProviderError> {
-        self.signer
-            .open_relayed(
-                &self.search_binding(search)?,
-                Some(search.query.cql.as_bytes()),
-                token,
-            )
-            .map_err(|error| search_token_failure(search.context.action(), error))
-    }
-
     /// Mints the durable handle for `handle`'s draft, owned as the admitted
     /// credential mode and principal decide and committed to `access`, the
     /// execution material it is minted with.
@@ -449,6 +393,7 @@ impl ConfluenceContinuations {
         access: &ExecutionAccess,
         handle: &ConfluenceDraftHandle,
     ) -> Result<String, ProviderError> {
+        handle.validate()?;
         let facts =
             serde_json::to_vec(&ConfluenceDraftHandleFacts::from(handle)).map_err(|_| {
                 ProviderError::error(
@@ -457,7 +402,7 @@ impl ConfluenceContinuations {
                 )
             })?;
         let binding = draft_handle_binding(
-            DRAFT_HANDLES.bind(context, &self.tenant_host),
+            DRAFT_HANDLES.bind(context, self.route),
             handle.content_type,
             &handle.content_id,
         );
@@ -493,15 +438,15 @@ impl ConfluenceContinuations {
     /// content the inputs name. The owner is checked against the current
     /// principal here, and against the admitted credential mode and the
     /// execution material by [`Self::open_draft_handle`].
-    pub(crate) fn open_draft_handle_for_scope(
+    pub(crate) fn open_draft_handle_for_local_scope(
         &self,
-        request: &ScopeRequest<'_>,
+        request: &LocalScopeRequest<'_>,
         content_type: ConfluenceDraftContentType,
         content_id: &str,
         token: &str,
     ) -> Result<ConfluenceDraftHandle, ProviderError> {
         let binding = draft_handle_binding(
-            DRAFT_HANDLES.bind_scope(request, &self.tenant_host),
+            DRAFT_HANDLES.bind_local_scope(request, self.route),
             content_type,
             content_id,
         );
@@ -528,7 +473,7 @@ impl ConfluenceContinuations {
         token: &str,
     ) -> Result<ConfluenceDraftHandle, ProviderError> {
         let binding = draft_handle_binding(
-            DRAFT_HANDLES.bind(context, &self.tenant_host),
+            DRAFT_HANDLES.bind(context, self.route),
             content_type,
             content_id,
         );
@@ -569,15 +514,6 @@ fn draft_handle_binding<Stage: ContinuationStage>(
         .text("contentId", content_id)
 }
 
-/// The normalized search a continuation belongs to.
-pub(crate) struct SearchPageRequest<'a> {
-    pub(crate) context: &'a AdmittedContext,
-    pub(crate) access: &'a ExecutionAccess,
-    pub(crate) query: &'a BuiltConfluenceSearchQuery,
-    pub(crate) requested_spaces: &'a BTreeSet<String>,
-    pub(crate) max_results: u32,
-}
-
 /// What a broker-issued draft handle establishes about its draft.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ConfluenceDraftHandle {
@@ -586,7 +522,7 @@ pub(crate) struct ConfluenceDraftHandle {
     pub(crate) space: String,
     pub(crate) space_id: String,
     pub(crate) origin: ConfluenceDraftOrigin,
-    pub(crate) parent_page_id: Option<String>,
+    pub(crate) parent: Option<ConfluenceParent>,
     pub(crate) base_version: Option<u64>,
 }
 
@@ -603,7 +539,7 @@ impl ConfluenceDraftHandle {
             space: content.space.clone(),
             space_id: content.space_id.clone(),
             origin,
-            parent_page_id: content.parent_page_id.clone(),
+            parent: content.parent.clone(),
             base_version,
         }
     }
@@ -615,14 +551,36 @@ impl ConfluenceDraftHandle {
     ) -> Result<Self, ProviderError> {
         let facts: ConfluenceDraftHandleFacts =
             serde_json::from_slice(facts).map_err(|_| invalid_draft_handle_error())?;
+        let (space, space_id, origin, parent, base_version) = match (content_type, facts) {
+            (
+                ConfluenceDraftContentType::Page,
+                ConfluenceDraftHandleFacts::Page {
+                    space,
+                    space_id,
+                    origin,
+                    parent,
+                    base_version,
+                },
+            ) => (space, space_id, origin, parent, base_version),
+            (
+                ConfluenceDraftContentType::Blog,
+                ConfluenceDraftHandleFacts::Blog {
+                    space,
+                    space_id,
+                    origin,
+                    base_version,
+                },
+            ) => (space, space_id, origin, None, base_version),
+            _ => return Err(invalid_draft_handle_error()),
+        };
         let handle = Self {
             content_type,
-            content_id: content_id.to_string(),
-            space: facts.space,
-            space_id: facts.space_id,
-            origin: facts.origin,
-            parent_page_id: facts.parent_page_id,
-            base_version: facts.base_version,
+            content_id: content_id.to_owned(),
+            space,
+            space_id,
+            origin,
+            parent,
+            base_version,
         };
         handle.validate()?;
         Ok(handle)
@@ -630,14 +588,12 @@ impl ConfluenceDraftHandle {
 
     fn validate(&self) -> Result<(), ProviderError> {
         let well_formed = is_space_key(&self.space)
-            && is_page_id(&self.space_id)
-            && self.content_type.validate_id(&self.content_id).is_ok()
-            && self
-                .parent_page_id
-                .as_deref()
-                .is_none_or(|id| validate_page_id(id).is_ok())
-            && (self.content_type == ConfluenceDraftContentType::Page
-                || self.parent_page_id.is_none())
+            && locations::is_canonical_content_id(&self.space_id)
+            && locations::is_canonical_content_id(&self.content_id)
+            && self.parent.as_ref().is_none_or(|parent| {
+                locations::is_canonical_content_id(&parent.id) && parent.id != self.content_id
+            })
+            && (self.content_type == ConfluenceDraftContentType::Page || self.parent.is_none())
             && match self.origin {
                 ConfluenceDraftOrigin::New => self.base_version.is_none(),
                 ConfluenceDraftOrigin::Staged => {
@@ -656,25 +612,53 @@ impl ConfluenceDraftHandle {
 /// inputs and are bound; the owner travels as the envelope's ownership
 /// commitment.
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ConfluenceDraftHandleFacts {
-    space: String,
-    space_id: String,
-    origin: ConfluenceDraftOrigin,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    parent_page_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    base_version: Option<u64>,
+#[serde(
+    tag = "contentType",
+    rename_all = "lowercase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+enum ConfluenceDraftHandleFacts {
+    Page {
+        space: String,
+        space_id: String,
+        origin: ConfluenceDraftOrigin,
+        #[serde(deserialize_with = "required_parent")]
+        parent: Option<ConfluenceParent>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        base_version: Option<u64>,
+    },
+    Blog {
+        space: String,
+        space_id: String,
+        origin: ConfluenceDraftOrigin,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        base_version: Option<u64>,
+    },
+}
+
+fn required_parent<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<ConfluenceParent>, D::Error> {
+    Option::<ConfluenceParent>::deserialize(deserializer)
 }
 
 impl From<&ConfluenceDraftHandle> for ConfluenceDraftHandleFacts {
     fn from(handle: &ConfluenceDraftHandle) -> Self {
-        Self {
-            space: handle.space.clone(),
-            space_id: handle.space_id.clone(),
-            origin: handle.origin,
-            parent_page_id: handle.parent_page_id.clone(),
-            base_version: handle.base_version,
+        match handle.content_type {
+            ConfluenceDraftContentType::Page => Self::Page {
+                space: handle.space.clone(),
+                space_id: handle.space_id.clone(),
+                origin: handle.origin,
+                parent: handle.parent.clone(),
+                base_version: handle.base_version,
+            },
+            ConfluenceDraftContentType::Blog => Self::Blog {
+                space: handle.space.clone(),
+                space_id: handle.space_id.clone(),
+                origin: handle.origin,
+                base_version: handle.base_version,
+            },
         }
     }
 }
@@ -759,32 +743,6 @@ fn checked_cursor(pages: ListPages, cursor: String) -> Result<String, ProviderEr
         )
     })?;
     Ok(cursor)
-}
-
-fn search_token_failure(action: &str, error: ContinuationError) -> ProviderError {
-    ContinuationFailures::new(
-        ProviderError::deny(
-            ReasonCode::InputInvalid,
-            format!(
-                "confluence.{action} nextPageToken is invalid or expired; reuse it only with the same query, spaces, and maxResults"
-            ),
-        ),
-        |_| {
-            ProviderError::error(
-                ReasonCode::UpstreamProtocolFailed,
-                "Confluence search cursor exceeds the provider response limit",
-            )
-        },
-        ProviderError::error(
-            ReasonCode::UpstreamProtocolFailed,
-            "Confluence search continuation signing is unavailable",
-        ),
-    )
-    .upstream_query_changed(ProviderError::deny(
-        ReasonCode::InputInvalid,
-        "the effective Confluence space scope changed since nextPageToken was issued; repeat the search without nextPageToken",
-    ))
-    .report(error)
 }
 
 fn pagination_signing_unavailable() -> ProviderError {

@@ -23,6 +23,32 @@ impl MovingJira {
 
 #[async_trait]
 impl JiraBackend for MovingJira {
+    async fn issue_status(
+        &self,
+        _issue_id: &str,
+        _credential: &AtlassianCredential,
+    ) -> Result<JiraBackendResponse<Value>, JiraBackendError> {
+        panic!("unexpected status request in this fixture")
+    }
+    async fn issue_transitions(
+        &self,
+        _issue_id: &str,
+        _include_fields: bool,
+        _transition_id: Option<&str>,
+        _credential: &AtlassianCredential,
+    ) -> Result<JiraBackendResponse<Value>, JiraBackendError> {
+        panic!("unexpected transition discovery in this fixture")
+    }
+    async fn transition_issue(
+        &self,
+        _issue_id: &str,
+        _transition_id: &str,
+        _resolution_id: Option<&str>,
+        _credential: &AtlassianCredential,
+    ) -> Result<JiraBackendResponse<()>, JiraBackendError> {
+        panic!("unexpected transition write in this fixture")
+    }
+
     async fn project_list(
         &self,
         _request: JiraProjectListRequest,
@@ -216,6 +242,11 @@ fn single_issue_actions() -> Vec<(&'static str, Value)> {
     let content = json!({"contentFormat": "plain_text", "content": "hello"});
     vec![
         ("issue.view", issue(json!({}))),
+        ("issue.transition.list", issue(json!({}))),
+        (
+            "issue.transition.apply",
+            issue(json!({"transitionId":"31","toStatusId":"10002"})),
+        ),
         ("issue.view", issue(json!({"includeComments": true}))),
         ("issue.update", issue(json!({"summary": "Updated summary"}))),
         ("comment.list", issue(json!({}))),

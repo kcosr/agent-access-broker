@@ -330,7 +330,7 @@ async fn a_lookup_401_recovers_once_and_execution_presents_the_renewed_access() 
         .await
         .unwrap();
     assert_eq!(
-        resolution.scopes(),
+        resolution.scopes().unwrap(),
         &repository_scopes_from_path("sip/service")
     );
     let result = provider

@@ -12,6 +12,17 @@ pub(crate) enum ResourcesCommand {
     List,
     /// List the resource types this broker registers, with their selector forms.
     Types,
+    /// List services offering offline URL normalization for resource entry.
+    Locations,
+    /// Normalize resource coverage without contacting the upstream service.
+    NormalizeLocation {
+        #[arg(long)]
+        service: String,
+        #[arg(long)]
+        url: String,
+        #[arg(long, value_parser = ["space", "exact", "subtree"])]
+        coverage: String,
+    },
     Get {
         id: String,
     },
@@ -28,12 +39,15 @@ pub(crate) enum ResourcesCommand {
         id: Option<String>,
         #[arg(long, value_parser = parse_resource_type, help = RESOURCE_TYPE_HELP)]
         resource_type: ResourceType,
-        #[arg(long, value_parser = ["exact", "namespace", "all"])]
+        #[arg(long, value_parser = ["exact", "namespace", "subtree", "all"])]
         selector_kind: String,
         #[arg(long)]
         selector_value: Option<String>,
         #[arg(long)]
         display_name: Option<String>,
+        /// Optional browser link to this same resource; does not change access.
+        #[arg(long)]
+        browser_url: Option<String>,
         /// JSON object of private string attributes; values remain redacted in the response.
         #[arg(long)]
         attributes_file: Option<PathBuf>,
@@ -48,7 +62,7 @@ pub(crate) enum ResourcesCommand {
         expected_version: i64,
         #[arg(long, value_parser = parse_resource_type, help = RESOURCE_TYPE_HELP)]
         resource_type: Option<ResourceType>,
-        #[arg(long, value_parser = ["exact", "namespace", "all"])]
+        #[arg(long, value_parser = ["exact", "namespace", "subtree", "all"])]
         selector_kind: Option<String>,
         #[arg(long, requires = "selector_kind")]
         selector_value: Option<String>,
@@ -56,6 +70,11 @@ pub(crate) enum ResourcesCommand {
         display_name: Option<String>,
         #[arg(long)]
         clear_display_name: bool,
+        /// Replace the browser link while retaining this resource's identity.
+        #[arg(long, conflicts_with = "clear_browser_url")]
+        browser_url: Option<String>,
+        #[arg(long)]
+        clear_browser_url: bool,
         /// Replace supplied private attributes; omission preserves stored values.
         #[arg(long)]
         attributes_file: Option<PathBuf>,
@@ -118,11 +137,11 @@ pub(crate) enum ResourceGroupsCommand {
 fn selector_value(kind: &str, value: &Option<String>) -> Result<serde_json::Value> {
     match (kind, value) {
         ("all", None) => Ok(serde_json::json!({"kind":"all"})),
-        ("exact" | "namespace", Some(value)) if !value.is_empty() => {
+        ("exact" | "namespace" | "subtree", Some(value)) if !value.is_empty() => {
             Ok(serde_json::json!({"kind":kind,"value":value}))
         }
         _ => anyhow::bail!(
-            "exact and namespace selectors require --selector-value; all does not accept it"
+            "exact, namespace and subtree selectors require --selector-value; all does not accept it"
         ),
     }
 }
@@ -170,6 +189,28 @@ pub(crate) async fn run_resources(ctx: &CliContext<'_>, command: &ResourcesComma
         ResourcesCommand::Types => {
             run_broker_get(ctx, "/v1/resource-types", ResponseShape::Object).await
         }
+        ResourcesCommand::Locations => {
+            run_broker_get(
+                ctx,
+                "/v1/admin/policy/resource-locations",
+                ResponseShape::Object,
+            )
+            .await
+        }
+        ResourcesCommand::NormalizeLocation {
+            service,
+            url,
+            coverage,
+        } => {
+            let body = serde_json::json!({"service": service, "url": url, "coverage": coverage});
+            run_broker_json_method(
+                ctx,
+                reqwest::Method::POST,
+                "/v1/admin/policy/resource-locations/normalize",
+                Some(body),
+            )
+            .await
+        }
         ResourcesCommand::Get { id } => {
             run_broker_get(ctx, &record_path("resources", id), ResponseShape::Object).await
         }
@@ -215,6 +256,7 @@ pub(crate) async fn run_resources(ctx: &CliContext<'_>, command: &ResourcesComma
             selector_kind,
             selector_value: value,
             display_name,
+            browser_url,
             attributes_file,
             execution_contexts,
             enabled,
@@ -225,6 +267,9 @@ pub(crate) async fn run_resources(ctx: &CliContext<'_>, command: &ResourcesComma
             }
             if let Some(name) = display_name {
                 body["displayName"] = serde_json::json!(name);
+            }
+            if let Some(url) = browser_url {
+                body["browserUrl"] = serde_json::json!(url);
             }
             if let Some(path) = attributes_file {
                 body["attributes"] = read_attributes_file(path)?;
@@ -242,6 +287,8 @@ pub(crate) async fn run_resources(ctx: &CliContext<'_>, command: &ResourcesComma
             selector_value: value,
             display_name,
             clear_display_name,
+            browser_url,
+            clear_browser_url,
             attributes_file,
             execution_contexts,
             enabled,
@@ -260,6 +307,11 @@ pub(crate) async fn run_resources(ctx: &CliContext<'_>, command: &ResourcesComma
                 body["displayName"] = serde_json::Value::Null;
             } else if let Some(name) = display_name {
                 body["displayName"] = serde_json::json!(name);
+            }
+            if *clear_browser_url {
+                body["browserUrl"] = serde_json::Value::Null;
+            } else if let Some(url) = browser_url {
+                body["browserUrl"] = serde_json::json!(url);
             }
             if !execution_contexts.is_empty() {
                 body["allowedExecutionContexts"] = serde_json::json!(execution_contexts);
@@ -369,9 +421,154 @@ mod tests {
     use super::*;
 
     #[test]
+    fn browser_url_flags_keep_replacement_and_clearing_distinct() {
+        let base = [
+            "agent-access",
+            "admin",
+            "policy",
+            "resources",
+            "update",
+            "folder",
+            "--expected-version",
+            "2",
+        ];
+        for (extra, expected_url, expected_clear) in [
+            (
+                vec![
+                    "--browser-url",
+                    "https://example.atlassian.net/wiki/spaces/ENG/folder/12/Runbooks",
+                ],
+                Some("https://example.atlassian.net/wiki/spaces/ENG/folder/12/Runbooks"),
+                false,
+            ),
+            (vec!["--clear-browser-url"], None, true),
+            (vec!["--display-name", "Runbooks"], None, false),
+        ] {
+            let cli = Cli::try_parse_from(base.into_iter().chain(extra)).unwrap();
+            let Command::Admin {
+                command:
+                    AdminCommand::Policy {
+                        command:
+                            AdminPolicyCommand::Resources {
+                                command:
+                                    ResourcesCommand::Update {
+                                        browser_url,
+                                        clear_browser_url,
+                                        ..
+                                    },
+                            },
+                    },
+            } = cli.command
+            else {
+                panic!("resource update expected")
+            };
+            assert_eq!(browser_url.as_deref(), expected_url);
+            assert_eq!(clear_browser_url, expected_clear);
+        }
+        assert!(
+            Cli::try_parse_from(base.into_iter().chain([
+                "--browser-url",
+                "https://example.atlassian.net/wiki/spaces/ENG/folder/12",
+                "--clear-browser-url",
+            ]))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn location_normalization_and_content_subtree_commands_parse() {
+        let cli = Cli::try_parse_from([
+            "agent-access",
+            "admin",
+            "policy",
+            "resources",
+            "normalize-location",
+            "--service",
+            "confluence",
+            "--url",
+            "https://example.atlassian.net/wiki/spaces/alias/folder/12",
+            "--coverage",
+            "subtree",
+        ])
+        .unwrap();
+        let Command::Admin {
+            command:
+                AdminCommand::Policy {
+                    command:
+                        AdminPolicyCommand::Resources {
+                            command:
+                                ResourcesCommand::NormalizeLocation {
+                                    service,
+                                    url,
+                                    coverage,
+                                },
+                        },
+                },
+        } = cli.command
+        else {
+            panic!("expected normalization command")
+        };
+        assert_eq!(service, "confluence");
+        assert_eq!(
+            url,
+            "https://example.atlassian.net/wiki/spaces/alias/folder/12"
+        );
+        assert_eq!(coverage, "subtree");
+        assert!(
+            Cli::try_parse_from([
+                "agent-access",
+                "admin",
+                "policy",
+                "resources",
+                "normalize-location",
+                "--service",
+                "confluence",
+                "--url",
+                "https://example.atlassian.net/wiki/spaces/alias/folder/12",
+                "--coverage",
+                "subtree",
+                "--space-key",
+                "ENG",
+            ])
+            .is_err()
+        );
+        assert!(
+            Cli::try_parse_from(["agent-access", "admin", "policy", "resources", "locations"])
+                .is_ok()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "agent-access",
+                "admin",
+                "policy",
+                "resources",
+                "create",
+                "--resource-type",
+                "confluence_content",
+                "--selector-kind",
+                "subtree",
+                "--selector-value",
+                "https://example.atlassian.net/wiki/content/folder/12",
+                "--execution-context",
+                "default",
+            ])
+            .is_ok()
+        );
+    }
+
+    #[test]
     fn selectors_do_not_accept_ambiguous_coverage() {
         assert!(selector_value("all", &Some("engineering".into())).is_err());
         assert!(selector_value("exact", &None).is_err());
+        assert!(selector_value("subtree", &None).is_err());
+        assert_eq!(
+            selector_value(
+                "subtree",
+                &Some("https://example.atlassian.net/wiki/content/folder/12".into())
+            )
+            .unwrap(),
+            serde_json::json!({"kind":"subtree","value":"https://example.atlassian.net/wiki/content/folder/12"})
+        );
         assert!(selector_value("namespace", &Some(String::new())).is_err());
         assert_eq!(
             selector_value("all", &None).unwrap(),

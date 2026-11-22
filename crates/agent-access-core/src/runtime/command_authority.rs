@@ -304,7 +304,7 @@ impl BrokerRuntime {
         let (scope, binding) = self.services.get(service)?.action_resource_scope(action)?;
         Some(CommandResourceType {
             id: scope.to_owned(),
-            broker_type: binding.resource_type.clone(),
+            broker_type: binding.as_scalar()?.0.clone(),
         })
     }
 
@@ -697,6 +697,10 @@ impl BrokerRuntime {
                         correlation,
                         // Command actions declare no lookups.
                         lookup_access: None,
+                        containment_evidence_level:
+                            agent_access_provider::ContainmentEvidenceLevel::ContainerOnly,
+                        containment_roots: &[],
+                        locator_state: None,
                     },
                 )),
             ),
@@ -709,7 +713,8 @@ impl BrokerRuntime {
                 "admitted authority does not match the action contract",
             )
         };
-        if !resolved.is_empty() {
+        if !matches!(resolved, agent_access_provider::ScopeEvidence::Scalar(ref scopes) if scopes.is_empty())
+        {
             return Err(mismatch());
         }
         let plan = self

@@ -36,6 +36,7 @@ impl std::fmt::Display for CatalogAuditEntity {
         match &self.selector {
             Some(ResourceSelector::Exact { value }) => f.write_str(value),
             Some(ResourceSelector::Namespace { value }) => write!(f, "{value}/*"),
+            Some(ResourceSelector::Subtree { value }) => write!(f, "Subtree {value}"),
             Some(ResourceSelector::All) => f.write_str("All resources"),
             Some(_) | None => f.write_str(&self.id),
         }
@@ -124,6 +125,10 @@ pub(super) fn resource_entity(record: &ManagedResourceRecord) -> CatalogAuditEnt
             let (value, truncated) = bounded_text(value);
             (Some(ResourceSelector::Namespace { value }), truncated)
         }
+        ResourceSelector::Subtree { value } => {
+            let (value, truncated) = bounded_text(value);
+            (Some(ResourceSelector::Subtree { value }), truncated)
+        }
         ResourceSelector::All => (Some(ResourceSelector::All), false),
         // A selector form this build cannot bound is omitted, not recorded whole.
         _ => (None, true),
@@ -177,6 +182,13 @@ pub(super) fn resource_change(
         };
     }
     field!(display_name, "displayName");
+    // Browser links can contain human-readable titles. Record that the field
+    // changed without adding its value to either event-time snapshot.
+    if before.and_then(|r| r.definition.browser_url.as_ref())
+        != after.and_then(|r| r.definition.browser_url.as_ref())
+    {
+        fields.push("browserUrl".into());
+    }
     field!(resource_type, "resourceType");
     field!(selector, "selector");
     field!(enabled, "enabled");
@@ -284,6 +296,7 @@ mod tests {
             id: id.into(),
             expected_version: version,
             display_name: None,
+            browser_url: None,
             resource_type: None,
             selector: None,
             allowed_execution_contexts: None,
@@ -497,6 +510,25 @@ mod tests {
             value: "team".into(),
         };
         assert_eq!(resource_entity(&record).to_string(), "team/*");
+        record.definition.selector = ResourceSelector::Subtree {
+            value: "https://example.atlassian.net/wiki/content/folder/123".into(),
+        };
+        let subtree = resource_entity(&record);
+        assert_eq!(
+            subtree.to_string(),
+            "Subtree https://example.atlassian.net/wiki/content/folder/123"
+        );
+        assert_eq!(subtree.selector, Some(record.definition.selector.clone()));
+        assert_eq!(subtree.selector_truncated, Some(false));
+        record.definition.selector = ResourceSelector::Subtree {
+            value: "界".repeat(700),
+        };
+        let bounded_subtree = resource_entity(&record);
+        assert_eq!(bounded_subtree.selector_truncated, Some(true));
+        let Some(ResourceSelector::Subtree { value }) = bounded_subtree.selector else {
+            panic!("subtree audit selector must be preserved");
+        };
+        assert_eq!(value.chars().count(), 512);
         record.definition.selector = ResourceSelector::All;
         assert_eq!(resource_entity(&record).to_string(), "All resources");
         record.definition.selector = ResourceSelector::Exact {

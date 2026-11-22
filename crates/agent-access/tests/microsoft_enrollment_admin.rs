@@ -229,8 +229,8 @@ async fn generic_send_preserves_generated_principal_creation_and_response() {
     Mock::given(method("GET"))
         .and(path("/v1/spec/catalog"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "version":"agent-access.catalog.v2", "identity":{}, "services":[], "routes":routes,
-            "send":{"version":"agent-access.send.v1", "catalogRequired":true}
+            "version":"agent-access.catalog.v3", "identity":{}, "services":[], "routes":routes,
+            "send":{"version":"agent-access.send.v2", "catalogRequired":true}
         })))
         .expect(1)
         .mount(&server)
@@ -247,7 +247,7 @@ async fn generic_send_preserves_generated_principal_creation_and_response() {
         .mount(&server)
         .await;
     let request = json!({
-        "version":"agent-access.send.v1", "kind":"http", "method":"POST",
+        "version":"agent-access.send.v2", "kind":"http", "method":"POST",
         "route":"/v1/admin/principals", "body":body
     });
     let output = cli(&server.uri())
@@ -346,8 +346,8 @@ async fn generic_send_honors_required_queries_and_required_or_optional_bodies() 
     Mock::given(method("GET"))
         .and(path("/v1/spec/catalog"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "version":"agent-access.catalog.v2", "identity":{}, "services":[], "routes":routes,
-            "send":{"version":"agent-access.send.v1", "catalogRequired":true}
+            "version":"agent-access.catalog.v3", "identity":{}, "services":[], "routes":routes,
+            "send":{"version":"agent-access.send.v2", "catalogRequired":true}
         })))
         .expect(10)
         .mount(&server)
@@ -380,7 +380,7 @@ async fn generic_send_honors_required_queries_and_required_or_optional_bodies() 
         .mount(&server)
         .await;
     let cancel = json!({
-        "version":"agent-access.send.v1", "kind":"http", "method":"DELETE", "route":route,
+        "version":"agent-access.send.v2", "kind":"http", "method":"DELETE", "route":route,
         "pathParams":{"principal":"alice"}, "query":{"enrollmentId":ENROLLMENT_ID,"expectedRevision":3}
     });
     let run = |request: &Value| {
@@ -433,14 +433,14 @@ async fn generic_send_honors_required_queries_and_required_or_optional_bodies() 
     assert!(String::from_utf8_lossy(&output.stderr).contains("does not accept a JSON body"));
 
     let missing_body = json!({
-        "version":"agent-access.send.v1", "kind":"http", "method":"POST", "route":route,
+        "version":"agent-access.send.v2", "kind":"http", "method":"POST", "route":route,
         "pathParams":{"principal":"alice"}
     });
     let output = run(&missing_body);
     assert_eq!(output.status.code(), Some(3));
     assert!(String::from_utf8_lossy(&output.stderr).contains("requires a JSON body"));
     let optional_body = json!({
-        "version":"agent-access.send.v1", "kind":"http", "method":"POST",
+        "version":"agent-access.send.v2", "kind":"http", "method":"POST",
         "route":"/v1/credentials/connections/{connection}/verify", "pathParams":{"connection":"example"}
     });
     let output = run(&optional_body);
@@ -450,7 +450,7 @@ async fn generic_send_honors_required_queries_and_required_or_optional_bodies() 
         String::from_utf8_lossy(&output.stderr)
     );
     let mut optional_query = json!({
-        "version":"agent-access.send.v1", "kind":"http", "method":"GET",
+        "version":"agent-access.send.v2", "kind":"http", "method":"GET",
         "route":"/v1/admin/policy/grants"
     });
     for query in [None, Some(json!({"service":"example"}))] {

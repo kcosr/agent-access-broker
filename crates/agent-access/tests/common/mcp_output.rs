@@ -33,6 +33,7 @@ pub fn output_schema_arguments(selection: Option<OutputSchemas>) -> Vec<&'static
 /// The tool definitions one stdio MCP process advertised, by name.
 pub struct AdvertisedTools {
     output_schemas: OutputSchemas,
+    include_text_copy: bool,
     connection: String,
     view: Option<String>,
     tools: BTreeMap<String, Value>,
@@ -45,6 +46,7 @@ impl AdvertisedTools {
         static CONNECTIONS: AtomicU64 = AtomicU64::new(0);
         Self {
             output_schemas: selection.unwrap_or(OutputSchemas::CONNECTION_DEFAULT),
+            include_text_copy: true,
             connection: format!(
                 "stdio-{}-{}",
                 std::process::id(),
@@ -53,6 +55,12 @@ impl AdvertisedTools {
             view: view.map(str::to_owned),
             tools: BTreeMap::new(),
         }
+    }
+
+    /// Record the independently selected startup text-copy setting.
+    pub fn with_text_copy(mut self, include_text_copy: bool) -> Self {
+        self.include_text_copy = include_text_copy;
+        self
     }
 
     /// The effective selection of this process.
@@ -79,6 +87,7 @@ impl AdvertisedTools {
         record["connection"] = json!(self.connection);
         record["view"] = json!(self.view.as_deref().unwrap_or("aggregate"));
         record["outputSchemas"] = json!(self.output_schemas);
+        record["includeTextCopy"] = json!(self.include_text_copy);
         let path = std::path::PathBuf::from(path);
         assert!(
             path.is_absolute(),
@@ -124,6 +133,7 @@ impl AdvertisedTools {
             if let Some(schema) = tool.get("outputSchema") {
                 record["outputSchema"] = schema.clone();
             }
+            record["definitionSource"] = json!("tools/list");
             self.capture(record);
             if let Some(name) = tool["name"].as_str() {
                 self.tools.insert(name.to_owned(), tool.clone());
@@ -137,9 +147,20 @@ impl AdvertisedTools {
         if let Some(tool) = self.tools.get(name) {
             return Some(tool.clone());
         }
-        helper_definitions(ProjectionMode::Stdio, self.output_schemas)
+        let tool = helper_definitions(ProjectionMode::Stdio, self.output_schemas)
             .into_iter()
-            .find(|tool| tool["name"] == name)
+            .find(|tool| tool["name"] == name)?;
+        let mut record = json!({
+            "kind":"tool", "name":tool["name"], "description":tool["description"],
+            "inputSchema":tool["inputSchema"],
+            "outputSchemaAdvertised":tool.get("outputSchema").is_some(),
+            "definitionSource":"static_helper",
+        });
+        if let Some(schema) = tool.get("outputSchema") {
+            record["outputSchema"] = schema.clone();
+        }
+        self.capture(record);
+        Some(tool)
     }
 
     /// Captures one `tools/call` response and checks its structured content
@@ -148,10 +169,23 @@ impl AdvertisedTools {
         let Some(result) = response.get("result") else {
             return;
         };
+        let tool = self.definition(name).unwrap_or_else(|| {
+            panic!("{name} returned a tool result on a connection that never listed it")
+        });
         let structured = result.get("structuredContent");
+        let content = result["content"]
+            .as_array()
+            .expect("tool result content array");
+        assert_eq!(
+            content.is_empty(),
+            !self.include_text_copy,
+            "{name}: {result}"
+        );
         let mut record = json!({
             "kind": "result", "name": name,
             "isError": result.get("isError").and_then(Value::as_bool).unwrap_or(false),
+            "contentCount": content.len(),
+            "resultWireBytes": serde_json::to_vec(result).unwrap().len(),
         });
         if let Some(structured) = structured {
             record["structuredContent"] = structured.clone();
@@ -160,9 +194,6 @@ impl AdvertisedTools {
         let Some(structured) = structured else {
             return;
         };
-        let tool = self.definition(name).unwrap_or_else(|| {
-            panic!("{name} returned structuredContent on a connection that never listed it")
-        });
         self.check_definition(&tool);
         // A tool whose action declares no result schemas advertises none.
         let Some(schema) = tool.get("outputSchema") else {

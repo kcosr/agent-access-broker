@@ -5,6 +5,7 @@ use agent_access_provider::{ScopeRequest, ScopeResolution};
 use axum::http::HeaderValue;
 
 pub(super) mod advertisement;
+mod content_formats;
 pub(super) mod names;
 pub(super) mod output_schemas;
 mod rate_wait;
@@ -26,8 +27,13 @@ pub(super) fn endpoint(path: &str, selection: Selection) -> String {
     }
 }
 
-fn effective(selection: Selection) -> OutputSchemas {
-    selection.unwrap_or(OutputSchemas::CONNECTION_DEFAULT)
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct ToolListingKey {
+    session: String,
+    path: String,
+    output_schemas: OutputSchemas,
+    preference: Option<agent_access_provider::presentation::OutputContentFormat>,
+    name: String,
 }
 
 pub(super) struct Fixture {
@@ -42,7 +48,7 @@ pub(super) struct Fixture {
     selection: Selection,
     /// Tool definitions from this fixture's `tools/list` responses, by
     /// endpoint path, effective selection and name.
-    listed_tools: std::sync::Mutex<BTreeMap<(String, OutputSchemas, String), Value>>,
+    listed_tools: std::sync::Mutex<BTreeMap<ToolListingKey, Value>>,
     _directory: tempfile::TempDir,
 }
 
@@ -216,6 +222,7 @@ impl Fixture {
         method: &str,
         params: Value,
     ) -> Value {
+        self.prepare_tool_check(&endpoint(path, selection), session, method, &params);
         let response = self
             .send(at_uri(
                 &endpoint(path, selection),
@@ -230,10 +237,82 @@ impl Fixture {
         assert_eq!(response.status(), StatusCode::OK, "method {method}");
         let body = rpc_body(response).await;
         assert_eq!(body["id"], id);
-        let connection = output_schemas::Connection {
+        self.observe_response(&endpoint(path, selection), session, method, &params, &body);
+        body
+    }
+
+    fn capture_connection<'a>(uri: &'a str, session: &'a str) -> output_schemas::Connection<'a> {
+        use agent_access_provider::presentation::OutputContentFormat;
+        let (path, query) = uri.split_once('?').unwrap_or((uri, ""));
+        let mut output_schemas = OutputSchemas::CONNECTION_DEFAULT;
+        let mut include_text_copy = true;
+        let mut preference = None;
+        for (key, value) in query.split('&').filter_map(|field| field.split_once('=')) {
+            match key {
+                "outputSchemas" => output_schemas = OutputSchemas::parse(value).unwrap(),
+                "includeTextCopy" => include_text_copy = value.parse().unwrap(),
+                "preferredOutputContentFormat" => {
+                    preference = Some(match value {
+                        "markdown" => OutputContentFormat::Markdown,
+                        "text" => OutputContentFormat::Text,
+                        "adf" => OutputContentFormat::Adf,
+                        "storage" => OutputContentFormat::Storage,
+                        _ => panic!("invalid fixture content preference"),
+                    })
+                }
+                _ => panic!("invalid fixture query"),
+            }
+        }
+        output_schemas::Connection {
             id: session,
             path,
-            output_schemas: effective(selection),
+            output_schemas,
+            include_text_copy,
+            preferred_output_content_format: preference,
+        }
+    }
+
+    /// Pin a missing test definition before dispatch, without an extra request.
+    /// Wire-listed definitions remain authoritative until the next listing.
+    fn prepare_tool_check(&self, uri: &str, session: &str, method: &str, params: &Value) {
+        if method != "tools/call" {
+            return;
+        }
+        let connection = Self::capture_connection(uri, session);
+        let key = ToolListingKey {
+            session: session.to_owned(),
+            path: connection.path.to_owned(),
+            output_schemas: connection.output_schemas,
+            preference: connection.preferred_output_content_format,
+            name: params["name"].as_str().unwrap_or_default().to_owned(),
+        };
+        if self.listed_tools.lock().unwrap().contains_key(&key) {
+            return;
+        }
+        if let Some(tool) = self.project_tool(&key) {
+            output_schemas::capture_projected_tool(&connection, &tool);
+            self.listed_tools.lock().unwrap().insert(key, tool);
+        }
+    }
+
+    fn observe_response(
+        &self,
+        uri: &str,
+        session: &str,
+        method: &str,
+        params: &Value,
+        body: &Value,
+    ) {
+        let connection = Self::capture_connection(uri, session);
+        let path = connection.path;
+        let output_schemas = connection.output_schemas;
+        let preference = connection.preferred_output_content_format;
+        let key = |name: &str| ToolListingKey {
+            session: session.to_owned(),
+            path: path.to_owned(),
+            output_schemas,
+            preference,
+            name: name.to_owned(),
         };
         match method {
             "tools/list" => {
@@ -245,52 +324,40 @@ impl Fixture {
                 let mut listed = self.listed_tools.lock().unwrap();
                 for tool in tools {
                     if let Some(name) = tool["name"].as_str() {
-                        listed.insert(
-                            (path.to_owned(), connection.output_schemas, name.to_owned()),
-                            tool,
-                        );
+                        listed.insert(key(name), tool);
                     }
                 }
             }
             "tools/call" => {
                 let name = params["name"].as_str().unwrap_or_default();
-                let tool = self.advertised_tool(path, connection.output_schemas, name);
-                output_schemas::check_call(&connection, name, tool.as_ref(), &body);
+                let key = key(name);
+                let tool = self.listed_tools.lock().unwrap().get(&key).cloned();
+                output_schemas::check_call(&connection, name, tool.as_ref(), body);
             }
             _ => {}
         }
-        body
     }
 
-    /// The definition this fixture's caller was last listed for `name` on
-    /// `path` in `mode`, or, before any such listing, the one the current
-    /// runtime's registry for that view and mode advertises.
-    fn advertised_tool(&self, path: &str, mode: OutputSchemas, name: &str) -> Option<Value> {
-        if let Some(tool) =
-            self.listed_tools
-                .lock()
-                .unwrap()
-                .get(&(path.to_owned(), mode, name.to_owned()))
-        {
-            return Some(tool.clone());
-        }
-        let view = match path.strip_prefix("/mcp/") {
+    /// The current projection for tests that invoke without a prior listing.
+    fn project_tool(&self, key: &ToolListingKey) -> Option<Value> {
+        let view = match key.path.strip_prefix("/mcp/") {
             Some(service) => agent_access_core::mcp::McpView::Service(service.to_owned()),
             None => agent_access_core::mcp::McpView::Aggregate,
         };
         let mut catalog = agent_access_core::empty_catalog(json!({}));
         catalog.services = self.state.current().runtime.api_services_all();
+        agent_access_core::mcp::apply_output_content_preference(&mut catalog, key.preference);
         agent_access_core::mcp::ToolRegistry::build(
             &catalog,
             &view,
             agent_access_core::mcp::ProjectionMode::Http,
-            mode,
+            key.output_schemas,
             agent_access_core::mcp::STDIO_MAX_CATALOG_BYTES,
         )
         .ok()?
         .definitions()
         .into_iter()
-        .find(|tool| tool["name"] == name)
+        .find(|tool| tool["name"] == key.name)
     }
 
     pub(super) async fn call(&self, session: &str, id: u64, name: &str, arguments: Value) -> Value {
@@ -912,7 +979,7 @@ async fn mcp_static_token_reload_and_idle_expiry_do_not_keep_stale_authority() {
 }
 
 #[tokio::test]
-async fn resource_access_size_failure_requests_filters_without_truncating_coverage() {
+async fn resource_access_size_failure_returns_complexity_error_without_truncating_coverage() {
     let fixture = Fixture::new(|config| {
         config.mcp.max_response_bytes = 64 * 1024;
         for index in 0..500 {
@@ -937,9 +1004,15 @@ async fn resource_access_size_failure_requests_filters_without_truncating_covera
         )
         .await;
     assert_eq!(result["result"]["isError"], true, "{result}");
+    assert_eq!(structured(&result)["decision"], "error");
+    assert_eq!(
+        structured(&result)["reasonCode"],
+        "resource_access_too_complex"
+    );
+    assert!(structured(&result)["result"].is_null());
     assert_eq!(
         structured(&result)["error"]["message"],
-        "Resource access result exceeds MCP response limit; narrow action or resourceType filters, or check action availability for a known resource"
+        "Resource access response exceeds the result size limit."
     );
     assert!(structured(&result).get("access").is_none());
     assert!(structured(&result).get("registeredResources").is_none());

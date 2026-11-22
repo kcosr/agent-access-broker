@@ -33,7 +33,7 @@ pub(crate) const RESULT_SCHEMAS_MAX_BYTES: usize = 8192;
 /// [`Provider::invoke`](crate::Provider::invoke) returns as the success
 /// `result` (a raw download's metadata `result`), and what a provider error
 /// carries as `result`. They never describe upstream API models, MCP wrappers
-/// or the whole-result Markdown text, which the host adds itself. Native
+/// or selected rich-content fields, which the host composes itself. Native
 /// providers author them in bundled JSON beside their action documentation
 /// and load them once through a static [`ResultSchemaBundle`].
 ///
@@ -49,11 +49,12 @@ pub(crate) const RESULT_SCHEMAS_MAX_BYTES: usize = 8192;
 ///   (Boolean or schema), `items` (one schema), `enum`, `const`, `anyOf`,
 ///   `minimum`, `maximum`, `minItems`, `maxItems`, `minLength`, `maxLength`
 ///   and `description`;
-/// - both roots are `{"type": "object", ...}`;
+/// - roots describe the actual JSON value; use an opaque root only when
+///   the provider deliberately passes through arbitrary JSON;
 /// - the compact JSON of both schemas together is at most 8,192 bytes;
-/// - every rendered-body owner of the action's presentation resolves in the
-///   success schema; the host adds the optional `renderedBody` there, and in
-///   the error schema wherever the owner path resolves.
+/// - every declared body field of the action's presentation resolves in the
+///   success schema; the host replaces its native value schema with selected
+///   content, and does the same in error schemas wherever the field resolves.
 ///
 /// Leave objects open (omit `additionalProperties`); declare explicit maps
 /// with `additionalProperties: <schema>`. Genuinely opaque upstream JSON is an
@@ -427,7 +428,7 @@ fn profile_problems(schema: &Value, path: &str, problems: &mut Vec<String>) {
 pub(crate) fn validate_action_result_schemas(
     label: &str,
     schemas: &ActionResultSchemas,
-    owner_pointers: &[String],
+    body_fields: &[crate::presentation::BodyField],
     errors: &mut Vec<String>,
 ) {
     let mut size = 0;
@@ -441,9 +442,6 @@ pub(crate) fn validate_action_result_schemas(
         size += serde_json::to_vec(schema).map_or(usize::MAX, |bytes| bytes.len());
         let mut problems = Vec::new();
         profile_problems(schema, "", &mut problems);
-        if schema.get("type").and_then(Value::as_str) != Some("object") {
-            problems.push("root must describe an object".into());
-        }
         for problem in &problems {
             errors.push(format!("{label} {kind} result schema: {problem}"));
         }
@@ -459,11 +457,17 @@ pub(crate) fn validate_action_result_schemas(
         ));
     }
     let mut success = schemas.success.clone();
-    for pointer in owner_pointers {
-        if crate::presentation::inject_rendered_body_schema(&mut success, pointer).is_err() {
+    for field in body_fields {
+        if crate::presentation::inject_selected_content_schema(
+            &mut success,
+            field,
+            crate::presentation::OUTPUT_CONTENT_FORMATS,
+        )
+        .is_err()
+        {
             errors.push(format!(
-                "{label} success result schema does not resolve rendered body owner {}",
-                if pointer.is_empty() { "/" } else { pointer }
+                "{label} success result schema does not resolve body field {}/{}",
+                field.owner_path, field.field
             ));
         }
     }
@@ -477,8 +481,7 @@ pub(crate) fn validate_action_result_schemas(
 /// It declares only fields a client can receive: the Broker's own rate,
 /// concurrency, identity, context and admission refusals are rewritten to the
 /// reserved `broker` service without a `result` before delivery. Fields a
-/// provider reports itself, such as a write's `applied` success status or a
-/// command import's process facts, belong to that action's own schemas.
+/// provider reports itself, such as a command import's process facts, belong to that action's own schemas.
 ///
 /// The host merges these properties into each provider error schema (see
 /// [`with_shared_failure_properties`]) and offers this schema as the failure
@@ -491,7 +494,7 @@ fn shared_failure_properties() -> Value {
     json!({
         "mutationStatus": {
             "type": "string",
-            "enum": ["not_applied", "unknown", "applied_unverified"],
+            "enum": ["not_applied", "unknown", "applied_unverified", "applied"],
             "description": "Whether the write applied; only not_applied is safe to retry."
         },
         "retrySafe": {"type": "boolean", "description": "Whether repeating the request cannot apply anything twice."},
@@ -519,33 +522,32 @@ pub fn with_shared_failure_properties(error: &Value) -> Value {
     for property in shared.values_mut().filter_map(Value::as_object_mut) {
         property.remove("description");
     }
-    let shared = &*shared;
-    let merge = |schema: &mut Map<String, Value>| {
-        let properties = schema
-            .entry("properties")
-            .or_insert_with(|| Value::Object(Map::new()));
-        if let Some(properties) = properties.as_object_mut() {
+    fn merge(schema: &mut Value, shared: &Map<String, Value>) {
+        let Some(object) = schema.as_object_mut() else {
+            return;
+        };
+        if let Some(Value::Array(branches)) = object.get_mut("anyOf") {
+            for branch in branches {
+                merge(branch, shared);
+            }
+        }
+        // An explicitly opaque schema stays opaque, including at the root.
+        // Only objects that enumerate fields need shared fields added for
+        // strict test validation.
+        if object.contains_key("properties")
+            && let Some(properties) = object
+                .entry("properties")
+                .or_insert_with(|| Value::Object(Map::new()))
+                .as_object_mut()
+        {
             for (name, property) in shared {
                 properties
                     .entry(name.clone())
                     .or_insert_with(|| property.clone());
             }
         }
-    };
-    if let Some(object) = error.as_object_mut() {
-        if let Some(Value::Array(branches)) = object.get_mut("anyOf") {
-            for branch in branches.iter_mut().filter_map(Value::as_object_mut) {
-                if branch.contains_key("properties")
-                    || branch.get("type").and_then(Value::as_str) == Some("object")
-                {
-                    merge(branch);
-                }
-            }
-        }
-        if object.contains_key("properties") || !object.contains_key("anyOf") {
-            merge(object);
-        }
     }
+    merge(&mut error, shared);
     error
 }
 
@@ -660,7 +662,7 @@ mod tests {
     fn validation_errors(schemas: ActionResultSchemas, owners: &[&str]) -> Vec<String> {
         let owners = owners
             .iter()
-            .map(|owner| owner.to_string())
+            .map(|owner| crate::presentation::BodyField::new(format!("/result{owner}"), "body"))
             .collect::<Vec<_>>();
         let mut errors = Vec::new();
         validate_action_result_schemas("example.item.view", &schemas, &owners, &mut errors);
@@ -732,11 +734,6 @@ mod tests {
             );
         }
         for (schema, problem) in [
-            (json!({"type": "array"}), "root must describe an object"),
-            (
-                json!({"type": ["object", "null"]}),
-                "root must describe an object",
-            ),
             (
                 json!({"type": "object", "properties": {"a": {"type": "date"}}}),
                 "/properties/a/type must name distinct JSON types",
@@ -790,14 +787,17 @@ mod tests {
                 "{schema}"
             );
         }
-        assert_eq!(
-            validation_errors(
-                ActionResultSchemas::new(json!({"type": "object"}))
-                    .with_error(json!({"type": "string"})),
-                &[]
-            ),
-            ["example.item.view error result schema: root must describe an object"]
-        );
+        for root in [
+            json!({}),
+            json!({"type":"array","items":{"type":"integer"}}),
+            json!({"type":"string"}),
+            json!({"type":["object","null"]}),
+        ] {
+            assert!(
+                validation_errors(ActionResultSchemas::new(root.clone()).with_error(root), &[])
+                    .is_empty()
+            );
+        }
     }
 
     #[test]
@@ -820,7 +820,7 @@ mod tests {
     }
 
     #[test]
-    fn validation_requires_rendered_body_owners_to_resolve() {
+    fn validation_requires_declared_body_fields_to_resolve() {
         let success = json!({"type": "object", "properties": {
             "body": {"type": "string"},
             "comments": {"type": "array", "items": {"type": "object", "properties": {"body": {}}}}
@@ -838,8 +838,8 @@ mod tests {
                 &["/notes/*", "/comments/*/author"]
             ),
             [
-                "example.item.view success result schema does not resolve rendered body owner /notes/*",
-                "example.item.view success result schema does not resolve rendered body owner /comments/*/author",
+                "example.item.view success result schema does not resolve body field /result/notes/*/body",
+                "example.item.view success result schema does not resolve body field /result/comments/*/author/body",
             ]
         );
     }

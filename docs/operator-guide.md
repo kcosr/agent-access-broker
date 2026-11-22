@@ -904,6 +904,28 @@ to durable audit records. Keep using the public `reasonCode` and safe result for
 caller behavior; the internal code must not be copied into caller-visible or
 audit records.
 
+Confluence move proof failures have a separate protected audit record under
+`locationAuthorization.rootVisibility`. The
+`confluence_move_relation_unresolved` diagnostic identifies the configured
+resource/group references for the required root that could not be checked.
+`root_budget_exhausted` distinguishes bounded work from unconfirmed visibility;
+an operation-wide limit may have no individual resource reference. A missing root
+can be unreadable rather than deleted, especially with per-user credentials.
+Because content identity carries no saved space, an unreadable required exclusion
+can block moves anywhere in the site. Diagnose the account's visibility or
+explicitly revise the policy; removing an exclusion broadens access. These facts
+are protected audit data, not the operator-only `diagnosticCode` described above.
+
+Content-constrained Confluence search performs sequential current metadata checks
+before releasing results, with at least a content and space read in both initial
+and final passes for each candidate. Account for upstream rate limits and client
+request timeouts. Proof budgets can shorten a result page or deny a request that
+cannot complete one candidate; a stale inaccessible indexed row can fail the whole
+response. Pure scalar-space authority retains its single-query indexed path and
+index-lag limitations. See [content access](confluence-content-access.md#search-and-discovery)
+for the exact path selection and outcomes. No root-space cache or broader-query
+fallback avoids these checks.
+
 A provider outcome its contract does not allow logs a `provider_contract_failed`
 warning with `service`, `action`, `phase` (`scope_resolution`,
 `body_admission`, `invocation`, or `credential_verification`), `emission`
@@ -1470,11 +1492,61 @@ policy and contention before a service grant is checked; numeric live availabili
 can reveal remaining shared capacity to callers who can describe the service.
 See [residual risks](security-model.md#residual-risks).
 
+## Output content contract upgrade
+
+Upgrade the Broker, `agent-access` CLI/stdio adapter, SDK/conformance consumers,
+all five access skills, saved request files and known HTTP/MCP consumers together.
+The current versions are `agent-access.catalog.v3` and `agent-access.send.v2`.
+Ordinary responses remain JSON, with one `{format,value}` at each declared body
+field and Markdown preferred by default. Selector-less direct HTTP and HTTP MCP
+callers receive this shape too; they have no catalog/send version field that can
+shield an old response parser. Refresh MCP discovery and update callers to parse
+the tagged body. There is no compatibility output or automatic migration.
+
+Every CLI provider invocation now fetches the authenticated runtime catalog
+before dispatch, including ordinary stdout output and body-free actions. Configure
+a Broker identity token or authenticated ingress for CLI and local stdio provider
+calls. An anonymous catalog request fails with HTTP 401 (CLI exit 6) before any
+invocation, even if `identity.mode = "optional"` or `"anonymous"` permits anonymous
+direct HTTP calls. Keep anonymous development calls on the HTTP API, or configure
+a supported identity source and matching grants for CLI use. Setting
+`--no-token` is suitable for provider calls only when the ingress supplies an
+authenticated identity. See [client configuration](cli.md#config-env-and-default-precedence).
+
+Replace `readContentFormat` with exact `outputContentFormat` when a particular
+representation is required. Remove `responseFormat`; ordinary invocation results
+are always JSON. Replace invocation `--read-content-format` with
+`--output-content-format` and remove invocation `--output-format`. Spec commands
+still accept `--output-format json`. Use concrete `adf` or `storage` when needed;
+`native` is no longer a selector or response tag.
+
+For client preferences, replace `[defaults].read_content_format` with
+`preferred_output_content_format` and remove `[defaults].output_format`. Use
+`AGENT_ACCESS_PREFERRED_OUTPUT_CONTENT_FORMAT` for the environment preference;
+unset `AGENT_ACCESS_READ_CONTENT_FORMAT` and `AGENT_ACCESS_OUTPUT_FORMAT` entirely,
+including empty definitions. Retired keys and either retired environment variable
+cause every operational command's startup to exit 3 on stderr before network or
+protocol output. Help/version remain independent of configuration. A later
+stdio configuration reload error becomes a normal tool error and leaves the
+process alive. Service preferences use the separate native-provider content key
+`preferred_output_format`.
+
+A valid unsupported preference falls back to the action's declared native format.
+An exact unsupported request fails before provider lookup. A Markdown conversion
+can exceed the existing output limit even when native source fits; use a separate
+explicit native request for read recovery when appropriate. Do not replay writes:
+a presentation-error result with `mutationStatus: "applied"` and
+`retrySafe: false` means the write
+completed but its response could not be produced. A client
+`response_content_invalid` receipt similarly preserves known completion while
+withholding unusable content. No new managed-store migration is required by these
+format settings; other release migrations still follow the procedure below.
+
 ## Upgrade and rollback
 
 Treat upgrades as a coordinated change to the broker, CLI/MCP clients, portal
 assets, configuration, and persisted schema. Use matching clients that consume
-`agent-access.catalog.v2`, including its required `scopedMcpName` and
+`agent-access.catalog.v3`, including its required `scopedMcpName` and
 `scopedMcpReady` metadata.
 
 1. Read [breaking changes](../CHANGELOG.md), the

@@ -205,8 +205,8 @@ Each action needs these Atlassian OAuth scopes:
 
 | Actions | Scopes |
 | --- | --- |
-| `project.list`, `project.view`, `issue_type.list`, `issue.view`, `search`, `comment.list`, `comment.view`, `comment.property.list`, `comment.property.get`, `attachment.list`, `attachment.download`, `verify` | `read:jira-work` |
-| `issue.create`, `issue.child.create`, `issue.update`, `issue.custom_field.set`, `issue.parent.set`, `issue.dependency.add`, `comment.add`, `comment.reply`, `comment.update`, `comment.delete`, `comment.property.set`, `comment.property.delete`, `attachment.add` | `read:jira-work`, `write:jira-work` |
+| `project.list`, `project.view`, `issue_type.list`, `issue.view`, `issue.transition.list`, `search`, `comment.list`, `comment.view`, `comment.property.list`, `comment.property.get`, `attachment.list`, `attachment.download`, `verify` | `read:jira-work` |
+| `issue.create`, `issue.child.create`, `issue.update`, `issue.custom_field.set`, `issue.transition.apply`, `issue.parent.set`, `issue.dependency.add`, `comment.add`, `comment.reply`, `comment.update`, `comment.delete`, `comment.property.set`, `comment.property.delete`, `attachment.add` | `read:jira-work`, `write:jira-work` |
 
 `read:jira-user` serves only token verification and is not needed. The
 registration also requests `read:me` and `offline_access`; see
@@ -266,7 +266,7 @@ JSON `send` request files use the same service/action/input vocabulary:
 
 ```json
 {
-  "version": "agent-access.send.v1",
+  "version": "agent-access.send.v2",
   "kind": "invoke",
   "service": "jira",
   "action": "comment.add",
@@ -303,7 +303,6 @@ Discover issue types before creating an issue:
 
 ```bash
 agent-access jira issue-type list --project PROJ
-agent-access jira issue-type list --project PROJ --output-format markdown
 agent-access jira issue-type list --project PROJ --start-at 50 --max-results 50
 agent-access invoke jira.issue_type.list --input-json '{"project":"PROJ"}'
 ```
@@ -347,7 +346,7 @@ upstream visibility. No lookup credential or per-project detail request is used.
 ```bash
 agent-access jira project list --max-results 50
 agent-access jira project list --max-results 50 --page-token '<nextPageToken>'
-agent-access jira project list --output-format markdown
+agent-access jira project list
 agent-access invoke jira.project.list --input-json '{"maxResults":50}'
 ```
 
@@ -393,7 +392,6 @@ fields, then `search` to run bounded JQL in that project:
 ```bash
 agent-access jira project list
 agent-access jira project view PROJ
-agent-access jira project view PROJ --output-format markdown
 agent-access jira project view PROJ --include fields,versions --query external
 agent-access jira issue search --project PROJ --jql 'cf[12345] ~ "EXT-4812" AND fixVersion = "2.4"'
 agent-access invoke jira.project.view --input-json '{"project":"PROJ","include":["fields","versions"]}'
@@ -471,7 +469,7 @@ separately authorized, paginated Create issues workflow.
 
 ## Actions and lookup requirements
 
-Twenty-five actions:
+Twenty-seven actions:
 
 | Action | Required scope type | Lookup requirement |
 | --- | --- | --- |
@@ -483,6 +481,8 @@ Twenty-five actions:
 | `issue.child.create` | `project` | yes |
 | `issue.update` | `project` | yes |
 | `issue.custom_field.set` | `project` | yes |
+| `issue.transition.list` | `project` | yes |
+| `issue.transition.apply` | `project` | yes |
 | `issue.parent.set` | `project` | yes |
 | `issue.dependency.add` | `project` | yes |
 | `search` | `project` | no |
@@ -534,14 +534,15 @@ allowlisted fields in Jira's structured error map. Body/description validation
 is classified as `body_malformed`; other recognized safe field validation is
 `input_invalid`. The broker ignores Jira's free-form error-message list and
 never returns the raw response body. Custom-field writes use only the fixed
-`jira_custom_field_rejected` message for 400/422 responses. Lookup, readback,
+`jira_custom_field_rejected` message for 400/422 responses; transition writes use
+only `jira_transition_rejected`. Lookup, readback,
 authentication, permission, existence, scope, conflict, throttling, and server-error bodies
 remain hidden. A Jira HTTP 429 returns `upstream_rate_limited` with the bounded
 `Retry-After` wait when Jira sends one; see
 [http-api.md](http-api.md#reason-code-table). A 429 on a mutation request itself
 means Jira did not apply it. When the mutation was applied but the readback that
 verifies it is throttled (`issue.create`, `issue.child.create`, `issue.update`,
-`issue.parent.set`, and `issue.dependency.add`), the error is instead
+`issue.transition.apply`, `issue.parent.set`, and `issue.dependency.add`), the error is instead
 `mutation_verification_failed` with `mutationStatus: "applied_unverified"`,
 `retrySafe: false`, `verificationStage` (the audit `failurePhase`, such as
 `post_create_readback`), and `safeLocators` holding the created or changed issue
@@ -570,7 +571,7 @@ ordinary reason and message and reports what Jira may have done:
 | --- | --- |
 | The mutation request may have been sent but got no response (a timeout, a stalled upload, a connection failure after sending, or an unclassified failure), or Jira or a proxy answered with a redirect, which the Broker never follows, or a 5xx | `mutationStatus: "unknown"`, `retrySafe: false` |
 | Jira answered the mutation with a success status, but its response then failed, stalled, exceeded the byte cap, did not parse or did not match the request (such as a created issue in another project), or Broker could not construct a bounded acknowledgement result | `mutationStatus: "applied_unverified"`, `retrySafe: false`, `verificationStage: "mutation_response"` |
-| The read-back after an applied `issue.create`, `issue.child.create`, `issue.update`, `issue.parent.set` or `issue.dependency.add` failed or did not match, or the result exceeded the response limit | `mutationStatus: "applied_unverified"`, `retrySafe: false`, the read-back `verificationStage` (such as `post_update_readback`) |
+| The read-back after an applied `issue.create`, `issue.child.create`, `issue.update`, `issue.transition.apply`, `issue.parent.set` or `issue.dependency.add` failed or did not match, or the result exceeded the response limit | `mutationStatus: "applied_unverified"`, `retrySafe: false`, the read-back `verificationStage` (such as `post_update_readback`) |
 
 `safeLocators` name the target from the validated request and the reads before
 the write, never from the failed response: the `project` (and parent issue) of
@@ -579,27 +580,37 @@ issue, comment and selected custom-field IDs of an update. Inspect the issue
 before repeating a write with either receipt. A 4xx rejection and throttling of the write itself carry
 no receipt.
 
-## Read response formats
+## Output content formats
 
-Jira normalized reads use common top-level invoke fields, never Jira `inputs`.
-`readContentFormat` accepts `native`, `markdown`, or `text`; omission is
-`native`. It is advertised on exactly these eight actions:
+Jira results stay structured JSON. The common top-level `outputContentFormat`
+selects `markdown`, `text`, or `adf` for every declared rich body in the result.
+Each selected body is `{ "format": "markdown", "value": "..." }` (or a text
+string/ADF object paired with its corresponding tag). Metadata remains beside
+the body in the same result structure. These eight actions declare rich bodies:
 
-- `issue.view`, whose `renderedBody` is beside root `description`, with a
-  companion inside each supported non-null ADF custom-field entry and beside
-  each included `commentPage.comments[].body`;
-- `comment.list`, whose companion is beside each returned `comments[].body`
-  when `includeBodies` is true;
-- `issue.create` and `issue.update`, whose companion is inside `result.issue`;
-- `comment.view`, `comment.add`, `comment.reply`, and `comment.update`, whose
-  companion is inside `result.comment` beside `body`.
+- `issue.view`: root `description`, each supported ADF custom-field `value`,
+  and each included `commentPage.comments[].body`;
+- `issue.create` and `issue.update`: `issue.description`;
+- `comment.list`: each `comments[].body` when `includeBodies` is true;
+- `comment.view`, `comment.add`, `comment.reply`, and `comment.update`:
+  `comment.body`.
 
-Markdown and text preserve the native ADF field unchanged. Missing or null
-native content has no companion; a present empty document has a present,
-possibly empty companion. `search` stays description-free. `comment.list`
-without `includeBodies` stays body-free, so `readContentFormat` has no effect
-on that metadata-only result. `issue.child.create` does not expose its internal description
-readback, and comment-property JSON is never guessed to be ADF.
+Missing and null bodies retain their absence or null value. Present empty
+content produces a selected body with an empty value/document. `search` and
+metadata-only comment lists stay body-free. `issue.child.create` does not
+expose its internal description readback, and comment-property JSON remains
+ordinary JSON.
+
+Without an exact selection, the Broker uses `preferredOutputContentFormat`
+from the request or connection, then `providers.jira.content.preferred_output_format`,
+then Markdown. A preference unsupported by the action selects its native
+format, ADF, without consulting lower-priority preferences. Exact unsupported
+formats fail before provider work. Write `inputs.contentFormat` is independent.
+The CLI flag is `--output-content-format`; its configured preference is
+`[defaults].preferred_output_content_format`. Inspect `outputContentFormats`,
+`nativeOutputContentFormat`, `defaultOutputContentFormat`, and `bodyFields` in
+the caller-filtered catalog. See [HTTP invocation](http-api.md) and
+[CLI output](cli.md).
 
 The deterministic ADF subset covers documents, paragraphs, headings, hard
 breaks, rules, quotes, panels, expands, bullet/ordered/task/decision lists,
@@ -610,44 +621,25 @@ information, plus `mailto`, remain active. Unknown containers preserve safe
 textual descendants, unknown leaves emit `[unsupported content]`, and media
 fallbacks never disclose internal IDs. Plain text uses the same structural
 traversal without Markdown markers. Conversion is offline, preserves source
-order, never fetches linked content, and never truncates or returns a partial
-rendering.
+order, never fetches linked content, and never truncates a body.
 
-`responseFormat` accepts `json` or `markdown`; omission is `json`. Exactly eleven
-retrievals advertise whole-result Markdown: `project.list`, `project.view`, `issue_type.list`, `issue.view`, `search`,
-`comment.list`, `comment.view`, `comment.property.list`,
-`comment.property.get`, `attachment.list`, and `verify`. Their deterministic
-templates represent every meaningful present field, preserve exact identifiers,
-URLs, timestamps, booleans, counts, collection order, and pagination tokens,
-and end with one LF. Copyable identifiers and timestamps render as code spans;
-safe absolute URLs render as autolinks. Metadata text has control characters and
-embedded newlines neutralized so it cannot create unintended Markdown structure.
-Arbitrary comment-property JSON, including the valid value `null`, is retained
-in a safely delimited `json` fence. Verification mismatches use the same template
-while retaining `allow_with_result`, HTTP 409, and CLI exit 2.
+Every declared ADF field is structurally validated and bounded by
+`providers.jira.content.max_body_bytes`, including exact ADF output. Malformed
+custom ADF is withheld as described under [custom fields](#custom-fields);
+malformed descriptions or comments fail the request. Complexity and byte
+exhaustion fail the entire result as sanitized `upstream_protocol_failed`/502.
+No failed selection or conversion triggers fallback. The separate
+[comment-page byte budget](#comment-pagination-and-limits) selects complete
+native comments with an explicit continuation; it never shortens a body.
+The final serialized JSON must fit `limits.max_upstream_response_bytes`.
 
-Whole-result formatting uses the exact result already produced: it makes no
-second Jira call, changes no selected fields or query parameters, follows no
-pagination token, and fetches no related content. Direct HTTP and `send` retain
-the normal JSON response envelope with
-`result = { "format": "markdown", "value": "..." }`; typed CLI and generic
-`invoke --output-format markdown` print only `result.value` on a formatted
-success. The caller-filtered catalog, OpenAPI, and action-specific send schema
-advertise support. Confluence and GitLab normalized reads are also available on
-their declared actions.
-
-Every returned declared ADF field is structurally validated and bounded by
-`providers.jira.content.max_body_bytes` even in native mode. Malformed custom
-ADF is explicitly withheld as described under [custom fields](#custom-fields);
-malformed descriptions or comment bodies fail the request. Oversized individual
-bodies and over-complex or over-budget native/rendered content fail the complete
-request without truncation as sanitized `upstream_protocol_failed`/502. The
-separate [comment-page byte budget](#comment-pagination-and-limits) can select
-fewer complete comments with an explicit continuation; it never shortens a body.
-Native ADF,
-custom-field names and values, rendered content, whole-result Markdown, property
-values, and pagination tokens are excluded from audit, tracing, logs, errors,
-and object identifiers.
+For an already completed `issue.create`, `issue.update`, `comment.add`,
+`comment.reply`, or `comment.update`, a later presentation failure preserves
+`mutationStatus: "applied"` and `retrySafe: false` with a payload-free receipt.
+Its message says the mutation completed but its response could not be produced.
+Do not repeat the write. Reads carry no mutation-completion claim. Native and
+selected bodies, custom-field names and values, property values, and pagination
+tokens remain excluded from audit and diagnostics.
 
 ## Keys, locators, and project confirmation
 
@@ -809,13 +801,11 @@ the issue response's embedded comments. Continue through `comment.list` with
 
 Successful results include issue id/key/project, generated `webUrl`, summary,
 status, issue type, `created`, `updated`, `creator`, `reporter`, `assignee`,
-`priority`, `labels`, `description`, and `customFields`. The description is Jira
-ADF JSON when Jira returns one and `null` when Jira returns no description or
-omits the field. The [standard context](#standard-context) fields below are
+`priority`, `labels`, `description`, and `customFields`. The description is a selected `{format,value}` body when Jira returns one
+and `null` when Jira returns no description or omits the field. The [standard context](#standard-context) fields below are
 also always present; [parent/subtasks](#parent-and-subtasks) and
 [issue links](#issue-links) depend on the shared disclosure rule.
-When requested through `readContentFormat`, the broker also adds the normalized
-companion described above. User summaries expose only `accountId` and
+The selected representation follows the output content rules above. User summaries expose only `accountId` and
 `displayName`; priority exposes only `id` and `name`.
 
 Returned descriptions are validated with a read-path structural ADF check and
@@ -936,8 +926,7 @@ A missing/null cascading option child becomes null. A textarea's schema uses
 Every array member must validate or the entire field is withheld. Projection
 strips other option/user properties, including email and self/avatar URLs.
 Custom Labels preserve string order and duplicates, with null and empty arrays
-retained under the normal custom-field rules. Markdown displays each label as
-a literal code span. Only the exact `labels` implementation and matching
+retained under the normal custom-field rules. Only the exact `labels` implementation and matching
 array/string schema qualify; an arbitrary string-array schema is unsupported.
 Project, issue, group, version, sprint, Assets, and app-specific fields are
 unsupported as custom-field implementations; the standard context projections
@@ -947,12 +936,11 @@ The expanded raw issue, unrelated standard fields, and complete `names`/`schema`
 maps are never returned. Free text and ADF can mention resources, under the same
 policy as issue descriptions.
 
-Whole-result Markdown has a custom-field section with escaped names, IDs, and
-readable values. Null and empty arrays display as not set, retaining an
-unsupported/withheld marker when applicable. `readContentFormat` preserves
-native values and adds `renderedBody` only inside supported non-null `adf`
-entries, at `/result/customFields/*`; the description's companion stays at the
-root. Unsupported, withheld, and null ADF entries have no companion.
+Supported non-null `adf` entries wrap only their `value` in the selected
+`{format,value}` representation. Their provider field `type` remains `adf`, even
+when `value.format` is `markdown` or `text`. The declaration is conditional on
+both `status: "supported"` and `type: "adf"`; unsupported, withheld, null, and
+other field types retain their ordinary values.
 
 `providers.jira.content.max_body_bytes` applies to each ADF document separately
 (default 1 MiB), not to the custom-field collection. Description and custom
@@ -966,7 +954,7 @@ There is no separate custom-field-count or aggregate custom-field byte limit.
 The complete upstream response and Broker result remain bounded by
 `limits.max_upstream_response_bytes` (default 512 MiB). HTTP MCP additionally
 uses `mcp.max_response_bytes` (default 16 MiB, configurable), counting structured
-content and its text copy; excess returns `mcp_response_too_large`. The local
+content and any emitted text copy; excess returns `mcp_response_too_large`. The local
 stdio MCP adapter has a 16 MiB Broker-JSON receipt cap. These are ceilings, not
 target response sizes. Custom-field audit metadata contains only
 `customFields: {count, unsupported, withheld}` counts, never names, values, or
@@ -1242,6 +1230,100 @@ metadata; it excludes submitted summary text, source content, converted ADF,
 returned description ADF, and raw upstream error bodies. Content attribution for
 `issue.update` applies only when the request supplies `content`; it never
 mutates summaries.
+
+## Issue workflow transitions
+
+`issue.transition.list` discovers transitions available on one issue using the
+selected execution credential. `issue.transition.apply` applies one explicitly
+selected transition. Both require independent grants on the issue's `project`;
+listing is read-only and applying is a write. The read-only caller ceiling
+therefore permits listing but refuses applying. Both support service and per-user
+credentials. Granting either action, or `issue.update`, does not grant the other.
+
+Project statuses from `project.view` are descriptive inventory. Workflow choices
+can differ by issue type, current state and Jira user, even within one project.
+Use issue-specific discovery and select the transition ID and its destination
+status ID. Names are display labels: multiple transitions can lead to the same
+status, and different statuses can have identical names.
+
+```bash
+agent-access jira issue transition list PROJ-123 --include-fields
+agent-access jira issue transition apply PROJ-123 \
+  --transition-id 31 --to-status-id 10002 \
+  --expected-issue-id 10001 --expected-status-id 10000
+```
+
+IDs in examples are illustrative; use IDs returned by your Jira instance.
+Both actions accept exactly one non-null `issue` key or `url`. The CLI uses a
+positional issue key or `--issue-url`. All transition,
+status, resolution and expected issue IDs are positive decimal strings of at most
+64 bytes. Unknown inputs are refused.
+
+### `issue.transition.list`
+
+Optional `includeFields` defaults to false. Results contain `operation`, bounded
+`issue` identity (`id`, `key`, `project`, `webUrl`), `currentStatus`, and
+`transitions`, with `count` and `truncated`. Status objects contain `id`, `name`
+and a nullable `statusCategory` (`id`, `key`, `name`). Each transition contains
+`id`, `name`, destination `to`, and nullable `hasScreen`.
+
+With `includeFields: true`, each transition additionally has nullable `fields`.
+An available field collection contains `items`, `count`, and `truncated`.
+Each item exposes `id`, `name`, `required`, nullable `hasDefaultValue`, and
+`brokerInput`. Only resolution has `brokerInput: "resolutionId"`; other fields
+have null because this action cannot submit them. Resolution may also have an
+`allowedValues` collection of ID/name pairs. Default contents, arbitrary schemas,
+custom-field choices and upstream URLs are omitted. Null metadata means Jira did
+not provide it; it does not mean that the transition has no requirements.
+
+Collections are capped at 100 transitions, fields per transition and resolution
+choices per field. Resolution is projected first so it survives field truncation.
+Names are capped at 1,024 UTF-8 bytes. Metadata reads have a
+1 MiB ceiling, further restricted by the configured upstream response limit;
+the final result also obeys the configured limit. Truncation is explicit and has
+no continuation token. Metadata describes visible requirements only: workflow
+validators and permissions can still reject a transition.
+
+### `issue.transition.apply`
+
+Required `transitionId` and `toStatusId` identify the exact transition and intended
+destination. Optional `expectedIssueId` guards against a moved or reused issue
+key; optional `expectedStatusId` checks the current status before the write.
+Optional `resolutionId` is the only submitted transition-screen value. Jira
+validates whether it is supported, required or allowed. Transitions needing other
+caller-supplied fields cannot be completed by this action; any defaults and
+workflow validators remain Jira's responsibility. This action does not submit
+comments, descriptions, custom fields, notification controls or workflow bypasses.
+
+After project authorization and issue confirmation, Broker reads the status and
+rechecks the selected transition with the apply action's execution credential,
+then posts exactly one transition by immutable issue ID. A different grant may
+select a different credential from listing. `jira_transition_unavailable` (409)
+means the selection is no longer available, its destination differs, or the
+expected current status changed. Jira rejecting the POST with HTTP 409 also
+returns `jira_transition_unavailable`, without a mutation receipt; rediscover
+before choosing a transition. `scope_unresolved` covers an expected issue-ID
+mismatch. `jira_transition_rejected` (400) reports Jira's 400/422 refusal without
+forwarding upstream validation text or field values.
+
+The checks are not atomic with Jira's write. Another actor, automation or a
+workflow post-function can change status between checks or after acceptance.
+A successful result has `status: "transitioned"`, issue identity, `transitionId`,
+`fromStatusId`, `toStatusId`, and `verification` with `status: "matched"` or
+`"differs"` and `observedStatus`. Both are successful accepted writes; `differs`
+reports the later observation and does not justify a replay. Failed readback
+returns an `applied_unverified` receipt at `post_transition_readback`. A timeout,
+disconnect or ambiguous upstream failure during POST can return `unknown`.
+These receipts have `retrySafe: false`; inspect the issue instead of resubmitting,
+even when `expectedStatusId` was supplied. Global and self-loop transitions make
+that guard insufficient for safe retries. Existing bounded OAuth 401 renewal
+still applies; uncertain mutations are never automatically replayed.
+
+Audit includes selected IDs, project and verification outcome, but omits status
+and transition names, field metadata and raw Jira validation responses. OAuth
+listing needs `read:jira-work`; applying also needs `write:jira-work`. If the
+configured OAuth profile was read-only, enable the write scope and reconnect
+existing connections before applying transitions.
 
 ## `issue.custom_field.set`
 
@@ -1529,10 +1611,11 @@ The returned `documentation` object includes
 field/operator, function, and sorting tables generated from the parser definitions.
 Use the tool name exposed by your client; the service/action IDs remain stable.
 
-The typed CLI lowers to that shape:
+With an [authenticated CLI identity](cli.md#config-env-and-default-precedence),
+the typed CLI lowers to that shape:
 
 ```bash
-agent-access --url http://127.0.0.1:8787 --no-token \
+agent-access --url http://127.0.0.1:8787 \
   jira issue search --project PROJ --jql 'status = Done ORDER BY updated DESC'
 ```
 
@@ -1871,9 +1954,9 @@ authorization and re-confirms the issue during invocation.
   or email-like user fields. Use `comment.view` for a selected individual body.
 - `comment.view` fetches one comment through the scoped
   `issue/{key}/comment/{id}` path and validates that Jira returned the requested
-  numeric comment id. Its returned ADF body is structurally validated and
-  bounded by `providers.jira.content.max_body_bytes` in native and rendered
-  modes; overflow or malformed upstream ADF returns the fixed sanitized
+  numeric comment id. Its native ADF body is structurally validated and
+  bounded by `providers.jira.content.max_body_bytes` before producing the selected
+  `{format,value}` representation; overflow or malformed upstream ADF returns the fixed sanitized
   `upstream_protocol_failed`/502.
 - `comment.reply` fetches the requested parent through the scoped issue-comment
   path. If the requested parent is already a reply, the broker resolves the
@@ -1921,10 +2004,9 @@ agent-access invoke jira.issue.view --input-json '{"issue":"PROJ-123","includeCo
 agent-access invoke jira.comment.list --input-json '{"issue":"PROJ-123","includeBodies":true}'
 ```
 
-`readContentFormat` and `responseFormat` remain common invocation fields,
-not action inputs. Body-enabled lists and embedded pages support the same native
-ADF, Markdown/text companions and whole-result Markdown as the individual
-comment read. Replies remain flat entries with `parentCommentId`; a reply's
+`outputContentFormat` and `preferredOutputContentFormat` are common invocation
+fields, outside action inputs. Body-enabled lists and embedded pages select the
+same ADF, Markdown, or text body representations as individual comment reads. Replies remain flat entries with `parentCommentId`; a reply's
 parent can be on another page. Metadata listing followed by `comment.view`
 remains useful for selecting individual comments in any order.
 

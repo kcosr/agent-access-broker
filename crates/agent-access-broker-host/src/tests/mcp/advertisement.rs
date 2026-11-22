@@ -4,8 +4,7 @@
 use super::*;
 use agent_access_provider::{ScopeRequest, ScopeResolution};
 
-const QUERY_ERROR: &str =
-    "Invalid MCP endpoint query; only outputSchemas=on or outputSchemas=off is accepted";
+const QUERY_ERROR: &str = "Invalid MCP query options";
 const SELECTIONS: [Selection; 3] = [Some(OutputSchemas::On), Some(OutputSchemas::Off), None];
 
 fn initialize_message() -> Value {
@@ -65,7 +64,14 @@ async fn list(
 async fn endpoint_query_accepts_one_exact_selection_and_rejects_everything_else_before_dispatch() {
     let fixture = Fixture::new(|_| {}).await;
     for path in ["/mcp", "/mcp/fake"] {
-        for query in ["", "?outputSchemas=on", "?outputSchemas=off"] {
+        for query in [
+            "",
+            "?outputSchemas=on",
+            "?outputSchemas=off",
+            "?outputSchemas=on&includeTextCopy=false&preferredOutputContentFormat=text",
+            "?preferredOutputContentFormat=markdown&includeTextCopy=true&outputSchemas=off",
+            "?includeTextCopy=false&outputSchemas=on",
+        ] {
             let response = fixture
                 .send(at_uri(
                     &format!("{path}{query}"),

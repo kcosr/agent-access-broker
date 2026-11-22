@@ -25,15 +25,16 @@ pub(in crate::tests) async fn initialize(fixture: &Fixture, path: &str, token: &
         .to_owned();
     let body = rpc_body(response).await;
     // The assembly, not the host package, names and versions the server.
+    let endpoint_path = path.split_once('?').map_or(path, |(path, _)| path);
     let (assembly, version) = crate::test_composition::TEST_ASSEMBLY;
     assert_eq!(
         body["result"]["serverInfo"]["name"],
-        path.strip_prefix("/mcp/").unwrap_or(assembly)
+        endpoint_path.strip_prefix("/mcp/").unwrap_or(assembly)
     );
     assert_eq!(body["result"]["serverInfo"]["version"], version);
     assert_eq!(body["result"]["protocolVersion"], VERSION);
     assert_http_instructions(&body["result"]["instructions"]);
-    if let Some(service) = path.strip_prefix("/mcp/") {
+    if let Some(service) = endpoint_path.strip_prefix("/mcp/") {
         assert!(
             body["result"]["instructions"]
                 .as_str()

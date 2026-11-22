@@ -1,6 +1,59 @@
 {
   "definitions": {
     "nstr": {"type": ["string", "null"]},
+    "workflowStatus": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "string"},
+        "name": {"type": "string"},
+        "statusCategory": {
+          "type": ["object", "null"],
+          "properties": {"id": {"type": "integer"}, "key": {"type": "string"}, "name": {"type": "string"}},
+          "required": ["id", "key", "name"]
+        }
+      },
+      "required": ["id", "name", "statusCategory"]
+    },
+    "transitionFields": {
+      "type": ["object", "null"],
+      "description": "Requested transition-screen requirements; null when Jira returned no fields metadata.",
+      "properties": {
+        "count": {"type": "integer"},
+        "truncated": {"type": "boolean"},
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {"type": "string"},
+              "name": {"type": "string"},
+              "required": {"type": "boolean"},
+              "hasDefaultValue": {"type": ["boolean", "null"]},
+              "brokerInput": {"enum": ["resolutionId", null]},
+              "allowedValues": {
+                "type": "object",
+                "description": "Resolution choices when Jira supplied them; other screen fields cannot be submitted.",
+                "properties": {
+                  "count": {"type": "integer"},
+                  "truncated": {"type": "boolean"},
+                  "items": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {"id": {"type": "string"}, "name": {"type": "string"}},
+                      "required": ["id", "name"]
+                    }
+                  }
+                },
+                "required": ["count", "truncated", "items"]
+              }
+            },
+            "required": ["id", "name", "required", "hasDefaultValue", "brokerInput"]
+          }
+        }
+      },
+      "required": ["count", "truncated", "items"]
+    },
     "nadf": {"type": ["object", "null"], "description": "ADF document; null when none"},
     "issueRef": {
       "type": "object",
@@ -519,6 +572,56 @@
           "issue": {"$ref": "#/definitions/issueReadback"}
         },
         "required": ["operation", "issue"]
+      }
+    },
+    "issue.transition.list": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "operation": {"const": "issue.transition.list"},
+          "issue": {"$ref": "#/definitions/issueRef"},
+          "currentStatus": {"$ref": "#/definitions/workflowStatus"},
+          "count": {"type": "integer"},
+          "truncated": {"type": "boolean"},
+          "transitions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {"type": "string"},
+                "name": {"type": "string"},
+                "to": {"$ref": "#/definitions/workflowStatus"},
+                "hasScreen": {"type": ["boolean", "null"]},
+                "fields": {"$ref": "#/definitions/transitionFields"}
+              },
+              "required": ["id", "name", "to", "hasScreen"]
+            }
+          }
+        },
+        "required": ["operation", "issue", "currentStatus", "count", "truncated", "transitions"]
+      }
+    },
+    "issue.transition.apply": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "operation": {"const": "issue.transition.apply"},
+          "issue": {"$ref": "#/definitions/issueRef"},
+          "status": {"const": "transitioned"},
+          "transitionId": {"type": "string"},
+          "fromStatusId": {"type": "string"},
+          "toStatusId": {"type": "string"},
+          "verification": {
+            "type": "object",
+            "description": "A later observation after the accepted transition, not an atomic state proof.",
+            "properties": {
+              "status": {"enum": ["matched", "differs"]},
+              "observedStatus": {"$ref": "#/definitions/workflowStatus"}
+            },
+            "required": ["status", "observedStatus"]
+          }
+        },
+        "required": ["operation", "issue", "status", "transitionId", "fromStatusId", "toStatusId", "verification"]
       }
     },
     "issue.custom_field.set": {

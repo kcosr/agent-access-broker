@@ -180,7 +180,7 @@ async fn custom_field_put_preserves_json_targets_immutable_id_and_does_not_read_
     for value in &values {
         let result = fixture
             .provider
-            .invoke(invocation(inputs(value.clone())))
+            .invoke_checked(invocation(inputs(value.clone())))
             .await
             .unwrap();
         assert_eq!(
@@ -225,7 +225,7 @@ async fn custom_field_allowlist_size_and_identity_guards_precede_write() {
     assert_eq!(
         fixture
             .provider
-            .invoke(invocation(inputs(Value::Null)))
+            .invoke_checked(invocation(inputs(Value::Null)))
             .await
             .unwrap_err()
             .reason_code()
@@ -244,7 +244,7 @@ async fn custom_field_allowlist_size_and_identity_guards_precede_write() {
     assert_eq!(
         fixture
             .provider
-            .invoke(invocation(inputs(json!("ab"))))
+            .invoke_checked(invocation(inputs(json!("ab"))))
             .await
             .unwrap_err()
             .reason_code(),
@@ -254,7 +254,7 @@ async fn custom_field_allowlist_size_and_identity_guards_precede_write() {
     fixture.provider.config.content.max_body_bytes = 4;
     fixture
         .provider
-        .invoke(invocation(inputs(json!("ab"))))
+        .invoke_checked(invocation(inputs(json!("ab"))))
         .await
         .unwrap();
     fixture.api.reset().await;
@@ -265,7 +265,7 @@ async fn custom_field_allowlist_size_and_identity_guards_precede_write() {
     assert_eq!(
         fixture
             .provider
-            .invoke(outside)
+            .invoke_checked(outside)
             .await
             .unwrap_err()
             .reason_code(),
@@ -276,7 +276,7 @@ async fn custom_field_allowlist_size_and_identity_guards_precede_write() {
     assert_eq!(
         fixture
             .provider
-            .invoke(invocation(wrong))
+            .invoke_checked(invocation(wrong))
             .await
             .unwrap_err()
             .reason_code(),
@@ -307,7 +307,7 @@ async fn custom_field_reconfirms_current_key_and_refuses_noncanonical_immutable_
             .await;
         let error = fixture
             .provider
-            .invoke(invocation(inputs(Value::Null)))
+            .invoke_checked(invocation(inputs(Value::Null)))
             .await
             .unwrap_err();
         assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
@@ -332,7 +332,7 @@ async fn custom_field_reconfirms_current_key_and_refuses_noncanonical_immutable_
         .await;
     let result = fixture
         .provider
-        .invoke(invocation(inputs(Value::Null)))
+        .invoke_checked(invocation(inputs(Value::Null)))
         .await
         .unwrap();
     assert_eq!(result.result["issue"]["key"], "PROJ-2");
@@ -369,7 +369,9 @@ async fn custom_field_rejections_are_value_free_and_standard_statuses_keep_their
                         HookPhase::Invocation,
                         JIRA_BACKEND.domain_reasons(),
                     ),
-                    fixture.provider.invoke(invocation(inputs(json!(SENTINEL)))),
+                    fixture
+                        .provider
+                        .invoke_checked(invocation(inputs(json!(SENTINEL)))),
                 ),
             ))
             .await
@@ -417,7 +419,7 @@ async fn custom_field_http_acceptance_and_redirects_preserve_receipts_without_re
         let fixture = Fixture::new(response).await;
         let error = fixture
             .provider
-            .invoke(invocation(inputs(json!(SENTINEL))))
+            .invoke_checked(invocation(inputs(json!(SENTINEL))))
             .await
             .unwrap_err();
         assert_eq!(error.result.as_deref().unwrap()["mutationStatus"], expected);
@@ -447,7 +449,7 @@ async fn custom_field_transport_and_result_construction_failures_preserve_safe_r
         let provider =
             JiraProvider::with_backend(config, ProviderLimits::default(), Arc::new(backend));
         let error = provider
-            .invoke(invocation(inputs(json!(SENTINEL))))
+            .invoke_checked(invocation(inputs(json!(SENTINEL))))
             .await
             .unwrap_err();
         assert_eq!(error.result.as_deref().unwrap()["mutationStatus"], status);
@@ -457,7 +459,7 @@ async fn custom_field_transport_and_result_construction_failures_preserve_safe_r
     fixture.provider.limits.max_upstream_response_bytes = 1;
     let error = fixture
         .provider
-        .invoke(invocation(inputs(json!(SENTINEL))))
+        .invoke_checked(invocation(inputs(json!(SENTINEL))))
         .await
         .unwrap_err();
     assert_eq!(

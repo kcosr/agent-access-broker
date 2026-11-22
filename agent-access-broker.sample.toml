@@ -2,7 +2,9 @@
 #
 # Do not copy this file directly into production. It intentionally uses
 # environment = "development", anonymous identity, and service credential grants
-# so the local provider examples are easy to exercise.
+# for direct HTTP development calls. CLI and local stdio provider calls require
+# authenticated runtime catalog access; configure an identity source and grants
+# for the authenticated principal before using those clients.
 # For managed production deployment, start with
 # agent-access-broker.production.sample.toml and docs/operator-guide.md.
 # That template uses required identity, managed broker tokens, deny-by-default
@@ -113,9 +115,10 @@ authority = "toml"
 allowed_values = ["default", "workstation", "internal", "external"]
 default_context = "default"
 
-# Example required static identity source. Keep mode = "anonymous" for local
-# smoke tests; switch to mode = "required" and uncomment this block when using
-# broker-issued/local opaque tokens.
+# Example required static identity source. Keep mode = "anonymous" for direct
+# HTTP smoke tests; for CLI/stdio, switch to mode = "required", uncomment this
+# block and grant its principal or group the intended actions/resources instead
+# of group:anonymous. Use tokens registered by this source.
 #
 # [[identity.sources]]
 # name = "local"
@@ -502,6 +505,14 @@ default_decision = "deny"
 
 # Resource selectors are shared by grants and token restrictions.
 # Labels are optional. All and namespace entries include new upstream resources.
+# Confluence content can also retain an optional navigation URL:
+# [[policy.resources]]
+# id = "confluence-runbooks"
+# resource_type = "confluence_content"
+# selector = { kind = "subtree", value = "https://example.atlassian.net/wiki/content/folder/67890" }
+# browser_url = "https://example.atlassian.net/wiki/spaces/ENG/folder/67890/Operations+Runbooks"
+# allowed_execution_contexts = ["internal"]
+# enabled = true
 
 [[policy.resources]]
 id = "jira-proj"
@@ -796,9 +807,10 @@ upload_media_types = ["text/plain", "text/markdown", "application/json", "image/
 download_media_types = { allow = ["*/*"], deny = [] } # default
 
 [providers.jira.content]
+# preferred_output_format = "markdown"  # soft preference; markdown | text | adf | storage
 comment_formats = ["adf"]
 # Bounds caller-supplied rich-content writes and every declared native Jira body
-# returned by reads or mutation readbacks, including native response mode.
+# and selected body returned by reads or mutation readbacks.
 max_body_bytes = 1048576
 
 [providers.jira.search]
@@ -863,6 +875,7 @@ upload_media_types = ["text/plain", "application/json", "image/png", "text/html"
 download_media_types = { allow = ["*/*"], deny = [] } # default
 
 [providers.confluence.content]
+# preferred_output_format = "markdown"  # soft preference; markdown | text | adf | storage
 # Native write targets and returned read representations. Normalized reads
 # preserve a returned native body and derive Markdown/text from present ADF
 # first, otherwise storage. Storage also enables normalized writes.
@@ -873,6 +886,19 @@ max_body_bytes = 2097152
 
 [providers.confluence.search]
 max_results = 50
+
+# Location proofs share these limits across initial and final checks and retries.
+[providers.confluence.content_access]
+max_metadata_requests = 1024
+max_metadata_bytes = 33554432
+
+[providers.confluence.content_search]
+max_candidate_pages = 4
+max_candidates = 100
+max_upstream_requests = 1024
+max_scan_bytes = 33554432
+# Operator ceiling for the encoded path/query/cursor; qualify on each route.
+max_encoded_request_target_bytes = 4096
 
 [providers.confluence.listing]
 max_results = 50
@@ -919,6 +945,7 @@ max_total_bytes = 52428800
 media_types = []
 
 [providers.gitlab.content]
+# preferred_output_format = "markdown"  # soft preference; markdown | text | adf | storage
 max_body_bytes = 1048576
 max_commit_actions = 25
 max_file_bytes = 10485760

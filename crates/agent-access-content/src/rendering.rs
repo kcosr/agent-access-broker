@@ -1,9 +1,9 @@
 use agent_access_provider::presentation::{
-    ReadContentFormat, RenderBudget, RenderBudgetExhausted, RenderedBody,
+    OutputContentFormat, RenderBudget, RenderBudgetExhausted, SelectedContent,
 };
 use html5ever::{QualName, local_name, ns, parse_fragment, tendril::TendrilSink};
 use markup5ever_rcdom::{Handle, NodeData, RcDom};
-use pulldown_cmark::{CowStr, Event, Options, Parser, Tag, TagEnd, html::write_html_io};
+use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use serde_json::{Map, Value};
 use std::io::{self, Write};
 use thiserror::Error;
@@ -12,15 +12,10 @@ use url::Url;
 const MAX_ADF_RENDER_DEPTH: usize = 128;
 const MAX_ADF_RENDER_NODES: usize = 65_536;
 const MAX_ADF_RENDER_WORK_UNITS: usize = 262_144;
-// `pulldown_cmark` emits bounded structural markup per event in addition to
-// escaping source bytes. The intermediate cap accounts for both components;
-// source entities may expand by up to six bytes per input byte.
-const GITLAB_INTERMEDIATE_HTML_BYTES_PER_NODE: u64 = 64;
-const GITLAB_INTERMEDIATE_HTML_BYTES_PER_WORK_UNIT: u64 = 16;
-const GITLAB_INTERMEDIATE_HTML_SOURCE_EXPANSION: u64 = 6;
-
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum ContentRenderError {
+    #[error("requested output content format is unsupported")]
+    UnsupportedFormat,
     #[error("ADF document is malformed")]
     MalformedDocument,
     #[error("ADF document nesting exceeded the render limit")]
@@ -59,306 +54,248 @@ const DEFAULT_RENDER_LIMITS: RenderLimits = RenderLimits {
     max_work_units: MAX_ADF_RENDER_WORK_UNITS,
 };
 
-#[cfg(test)]
-pub fn render_adf_bounded(
+/// Validate the complete bounded ADF source without constructing selected content.
+pub fn validate_adf_bounded_with_budget(
     document: &Value,
-    format: ReadContentFormat,
-    max_output_bytes: u64,
-) -> Result<Option<RenderedBody>, ContentRenderError> {
-    let mut budget = RenderBudget::default();
-    render_adf_bounded_with_budget(document, format, u64::MAX, max_output_bytes, &mut budget)
-}
-
-pub fn render_adf_bounded_with_budget(
-    document: &Value,
-    format: ReadContentFormat,
     max_source_bytes: u64,
-    max_output_bytes: u64,
     budget: &mut RenderBudget,
-) -> Result<Option<RenderedBody>, ContentRenderError> {
+) -> Result<(), ContentRenderError> {
     render_adf_with_limits(
         document,
-        format,
+        OutputContentFormat::Text,
         max_source_bytes,
-        max_output_bytes,
+        max_source_bytes,
         DEFAULT_RENDER_LIMITS,
         budget,
     )
+    .map(|_| ())
 }
 
-#[cfg(test)]
-pub fn render_confluence_storage_bounded(
-    source: &str,
-    format: ReadContentFormat,
-    max_output_bytes: u64,
-) -> Result<Option<RenderedBody>, ContentRenderError> {
-    let mut budget = RenderBudget::default();
-    render_confluence_storage_bounded_with_budget(
-        source,
-        format,
-        u64::MAX,
-        max_output_bytes,
-        &mut budget,
-    )
-}
-
-pub fn render_confluence_storage_bounded_with_budget(
-    source: &str,
-    format: ReadContentFormat,
+/// Select one ADF representation; native ADF remains a JSON object.
+pub fn select_adf_bounded_with_budget(
+    document: &Value,
+    format: OutputContentFormat,
     max_source_bytes: u64,
     max_output_bytes: u64,
     budget: &mut RenderBudget,
-) -> Result<Option<RenderedBody>, ContentRenderError> {
-    render_confluence_storage_with_limits_and_budget(
-        source,
-        format,
-        max_source_bytes,
-        max_output_bytes,
-        DEFAULT_RENDER_LIMITS,
-        budget,
-    )
+) -> Result<SelectedContent, ContentRenderError> {
+    match format {
+        OutputContentFormat::Adf => {
+            validate_adf_bounded_with_budget(document, max_source_bytes, budget)?;
+            validate_serialized_source_size(document, max_output_bytes).map_err(
+                |error| match error {
+                    ContentRenderError::SourceTooLarge { max_bytes } => {
+                        ContentRenderError::OutputTooLarge { max_bytes }
+                    }
+                    other => other,
+                },
+            )?;
+            Ok(SelectedContent::adf(
+                document
+                    .as_object()
+                    .ok_or(ContentRenderError::MalformedDocument)?
+                    .clone(),
+            ))
+        }
+        OutputContentFormat::Markdown | OutputContentFormat::Text => {
+            let value = render_adf_with_limits(
+                document,
+                format,
+                max_source_bytes,
+                max_output_bytes,
+                DEFAULT_RENDER_LIMITS,
+                budget,
+            )?;
+            selected_text(format, value)
+        }
+        _ => Err(ContentRenderError::UnsupportedFormat),
+    }
 }
 
-pub fn render_confluence_adf_bounded_with_budget(
+pub fn validate_confluence_adf_bounded_with_budget(
     source: &str,
-    format: ReadContentFormat,
     max_source_bytes: u64,
-    max_output_bytes: u64,
     budget: &mut RenderBudget,
-) -> Result<Option<RenderedBody>, ContentRenderError> {
+) -> Result<(), ContentRenderError> {
     validate_string_source_size(source, max_source_bytes)?;
     let document: Value =
         serde_json::from_str(source).map_err(|_| ContentRenderError::MalformedDocument)?;
-    // The original serialized representation was bounded before parsing. The
-    // shared ADF traversal performs the same structural and work validation as
-    // Jira without reparsing the document.
-    render_adf_with_limits(
-        &document,
-        format,
-        u64::MAX,
-        max_output_bytes,
-        DEFAULT_RENDER_LIMITS,
-        budget,
-    )
+    validate_adf_bounded_with_budget(&document, max_source_bytes, budget)
 }
 
-/// Render one GitLab-native Markdown body for an embedded structured result.
-///
-/// GitLab's native representation is already Markdown, so `markdown` preserves
-/// the source byte-for-byte. All modes still parse the complete bounded source
-/// and consume the same structural request budget before returning it.
-pub fn render_gitlab_markdown_bounded_with_budget(
+pub fn select_confluence_adf_bounded_with_budget(
     source: &str,
-    format: ReadContentFormat,
+    format: OutputContentFormat,
     max_source_bytes: u64,
     max_output_bytes: u64,
     budget: &mut RenderBudget,
-) -> Result<Option<RenderedBody>, ContentRenderError> {
+) -> Result<SelectedContent, ContentRenderError> {
+    validate_string_source_size(source, max_source_bytes)?;
+    let document: Value =
+        serde_json::from_str(source).map_err(|_| ContentRenderError::MalformedDocument)?;
+    // The serialized input is bounded before this only parse. Validation shares
+    // the structural traversal with Jira; selection never reparses native ADF.
+    match format {
+        OutputContentFormat::Adf => {
+            validate_adf_bounded_with_budget(&document, max_source_bytes, budget)?;
+            validate_serialized_source_size(&document, max_output_bytes).map_err(|error| {
+                match error {
+                    ContentRenderError::SourceTooLarge { max_bytes } => {
+                        ContentRenderError::OutputTooLarge { max_bytes }
+                    }
+                    other => other,
+                }
+            })?;
+            let Value::Object(document) = document else {
+                return Err(ContentRenderError::MalformedDocument);
+            };
+            Ok(SelectedContent::adf(document))
+        }
+        OutputContentFormat::Markdown | OutputContentFormat::Text => {
+            let value = render_adf_with_limits(
+                &document,
+                format,
+                max_source_bytes,
+                max_output_bytes,
+                DEFAULT_RENDER_LIMITS,
+                budget,
+            )?;
+            selected_text(format, value)
+        }
+        _ => Err(ContentRenderError::UnsupportedFormat),
+    }
+}
+
+pub fn validate_confluence_storage_bounded_with_budget(
+    source: &str,
+    max_source_bytes: u64,
+    budget: &mut RenderBudget,
+) -> Result<(), ContentRenderError> {
+    render_confluence_storage_with_limits_and_budget(
+        source,
+        OutputContentFormat::Text,
+        max_source_bytes,
+        max_source_bytes,
+        DEFAULT_RENDER_LIMITS,
+        budget,
+    )
+    .map(|_| ())
+}
+
+pub fn select_confluence_storage_bounded_with_budget(
+    source: &str,
+    format: OutputContentFormat,
+    max_source_bytes: u64,
+    max_output_bytes: u64,
+    budget: &mut RenderBudget,
+) -> Result<SelectedContent, ContentRenderError> {
+    match format {
+        OutputContentFormat::Storage => {
+            validate_confluence_storage_bounded_with_budget(source, max_source_bytes, budget)?;
+            Ok(SelectedContent::storage(
+                BoundedString::from_str(source, max_output_bytes)?.into_string(),
+            ))
+        }
+        OutputContentFormat::Markdown | OutputContentFormat::Text => {
+            let value = render_confluence_storage_with_limits_and_budget(
+                source,
+                format,
+                max_source_bytes,
+                max_output_bytes,
+                DEFAULT_RENDER_LIMITS,
+                budget,
+            )?;
+            selected_text(format, value)
+        }
+        _ => Err(ContentRenderError::UnsupportedFormat),
+    }
+}
+
+pub fn validate_gitlab_markdown_bounded_with_budget(
+    source: &str,
+    max_source_bytes: u64,
+    budget: &mut RenderBudget,
+) -> Result<(), ContentRenderError> {
+    validate_string_source_size(source, max_source_bytes)?;
+    validate_gitlab_markdown_with_limits(source, DEFAULT_RENDER_LIMITS, budget)
+}
+
+/// GitLab Markdown preserves the exact source bytes; text uses the bounded
+/// converter. Neither operation fetches related content or expands authority.
+pub fn select_gitlab_markdown_bounded_with_budget(
+    source: &str,
+    format: OutputContentFormat,
+    max_source_bytes: u64,
+    max_output_bytes: u64,
+    budget: &mut RenderBudget,
+) -> Result<SelectedContent, ContentRenderError> {
     validate_string_source_size(source, max_source_bytes)?;
     match format {
-        ReadContentFormat::Native => {
+        OutputContentFormat::Markdown => {
             validate_gitlab_markdown_with_limits(source, DEFAULT_RENDER_LIMITS, budget)?;
-            Ok(None)
+            Ok(SelectedContent::markdown(
+                BoundedString::from_str(source, max_output_bytes)?.into_string(),
+            ))
         }
-        ReadContentFormat::Markdown => {
-            validate_gitlab_markdown_with_limits(source, DEFAULT_RENDER_LIMITS, budget)?;
-            let value = BoundedString::from_str(source, max_output_bytes)?.into_string();
-            Ok(Some(RenderedBody::new(format, value)))
-        }
-        ReadContentFormat::Text => {
+        OutputContentFormat::Text => {
             let text = render_gitlab_text_with_limits(
                 source,
                 max_output_bytes,
                 DEFAULT_RENDER_LIMITS,
                 budget,
             )?;
-            Ok(Some(RenderedBody::new(format, text.into_string())))
+            Ok(SelectedContent::text(text.into_string()))
         }
+        _ => Err(ContentRenderError::UnsupportedFormat),
     }
 }
 
-/// Produce a composition-safe Markdown fragment from a GitLab body.
-///
-/// Supported CommonMark/GFM structures are parsed and deterministically
-/// re-emitted through the shared bounded HTML traversal. This closes hostile or
-/// unbalanced source constructs before trusted metadata is appended while
-/// retaining headings, lists, task states, tables, code, safe links, link
-/// labels, and image alternatives. Raw HTML is interpreted only by the inert
-/// HTML parser used for the final bounded traversal.
-pub fn render_gitlab_markdown_fragment_bounded_with_budget(
-    source: &str,
-    max_source_bytes: u64,
-    max_output_bytes: u64,
-    budget: &mut RenderBudget,
-    heading_level_offset: usize,
-) -> Result<String, ContentRenderError> {
-    validate_string_source_size(source, max_source_bytes)?;
-    if source.trim().is_empty() {
-        return Ok(String::new());
-    }
-    let events = collect_gitlab_composition_events(source, DEFAULT_RENDER_LIMITS, budget)?;
-    // CommonMark-to-HTML expansion is independently bounded by the source cap
-    // plus the same structural limits that bounded the event stream. HTML
-    // entity serialization can expand one source byte to at most six bytes.
-    let max_html_bytes = gitlab_intermediate_html_byte_limit(
-        source.len() as u64,
-        max_source_bytes,
-        DEFAULT_RENDER_LIMITS,
-    );
-    let mut html = BoundedIoString::new(max_html_bytes);
-    if write_html_io(&mut html, events.into_iter()).is_err() {
-        return if html.exceeded {
-            Err(ContentRenderError::OutputTooLarge {
-                max_bytes: max_html_bytes,
-            })
-        } else {
-            Err(ContentRenderError::MalformedDocument)
-        };
-    }
-    let html = html.into_string();
-    if html.trim().is_empty() {
-        return Ok(String::new());
-    }
-    render_gitlab_html_fragment_with_limits_and_budget(
-        &html,
-        ReadContentFormat::Markdown,
-        max_output_bytes,
-        DEFAULT_RENDER_LIMITS,
-        budget,
-        heading_level_offset,
-    )?
-    .map(|rendered| rendered.value)
-    .ok_or(ContentRenderError::MalformedDocument)
-}
-
-fn gitlab_intermediate_html_byte_limit(
-    source_bytes: u64,
-    max_source_bytes: u64,
-    limits: RenderLimits,
-) -> u64 {
-    let bounded_source_bytes = source_bytes.min(max_source_bytes);
-    let source_expansion =
-        bounded_source_bytes.saturating_mul(GITLAB_INTERMEDIATE_HTML_SOURCE_EXPANSION);
-    let structural_expansion = (limits.max_nodes as u64)
-        .saturating_mul(GITLAB_INTERMEDIATE_HTML_BYTES_PER_NODE)
-        .saturating_add(
-            (limits.max_work_units as u64)
-                .saturating_mul(GITLAB_INTERMEDIATE_HTML_BYTES_PER_WORK_UNIT),
-        );
-    source_expansion.saturating_add(structural_expansion)
-}
-
-fn collect_gitlab_composition_events<'a>(
-    source: &'a str,
-    limits: RenderLimits,
-    budget: &mut RenderBudget,
-) -> Result<Vec<Event<'a>>, ContentRenderError> {
-    let options = Options::ENABLE_TABLES
-        | Options::ENABLE_STRIKETHROUGH
-        | Options::ENABLE_TASKLISTS
-        | Options::ENABLE_FOOTNOTES;
-    let mut output = Vec::new();
-    let mut depth = 0usize;
-    let mut nodes = 0usize;
-    let mut work_units = 0usize;
-    for event in Parser::new_ext(source, options) {
-        nodes = nodes
-            .checked_add(1)
-            .ok_or(ContentRenderError::NodeLimitExceeded)?;
-        if nodes > limits.max_nodes {
-            return Err(ContentRenderError::NodeLimitExceeded);
-        }
-        let work = event_work(&event);
-        work_units = work_units
-            .checked_add(work)
-            .ok_or(ContentRenderError::WorkLimitExceeded)?;
-        if work_units > limits.max_work_units {
-            return Err(ContentRenderError::WorkLimitExceeded);
-        }
-        budget.charge_node()?;
-        budget.charge_work(work)?;
-
-        match &event {
-            Event::Start(_) => {
-                depth = depth
-                    .checked_add(1)
-                    .ok_or(ContentRenderError::NestingLimitExceeded)?;
-                if depth > limits.max_depth {
-                    return Err(ContentRenderError::NestingLimitExceeded);
-                }
-            }
-            Event::End(_) => {
-                depth = depth
-                    .checked_sub(1)
-                    .ok_or(ContentRenderError::MalformedDocument)?;
-            }
-            _ => {}
-        }
-
-        match event {
-            // A Unicode checkbox remains readable after the inert HTML-to-
-            // Markdown traversal without becoming an executable HTML input.
-            Event::TaskListMarker(checked) => {
-                output.push(Event::Text(CowStr::Borrowed(if checked {
-                    "☑ "
-                } else {
-                    "☐ "
-                })));
-            }
-            other => output.push(other),
-        }
-    }
-    if depth != 0 {
-        return Err(ContentRenderError::MalformedDocument);
-    }
-    Ok(output)
-}
-
-struct BoundedIoString {
+fn selected_text(
+    format: OutputContentFormat,
     value: String,
-    max_bytes: u64,
-    exceeded: bool,
-}
-
-impl BoundedIoString {
-    fn new(max_bytes: u64) -> Self {
-        Self {
-            value: String::new(),
-            max_bytes,
-            exceeded: false,
-        }
-    }
-
-    fn into_string(self) -> String {
-        self.value
-    }
-}
-
-impl Write for BoundedIoString {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        let next = (self.value.len() as u64).saturating_add(bytes.len() as u64);
-        if next > self.max_bytes {
-            self.exceeded = true;
-            return Err(io::Error::other("intermediate render size limit exceeded"));
-        }
-        let value = std::str::from_utf8(bytes)
-            .map_err(|_| io::Error::other("intermediate render was not UTF-8"))?;
-        self.value.push_str(value);
-        Ok(bytes.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
+) -> Result<SelectedContent, ContentRenderError> {
+    match format {
+        OutputContentFormat::Markdown => Ok(SelectedContent::markdown(value)),
+        OutputContentFormat::Text => Ok(SelectedContent::text(value)),
+        _ => Err(ContentRenderError::UnsupportedFormat),
     }
 }
 
 #[cfg(test)]
+fn render_adf_bounded(
+    document: &Value,
+    format: OutputContentFormat,
+    max_output_bytes: u64,
+) -> Result<SelectedContent, ContentRenderError> {
+    select_adf_bounded_with_budget(
+        document,
+        format,
+        u64::MAX,
+        max_output_bytes,
+        &mut RenderBudget::default(),
+    )
+}
+#[cfg(test)]
+fn render_confluence_storage_bounded(
+    source: &str,
+    format: OutputContentFormat,
+    max_output_bytes: u64,
+) -> Result<SelectedContent, ContentRenderError> {
+    select_confluence_storage_bounded_with_budget(
+        source,
+        format,
+        u64::MAX,
+        max_output_bytes,
+        &mut RenderBudget::default(),
+    )
+}
+#[cfg(test)]
 fn render_gitlab_markdown_bounded(
     source: &str,
-    format: ReadContentFormat,
+    format: OutputContentFormat,
     max_output_bytes: u64,
-) -> Result<Option<RenderedBody>, ContentRenderError> {
-    render_gitlab_markdown_bounded_with_budget(
+) -> Result<SelectedContent, ContentRenderError> {
+    select_gitlab_markdown_bounded_with_budget(
         source,
         format,
         u64::MAX,
@@ -770,9 +707,8 @@ impl<'a> GitlabTextRenderer<'a> {
         let before_nodes = self.budget.remaining_nodes();
         let before_work = self.budget.remaining_work_units();
         let mut renderer = StorageRenderer {
-            format: ReadContentFormat::Text,
+            format: OutputContentFormat::Text,
             max_output_bytes: self.max_output_bytes,
-            heading_level_offset: 0,
             limits: RenderLimits {
                 max_depth: self.limits.max_depth.saturating_sub(self.depth),
                 ..self.limits
@@ -1036,32 +972,18 @@ fn is_foreign_html_root(name: &str) -> bool {
 
 fn render_confluence_storage_with_limits_and_budget(
     source: &str,
-    format: ReadContentFormat,
+    format: OutputContentFormat,
     max_source_bytes: u64,
     max_output_bytes: u64,
     limits: RenderLimits,
     budget: &mut RenderBudget,
-) -> Result<Option<RenderedBody>, ContentRenderError> {
-    render_confluence_storage_with_limits_and_budget_and_heading_offset(
-        source,
+) -> Result<String, ContentRenderError> {
+    if !matches!(
         format,
-        max_source_bytes,
-        max_output_bytes,
-        limits,
-        budget,
-        0,
-    )
-}
-
-fn render_confluence_storage_with_limits_and_budget_and_heading_offset(
-    source: &str,
-    format: ReadContentFormat,
-    max_source_bytes: u64,
-    max_output_bytes: u64,
-    limits: RenderLimits,
-    budget: &mut RenderBudget,
-    heading_level_offset: usize,
-) -> Result<Option<RenderedBody>, ContentRenderError> {
+        OutputContentFormat::Markdown | OutputContentFormat::Text
+    ) {
+        return Err(ContentRenderError::UnsupportedFormat);
+    }
     validate_string_source_size(source, max_source_bytes)?;
     let source = preflight_storage_fragment(source, limits, budget)?;
     let context = QualName::new(None, ns!(html), local_name!("div"));
@@ -1074,70 +996,25 @@ fn render_confluence_storage_with_limits_and_budget_and_heading_offset(
     )
     .one(source);
     let mut renderer = StorageRenderer {
-        // Native mode still parses and traverses the complete fragment, but
-        // discards the derived text rather than attaching a companion.
-        format: if format == ReadContentFormat::Native {
-            ReadContentFormat::Text
-        } else {
-            format
-        },
-        max_output_bytes,
-        heading_level_offset,
-        limits,
-        nodes: 0,
-        work_units: 0,
-        budget,
-    };
-    let rendered = renderer.render_children_block(&dom.document, 0)?;
-    if format == ReadContentFormat::Native {
-        Ok(None)
-    } else {
-        Ok(Some(RenderedBody::new(format, rendered.into_string())))
-    }
-}
-
-/// Render CommonMark-generated HTML using HTML5's tolerant fragment recovery.
-///
-/// Unlike Confluence storage, valid CommonMark raw HTML need not be a balanced
-/// storage fragment. The DOM traversal remains fully bounded and suppresses the
-/// same active-content elements as the strict storage path.
-fn render_gitlab_html_fragment_with_limits_and_budget(
-    source: &str,
-    format: ReadContentFormat,
-    max_output_bytes: u64,
-    limits: RenderLimits,
-    budget: &mut RenderBudget,
-    heading_level_offset: usize,
-) -> Result<Option<RenderedBody>, ContentRenderError> {
-    let context = QualName::new(None, ns!(html), local_name!("div"));
-    let dom = parse_fragment(
-        RcDom::default(),
-        Default::default(),
-        context,
-        Vec::new(),
-        false,
-    )
-    .one(source);
-    let mut renderer = StorageRenderer {
         format,
         max_output_bytes,
-        heading_level_offset,
         limits,
         nodes: 0,
         work_units: 0,
         budget,
     };
-    let rendered = renderer.render_children_block(&dom.document, 0)?;
-    Ok(Some(RenderedBody::new(format, rendered.into_string())))
+    renderer
+        .render_children_block(&dom.document, 0)
+        .map(BoundedString::into_string)
 }
 
 #[cfg(test)]
 fn render_confluence_storage_with_limits(
     source: &str,
-    format: ReadContentFormat,
+    format: OutputContentFormat,
     max_output_bytes: u64,
     limits: RenderLimits,
-) -> Result<Option<RenderedBody>, ContentRenderError> {
+) -> Result<String, ContentRenderError> {
     let mut budget = RenderBudget::default();
     render_confluence_storage_with_limits_and_budget(
         source,
@@ -1517,12 +1394,12 @@ fn is_html_void_element(name: &str) -> bool {
 
 fn render_adf_with_limits(
     document: &Value,
-    format: ReadContentFormat,
+    format: OutputContentFormat,
     max_source_bytes: u64,
     max_output_bytes: u64,
     limits: RenderLimits,
     budget: &mut RenderBudget,
-) -> Result<Option<RenderedBody>, ContentRenderError> {
+) -> Result<String, ContentRenderError> {
     validate_serialized_source_size(document, max_source_bytes)?;
 
     let root = document
@@ -1535,30 +1412,27 @@ fn render_adf_with_limits(
         return Err(ContentRenderError::MalformedDocument);
     }
 
+    if !matches!(
+        format,
+        OutputContentFormat::Markdown | OutputContentFormat::Text
+    ) {
+        return Err(ContentRenderError::UnsupportedFormat);
+    }
     let mut renderer = AdfRenderer {
-        // Native mode still traverses and validates the complete structure, but
-        // discards the bounded output instead of attaching a companion.
-        format: if format == ReadContentFormat::Native {
-            ReadContentFormat::Text
-        } else {
-            format
-        },
+        format,
         max_output_bytes,
         limits,
         nodes: 0,
         work_units: 0,
         budget,
     };
-    let rendered = renderer.render_node(document, 0)?;
-    if format == ReadContentFormat::Native {
-        Ok(None)
-    } else {
-        Ok(Some(RenderedBody::new(format, rendered.into_string())))
-    }
+    renderer
+        .render_node(document, 0)
+        .map(BoundedString::into_string)
 }
 
 struct AdfRenderer<'a> {
-    format: ReadContentFormat,
+    format: OutputContentFormat,
     max_output_bytes: u64,
     limits: RenderLimits,
     nodes: usize,
@@ -1603,7 +1477,7 @@ impl AdfRenderer<'_> {
             "codeBlock" => self.render_code_block(attrs, children.unwrap_or_default(), depth),
             "text" => self.render_text(object),
             "hardBreak" => self.fragment("\n"),
-            "rule" => self.fragment(if self.format == ReadContentFormat::Markdown {
+            "rule" => self.fragment(if self.format == OutputContentFormat::Markdown {
                 "---"
             } else {
                 "—"
@@ -1681,7 +1555,7 @@ impl AdfRenderer<'_> {
         depth: usize,
     ) -> Result<BoundedString, ContentRenderError> {
         let content = self.render_inline(children, depth)?;
-        if self.format == ReadContentFormat::Text || content.is_empty() {
+        if self.format == OutputContentFormat::Text || content.is_empty() {
             return Ok(content);
         }
         let level = attrs
@@ -1702,7 +1576,7 @@ impl AdfRenderer<'_> {
         depth: usize,
     ) -> Result<BoundedString, ContentRenderError> {
         let content = self.render_blocks(children, depth)?;
-        if self.format == ReadContentFormat::Text || content.is_empty() {
+        if self.format == OutputContentFormat::Text || content.is_empty() {
             return Ok(content);
         }
         let mut output = self.empty()?;
@@ -1742,7 +1616,7 @@ impl AdfRenderer<'_> {
                 let mut marker = start.saturating_add(index as u64).to_string();
                 marker.push_str(". ");
                 marker
-            } else if self.format == ReadContentFormat::Markdown {
+            } else if self.format == OutputContentFormat::Markdown {
                 "- ".to_string()
             } else {
                 "• ".to_string()
@@ -1792,7 +1666,7 @@ impl AdfRenderer<'_> {
             let cells = optional_array(row, "content")?.unwrap_or_default();
             let rendered = self.render_table_row(cells, depth + 1, width)?;
             output.push_joined(rendered.as_str(), "\n")?;
-            if index == 0 && self.format == ReadContentFormat::Markdown {
+            if index == 0 && self.format == OutputContentFormat::Markdown {
                 let mut separator = self.empty()?;
                 separator.push_str("|")?;
                 for _ in 0..width {
@@ -1811,11 +1685,11 @@ impl AdfRenderer<'_> {
         width: usize,
     ) -> Result<BoundedString, ContentRenderError> {
         let mut output = self.empty()?;
-        if self.format == ReadContentFormat::Markdown {
+        if self.format == OutputContentFormat::Markdown {
             output.push_str("|")?;
         }
         for index in 0..width {
-            if self.format == ReadContentFormat::Markdown {
+            if self.format == OutputContentFormat::Markdown {
                 output.push_str(" ")?;
             } else if index != 0 {
                 output.push_str(" | ")?;
@@ -1823,9 +1697,10 @@ impl AdfRenderer<'_> {
             if let Some(cell) = cells.get(index) {
                 self.add_work(1)?;
                 let cell = self.render_node(cell, depth + 1)?;
-                output.push_flattened(cell.as_str(), self.format == ReadContentFormat::Markdown)?;
+                output
+                    .push_flattened(cell.as_str(), self.format == OutputContentFormat::Markdown)?;
             }
-            if self.format == ReadContentFormat::Markdown {
+            if self.format == OutputContentFormat::Markdown {
                 output.push_str(" |")?;
             }
         }
@@ -1853,7 +1728,7 @@ impl AdfRenderer<'_> {
         depth: usize,
     ) -> Result<BoundedString, ContentRenderError> {
         let content = self.render_plain_descendants(children, depth)?;
-        if self.format == ReadContentFormat::Text {
+        if self.format == OutputContentFormat::Text {
             return Ok(content);
         }
         let longest_run = longest_byte_run(content.as_str().as_bytes(), b'`');
@@ -1921,7 +1796,7 @@ impl AdfRenderer<'_> {
             .get("text")
             .and_then(Value::as_str)
             .ok_or(ContentRenderError::MalformedDocument)?;
-        if self.format == ReadContentFormat::Text {
+        if self.format == OutputContentFormat::Text {
             return self.fragment(text);
         }
 
@@ -2005,7 +1880,7 @@ impl AdfRenderer<'_> {
         if let Some(name) = attr_string(attrs, "displayName") {
             let mut output = self.empty()?;
             output.push_str("@")?;
-            if self.format == ReadContentFormat::Markdown {
+            if self.format == OutputContentFormat::Markdown {
                 output.push_markdown_escaped(name)?;
             } else {
                 output.push_normalized(name)?;
@@ -2036,7 +1911,7 @@ impl AdfRenderer<'_> {
             return self.fragment("[card]");
         };
         let mut output = self.empty()?;
-        if self.format == ReadContentFormat::Markdown {
+        if self.format == OutputContentFormat::Markdown {
             output.push_str("[card](")?;
             output.push_markdown_link_destination(url.as_str())?;
             output.push_str(")")?;
@@ -2054,7 +1929,7 @@ impl AdfRenderer<'_> {
         output.push_str("[attachment")?;
         if let Some(alt) = attr_string(attrs, "alt").filter(|alt| !alt.is_empty()) {
             output.push_str(": ")?;
-            if self.format == ReadContentFormat::Markdown {
+            if self.format == OutputContentFormat::Markdown {
                 output.push_markdown_escaped(alt)?;
             } else {
                 output.push_normalized(alt)?;
@@ -2078,7 +1953,7 @@ impl AdfRenderer<'_> {
             .and_then(|attrs| attrs.get("state"))
             .and_then(Value::as_str)
             .is_some_and(|state| matches!(state, "DONE" | "done" | "checked"));
-        let prefix = if self.format == ReadContentFormat::Markdown {
+        let prefix = if self.format == OutputContentFormat::Markdown {
             if checked { "[x] " } else { "[ ] " }
         } else if checked {
             "☑ "
@@ -2110,7 +1985,7 @@ impl AdfRenderer<'_> {
             _ => "Decision",
         };
         let mut output = self.empty()?;
-        if self.format == ReadContentFormat::Markdown {
+        if self.format == OutputContentFormat::Markdown {
             output.push_str("**")?;
             output.push_str(label)?;
             output.push_str(":** ")?;
@@ -2130,7 +2005,7 @@ impl AdfRenderer<'_> {
     ) -> Result<BoundedString, ContentRenderError> {
         let mut output = self.empty()?;
         if let Some(title) = attr_string(attrs, "title") {
-            if self.format == ReadContentFormat::Markdown {
+            if self.format == OutputContentFormat::Markdown {
                 output.push_markdown_escaped(title)?;
             } else {
                 output.push_normalized(title)?;
@@ -2143,7 +2018,7 @@ impl AdfRenderer<'_> {
 
     fn fragment_for_format(&self, value: &str) -> Result<BoundedString, ContentRenderError> {
         let mut output = self.empty()?;
-        if self.format == ReadContentFormat::Markdown {
+        if self.format == OutputContentFormat::Markdown {
             output.push_markdown_escaped(value)?;
         } else {
             output.push_normalized(value)?;
@@ -2223,9 +2098,8 @@ fn validate_string_source_size(source: &str, max_bytes: u64) -> Result<(), Conte
 }
 
 struct StorageRenderer<'a> {
-    format: ReadContentFormat,
+    format: OutputContentFormat,
     max_output_bytes: u64,
-    heading_level_offset: usize,
     limits: RenderLimits,
     nodes: usize,
     work_units: usize,
@@ -2244,7 +2118,7 @@ impl StorageRenderer<'_> {
             NodeData::Text { contents } => {
                 let mut collapsed = self.empty()?;
                 collapsed.push_collapsed_html_text(&contents.borrow())?;
-                if self.format == ReadContentFormat::Text {
+                if self.format == OutputContentFormat::Text {
                     Ok(collapsed)
                 } else {
                     let mut output = self.empty()?;
@@ -2261,17 +2135,19 @@ impl StorageRenderer<'_> {
                     | "option" | "textarea" | "title" | "xmp" | "noembed" | "noframes"
                     | "plaintext" | "svg" | "math" => self.empty(),
                     "p" => self.render_children_inline(node, depth),
-                    "div" | "article" | "section" | "header" | "footer" | "main" | "aside"
-                    | "nav" | "ac:rich-text-body" => self.render_children_block(node, depth),
+                    // The fragment parser creates an html container even for
+                    // an empty source; it is not unsupported upstream content.
+                    "html" | "div" | "article" | "section" | "header" | "footer" | "main"
+                    | "aside" | "nav" | "ac:rich-text-body" => {
+                        self.render_children_block(node, depth)
+                    }
                     "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
                         let mut content = self.render_children_inline(node, depth)?;
                         content.trim_spaces();
-                        if self.format == ReadContentFormat::Text || content.is_empty() {
+                        if self.format == OutputContentFormat::Text || content.is_empty() {
                             return Ok(content);
                         }
-                        let level = (name.as_bytes()[1].saturating_sub(b'0') as usize)
-                            .saturating_add(self.heading_level_offset)
-                            .min(6);
+                        let level = (name.as_bytes()[1].saturating_sub(b'0') as usize).min(6);
                         let mut output = self.empty()?;
                         output.push_repeat('#', level)?;
                         output.push_str(" ")?;
@@ -2279,7 +2155,7 @@ impl StorageRenderer<'_> {
                         Ok(output)
                     }
                     "br" => self.fragment("\n"),
-                    "hr" => self.fragment(if self.format == ReadContentFormat::Markdown {
+                    "hr" => self.fragment(if self.format == OutputContentFormat::Markdown {
                         "---"
                     } else {
                         "—"
@@ -2289,7 +2165,7 @@ impl StorageRenderer<'_> {
                     "strike" | "s" | "del" => self.render_wrapped_inline(node, depth, "~~"),
                     "code" => {
                         let plain = self.collect_plain_descendants(node, depth)?;
-                        if self.format == ReadContentFormat::Text {
+                        if self.format == OutputContentFormat::Text {
                             return Ok(plain);
                         }
                         let mut output = self.empty()?;
@@ -2399,7 +2275,7 @@ impl StorageRenderer<'_> {
         marker: &str,
     ) -> Result<BoundedString, ContentRenderError> {
         let content = self.render_children_inline(node, depth)?;
-        if self.format == ReadContentFormat::Text || content.is_empty() {
+        if self.format == OutputContentFormat::Text || content.is_empty() {
             return Ok(content);
         }
         let mut output = self.empty()?;
@@ -2427,7 +2303,7 @@ impl StorageRenderer<'_> {
         depth: usize,
     ) -> Result<BoundedString, ContentRenderError> {
         let content = self.render_children_block(node, depth)?;
-        if self.format == ReadContentFormat::Text || content.is_empty() {
+        if self.format == OutputContentFormat::Text || content.is_empty() {
             return Ok(content);
         }
         let mut output = self.empty()?;
@@ -2472,7 +2348,7 @@ impl StorageRenderer<'_> {
             if ordered_start.is_some() {
                 marker.push_str(&marker_index.to_string())?;
                 marker.push_str(". ")?;
-            } else if self.format == ReadContentFormat::Markdown {
+            } else if self.format == OutputContentFormat::Markdown {
                 marker.push_str("- ")?;
             } else {
                 marker.push_str("• ")?;
@@ -2545,7 +2421,7 @@ impl StorageRenderer<'_> {
         content: BoundedString,
         language: Option<&str>,
     ) -> Result<BoundedString, ContentRenderError> {
-        if self.format == ReadContentFormat::Text {
+        if self.format == OutputContentFormat::Text {
             return Ok(content);
         }
         let fence_width = longest_byte_run(content.as_str().as_bytes(), b'`')
@@ -2608,7 +2484,7 @@ impl StorageRenderer<'_> {
         href: Option<&str>,
     ) -> Result<BoundedString, ContentRenderError> {
         let label = self.render_children_inline(node, depth)?;
-        if self.format == ReadContentFormat::Text || label.is_empty() {
+        if self.format == OutputContentFormat::Text || label.is_empty() {
             return Ok(label);
         }
         let Some(url) = href.and_then(safe_link) else {
@@ -2670,7 +2546,7 @@ impl StorageRenderer<'_> {
         output.push_str(kind)?;
         if let Some(label) = label.filter(|value| !value.is_empty()) {
             output.push_str(": ")?;
-            if self.format == ReadContentFormat::Markdown {
+            if self.format == OutputContentFormat::Markdown {
                 output.push_markdown_escaped(label)?;
             } else {
                 output.push_normalized(label)?;
@@ -2740,7 +2616,7 @@ impl StorageRenderer<'_> {
         }
 
         let mut output = self.empty()?;
-        if self.format == ReadContentFormat::Markdown {
+        if self.format == OutputContentFormat::Markdown {
             output.push_str(if checked { "- [x] " } else { "- [ ] " })?;
         } else {
             output.push_str(if checked { "☑ " } else { "☐ " })?;
@@ -2872,7 +2748,7 @@ impl StorageRenderer<'_> {
         &self,
         plain: BoundedString,
     ) -> Result<BoundedString, ContentRenderError> {
-        if self.format == ReadContentFormat::Text {
+        if self.format == OutputContentFormat::Text {
             return Ok(plain);
         }
         let mut output = self.empty()?;
@@ -2900,11 +2776,11 @@ impl StorageRenderer<'_> {
             self.visit_node(depth + 1)?;
             let cells = table_cells(row);
             let mut rendered_row = self.empty()?;
-            if self.format == ReadContentFormat::Markdown {
+            if self.format == OutputContentFormat::Markdown {
                 rendered_row.push_str("|")?;
             }
             for index in 0..width {
-                if self.format == ReadContentFormat::Markdown {
+                if self.format == OutputContentFormat::Markdown {
                     rendered_row.push_str(" ")?;
                 } else if index != 0 {
                     rendered_row.push_str(" | ")?;
@@ -2914,15 +2790,15 @@ impl StorageRenderer<'_> {
                     let content = self.render_node(cell, depth + 2)?;
                     rendered_row.push_flattened(
                         content.as_str(),
-                        self.format == ReadContentFormat::Markdown,
+                        self.format == OutputContentFormat::Markdown,
                     )?;
                 }
-                if self.format == ReadContentFormat::Markdown {
+                if self.format == OutputContentFormat::Markdown {
                     rendered_row.push_str(" |")?;
                 }
             }
             output.push_joined(rendered_row.as_str(), "\n")?;
-            if row_index == 0 && self.format == ReadContentFormat::Markdown {
+            if row_index == 0 && self.format == OutputContentFormat::Markdown {
                 let mut separator = self.empty()?;
                 separator.push_str("|")?;
                 for _ in 0..width {
@@ -3444,53 +3320,53 @@ mod tests {
         json!({ "type": "paragraph", "content": [{ "type": "text", "text": text }] })
     }
 
-    fn render(document: &Value, format: ReadContentFormat) -> String {
+    fn render(document: &Value, format: OutputContentFormat) -> String {
         render_adf_bounded(document, format, 1024 * 1024)
             .unwrap()
+            .value()
+            .as_str()
             .unwrap()
-            .value
+            .to_owned()
     }
 
-    fn render_gitlab(source: &str, format: ReadContentFormat) -> String {
+    fn render_gitlab(source: &str, format: OutputContentFormat) -> String {
         render_gitlab_markdown_bounded(source, format, 1024 * 1024)
             .unwrap()
+            .value()
+            .as_str()
             .unwrap()
-            .value
-    }
-
-    fn render_gitlab_fragment(source: &str) -> String {
-        render_gitlab_markdown_fragment_bounded_with_budget(
-            source,
-            source.len() as u64,
-            1024 * 1024,
-            &mut RenderBudget::default(),
-            0,
-        )
-        .unwrap()
+            .to_owned()
     }
 
     #[test]
     fn gitlab_native_validates_and_markdown_is_byte_exact() {
         let source = "# heading\r\n\r\né🙂 <unclosed";
         assert_eq!(
-            render_gitlab_markdown_bounded(source, ReadContentFormat::Native, 0).unwrap(),
-            None
+            validate_gitlab_markdown_bounded_with_budget(
+                source,
+                u64::MAX,
+                &mut RenderBudget::default()
+            )
+            .unwrap(),
+            ()
         );
         assert_eq!(
             render_gitlab_markdown_bounded(
                 source,
-                ReadContentFormat::Markdown,
+                OutputContentFormat::Markdown,
                 source.len() as u64,
             )
             .unwrap()
+            .value()
+            .as_str()
             .unwrap()
-            .value,
+            .to_owned(),
             source
         );
         assert_eq!(
             render_gitlab_markdown_bounded(
                 source,
-                ReadContentFormat::Markdown,
+                OutputContentFormat::Markdown,
                 source.len() as u64 - 1,
             ),
             Err(ContentRenderError::OutputTooLarge {
@@ -3500,12 +3376,10 @@ mod tests {
 
         let mut budget = RenderBudget::default();
         assert_eq!(
-            render_gitlab_markdown_bounded_with_budget(
+            validate_gitlab_markdown_bounded_with_budget(
                 source,
-                ReadContentFormat::Native,
                 source.len() as u64 - 1,
-                0,
-                &mut budget,
+                &mut budget
             ),
             Err(ContentRenderError::SourceTooLarge {
                 max_bytes: source.len() as u64 - 1
@@ -3517,19 +3391,25 @@ mod tests {
         // and Markdown must remain the exact provider string.
         let expanding_projection = "1. x\n".repeat(12);
         assert_eq!(
-            render_gitlab_markdown_bounded(&expanding_projection, ReadContentFormat::Native, 0,)
-                .unwrap(),
-            None
+            validate_gitlab_markdown_bounded_with_budget(
+                &expanding_projection,
+                u64::MAX,
+                &mut RenderBudget::default()
+            )
+            .unwrap(),
+            ()
         );
         assert_eq!(
             render_gitlab_markdown_bounded(
                 &expanding_projection,
-                ReadContentFormat::Markdown,
+                OutputContentFormat::Markdown,
                 expanding_projection.len() as u64,
             )
             .unwrap()
+            .value()
+            .as_str()
             .unwrap()
-            .value,
+            .to_owned(),
             expanding_projection
         );
     }
@@ -3544,7 +3424,7 @@ mod tests {
             "- [x] done\n- [ ] todo\n  1. nested one\n  2. nested two\n\n",
             "| Name | State |\n| --- | --- |\n| Ada | Ready |\n"
         );
-        let rendered = render_gitlab(source, ReadContentFormat::Text);
+        let rendered = render_gitlab(source, OutputContentFormat::Text);
         assert_eq!(
             rendered,
             concat!(
@@ -3556,7 +3436,7 @@ mod tests {
             )
         );
         assert!(!rendered.contains("example.test"));
-        assert_eq!(rendered, render_gitlab(source, ReadContentFormat::Text));
+        assert_eq!(rendered, render_gitlab(source, OutputContentFormat::Text));
     }
 
     #[test]
@@ -3568,65 +3448,11 @@ mod tests {
             "<iframe>frame-secret</iframe>\n",
             "<STYLE>style-secret</style>\n"
         );
-        let rendered = render_gitlab(source, ReadContentFormat::Text);
+        let rendered = render_gitlab(source, OutputContentFormat::Text);
         assert_eq!(rendered, "before safe & sound after\n\nblock text & entity");
         for secret in ["inline-secret", "frame-secret", "style-secret"] {
             assert!(!rendered.contains(secret));
         }
-    }
-
-    #[test]
-    fn gitlab_fragment_neutralizes_unclosed_and_hostile_constructs() {
-        let source = concat!(
-            "# injected heading\n\n",
-            "```rust\nfence content\n```\n",
-            "<script>active-secret</script>\n",
-            "[label](javascript:alert(1)) **bold"
-        );
-        let fragment = render_gitlab_fragment(source);
-        assert_eq!(
-            fragment,
-            concat!(
-                "# injected heading\n\n",
-                "```rust\nfence content\n```\n\n",
-                "label \\*\\*bold"
-            )
-        );
-        assert!(!fragment.contains("active-secret"));
-        assert!(!fragment.contains("javascript:"));
-        assert_eq!(fragment.matches("```").count(), 2);
-
-        let combined = format!("## Body\n\n{fragment}\n\n- Trusted: value\n");
-        assert!(combined.ends_with("\n\n- Trusted: value\n"));
-        assert_eq!(fragment, render_gitlab_fragment(source));
-
-        let unclosed = render_gitlab_fragment("```rust\nunclosed fence");
-        assert_eq!(unclosed, "```rust\nunclosed fence\n```");
-        assert_eq!(unclosed.matches("```").count(), 2);
-        assert!(format!("{unclosed}\n\n- Trusted: value\n").ends_with("- Trusted: value\n"));
-    }
-
-    #[test]
-    fn gitlab_fragment_escapes_unicode_lists_tables_code_and_link_labels() {
-        let source = concat!(
-            "- [x] é🙂\n- item *em*\n\n",
-            "| A | B |\n| --- | --- |\n| x | y |\n\n",
-            "`a*b` [label](https://example.test/secret)"
-        );
-
-        assert_eq!(
-            render_gitlab_fragment("42. first\n43. second"),
-            "42. first\n43. second"
-        );
-        assert_eq!(render_gitlab_fragment("42.\n43. visible"), "43. visible");
-        assert_eq!(
-            render_gitlab_fragment(source),
-            concat!(
-                "- ☑ é🙂\n- item _em_\n\n",
-                "| A | B |\n| --- | --- |\n| x | y |\n\n",
-                "`a*b` [label](https://example.test/secret)"
-            )
-        );
     }
 
     #[test]
@@ -3640,7 +3466,7 @@ mod tests {
             "- after\n\n",
             "| A | B |\n| --- | --- |\n| kept | visible |\n"
         );
-        let rendered = render_gitlab(source, ReadContentFormat::Text);
+        let rendered = render_gitlab(source, OutputContentFormat::Text);
         assert!(rendered.contains("- before"));
         assert!(rendered.contains("- after"));
         assert!(rendered.contains("kept | visible"));
@@ -3648,198 +3474,86 @@ mod tests {
     }
 
     #[test]
-    fn gitlab_fragment_inert_html_keeps_safe_descendants_and_suppresses_active_content() {
-        let source = concat!(
-            "<details><summary>Summary</summary>",
-            "<p>Readable <b>body</b></p>",
-            "<img alt=\"diagram\" src=\"https://example.test/secret\">",
-            "<script>active-secret</script></details>"
-        );
-        let rendered = render_gitlab_fragment(source);
-        assert!(rendered.contains("Summary"));
-        assert!(rendered.contains("Readable **body**"));
-        assert!(rendered.contains("[image: diagram]"));
-        assert!(!rendered.contains("active-secret"));
-        assert!(!rendered.contains("example.test"));
-    }
-
-    #[test]
-    fn gitlab_fragment_tolerates_commonmark_raw_html_recovery_cases() {
-        for source in [
-            "<script>active-secret",
-            "<style>active-secret",
-            "<textarea>active-secret",
-            "<title>active-secret",
-            "<xmp>active-secret",
-            "<iframe>active-secret",
-            "<!-- unclosed comment",
-            "<![CDATA[unclosed cdata",
-            "<span title=\"unclosed quote>",
-            "before</span extra>after",
-            "trailing <",
-            "<future-node>unbalanced custom element",
-        ] {
-            let rendered = render_gitlab_markdown_fragment_bounded_with_budget(
-                source,
-                source.len() as u64,
-                1024,
-                &mut RenderBudget::default(),
-                0,
-            );
-            assert!(
-                rendered.is_ok(),
-                "valid CommonMark raw HTML failed: {source:?}"
-            );
-            assert!(
-                !rendered.unwrap().contains("active-secret"),
-                "active raw HTML leaked: {source:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn gitlab_intermediate_html_cap_includes_entity_and_structural_expansion() {
-        let limits = RenderLimits {
-            max_depth: 1,
-            max_nodes: 2,
-            max_work_units: 3,
-        };
-        let structural = 2 * GITLAB_INTERMEDIATE_HTML_BYTES_PER_NODE
-            + 3 * GITLAB_INTERMEDIATE_HTML_BYTES_PER_WORK_UNIT;
-        assert_eq!(
-            gitlab_intermediate_html_byte_limit(7, 7, limits),
-            7 * GITLAB_INTERMEDIATE_HTML_SOURCE_EXPANSION + structural
-        );
-        assert_eq!(
-            gitlab_intermediate_html_byte_limit(8, 7, limits),
-            7 * GITLAB_INTERMEDIATE_HTML_SOURCE_EXPANSION + structural
-        );
-        assert_eq!(
-            gitlab_intermediate_html_byte_limit(u64::MAX, u64::MAX, limits),
-            u64::MAX
-        );
-
-        // This exceeds the former fixed 8 MiB intermediate cap after
-        // `pulldown_cmark` expands each quote to `&quot;`, but remains within
-        // the caller's configured source and output bounds.
-        let source = "\"".repeat(1_500_000);
-        let rendered = render_gitlab_markdown_fragment_bounded_with_budget(
-            &source,
-            source.len() as u64,
-            source.len() as u64,
-            &mut RenderBudget::default(),
-            0,
-        )
-        .unwrap();
-        assert_eq!(rendered, source);
-    }
-
-    #[test]
-    fn gitlab_fragment_empty_events_render_empty() {
-        for source in [
-            "   \n\t",
-            "[unused]: https://example.test\n",
-            "<!-- comment -->",
-        ] {
-            assert_eq!(render_gitlab_fragment(source), "", "{source:?}");
-        }
-    }
-
-    #[test]
     fn gitlab_raw_text_repeated_open_tags_do_not_consume_nesting_depth() {
         let source = format!("<script>{}</script>", "<script>".repeat(256));
         assert_eq!(
-            render_gitlab_markdown_bounded(&source, ReadContentFormat::Native, 0).unwrap(),
-            None
+            validate_gitlab_markdown_bounded_with_budget(
+                &source,
+                u64::MAX,
+                &mut RenderBudget::default()
+            )
+            .unwrap(),
+            ()
         );
         assert_eq!(
             render_gitlab_markdown_bounded(
                 &source,
-                ReadContentFormat::Markdown,
+                OutputContentFormat::Markdown,
                 source.len() as u64,
             )
             .unwrap()
+            .value()
+            .as_str()
             .unwrap()
-            .value,
+            .to_owned(),
             source
         );
-        assert_eq!(render_gitlab(&source, ReadContentFormat::Text), "");
+        assert_eq!(render_gitlab(&source, OutputContentFormat::Text), "");
     }
 
     #[test]
     fn gitlab_incomplete_raw_text_close_stays_active_without_rejecting_identity_modes() {
         let source = "<script>hidden</script foo";
         assert_eq!(
-            render_gitlab_markdown_bounded(source, ReadContentFormat::Native, 0).unwrap(),
-            None
+            validate_gitlab_markdown_bounded_with_budget(
+                source,
+                u64::MAX,
+                &mut RenderBudget::default()
+            )
+            .unwrap(),
+            ()
         );
         assert_eq!(
             render_gitlab_markdown_bounded(
                 source,
-                ReadContentFormat::Markdown,
+                OutputContentFormat::Markdown,
                 source.len() as u64,
             )
             .unwrap()
+            .value()
+            .as_str()
             .unwrap()
-            .value,
+            .to_owned(),
             source
         );
-        assert_eq!(render_gitlab(source, ReadContentFormat::Text), "");
-    }
-
-    #[test]
-    fn gitlab_fragment_fixed_intermediate_bound_allows_deep_valid_blockquotes() {
-        let source = format!("{}deep", ">".repeat(120));
-        let rendered = render_gitlab_fragment(&source);
-        assert!(rendered.contains("deep"));
-        let events = Parser::new_ext(&source, Options::empty());
-        let old_source_relative_cap = source.len().saturating_mul(16).saturating_add(1024);
-        let mut intermediate = BoundedIoString::new(u64::MAX);
-        write_html_io(&mut intermediate, events).unwrap();
-        assert!(intermediate.into_string().len() > old_source_relative_cap);
-    }
-
-    #[test]
-    fn gitlab_fragment_demotes_body_headings_beneath_container_heading() {
-        let source = "# One\n\n##### Five\n\n###### Six";
-        let rendered = render_gitlab_markdown_fragment_bounded_with_budget(
-            source,
-            source.len() as u64,
-            1024,
-            &mut RenderBudget::default(),
-            2,
-        )
-        .unwrap();
-        assert_eq!(rendered, "### One\n\n###### Five\n\n###### Six");
+        assert_eq!(render_gitlab(source, OutputContentFormat::Text), "");
     }
 
     #[test]
     fn gitlab_tasks_and_footnotes_have_deterministic_readable_fallbacks() {
         let source = "- [x] done\n- [ ] todo\n\nClaim[^note].\n\n[^note]: Footnote body.";
-        let markdown = render_gitlab_fragment(source);
-        assert!(markdown.contains("- ☑ done\n- ☐ todo"));
-        assert!(markdown.contains("Footnote body"));
-
-        let text = render_gitlab(source, ReadContentFormat::Text);
+        let text = render_gitlab(source, OutputContentFormat::Text);
         assert!(text.contains("- [x] done\n- [ ] todo"));
         assert!(text.contains("Claim[^note]."));
         assert!(text.contains("[^note]:"));
         assert!(text.contains("Footnote body."));
-        assert_eq!(text, render_gitlab(source, ReadContentFormat::Text));
+        assert_eq!(text, render_gitlab(source, OutputContentFormat::Text));
     }
 
     #[test]
     fn gitlab_enforces_source_output_event_work_depth_and_request_bounds() {
         let source = "é🙂";
         assert_eq!(
-            render_gitlab_markdown_bounded(source, ReadContentFormat::Text, 6)
+            render_gitlab_markdown_bounded(source, OutputContentFormat::Text, 6)
                 .unwrap()
+                .value()
+                .as_str()
                 .unwrap()
-                .value,
+                .to_owned(),
             source
         );
         assert_eq!(
-            render_gitlab_markdown_bounded(source, ReadContentFormat::Text, 5),
+            render_gitlab_markdown_bounded(source, OutputContentFormat::Text, 5),
             Err(ContentRenderError::OutputTooLarge { max_bytes: 5 })
         );
 
@@ -3874,46 +3588,32 @@ mod tests {
 
         let nested = format!("{}deep{}", "> ".repeat(129), "\n".repeat(129));
         assert_eq!(
-            render_gitlab_markdown_bounded(&nested, ReadContentFormat::Text, 1024),
+            render_gitlab_markdown_bounded(&nested, OutputContentFormat::Text, 1024),
             Err(ContentRenderError::NestingLimitExceeded)
         );
 
         let mut exhausted = RenderBudget::with_limits(0, 1);
         assert_eq!(
-            render_gitlab_markdown_bounded_with_budget(
-                "body",
-                ReadContentFormat::Native,
-                4,
-                0,
-                &mut exhausted,
-            ),
-            Err(ContentRenderError::NodeLimitExceeded)
-        );
-
-        let mut budget = RenderBudget::default();
-        assert_eq!(
-            render_gitlab_markdown_fragment_bounded_with_budget("**bold**", 8, 7, &mut budget, 0,),
-            Err(ContentRenderError::OutputTooLarge { max_bytes: 7 })
-        );
-
-        let mut exhausted = RenderBudget::with_limits(0, 1);
-        assert_eq!(
-            render_gitlab_markdown_fragment_bounded_with_budget("body", 4, 1024, &mut exhausted, 0,),
+            validate_gitlab_markdown_bounded_with_budget("body", 4, &mut exhausted),
             Err(ContentRenderError::NodeLimitExceeded)
         );
     }
 
     #[test]
-    fn native_returns_none_after_validating_the_document() {
+    fn validates_the_complete_document_without_selecting_output() {
         assert_eq!(
-            render_adf_bounded(&doc(vec![]), ReadContentFormat::Native, 1024).unwrap(),
-            None
+            validate_adf_bounded_with_budget(&doc(vec![]), u64::MAX, &mut RenderBudget::default())
+                .unwrap(),
+            ()
         );
         assert_eq!(
-            render_adf_bounded(&json!({ "opaque": true }), ReadContentFormat::Native, 1024),
+            validate_adf_bounded_with_budget(
+                &json!({ "opaque": true }),
+                u64::MAX,
+                &mut RenderBudget::default()
+            ),
             Err(ContentRenderError::MalformedDocument)
         );
-        assert_eq!(ReadContentFormat::default().as_str(), "native");
     }
 
     #[test]
@@ -3935,11 +3635,11 @@ mod tests {
             json!({ "type": "rule" }),
         ]);
         assert_eq!(
-            render(&document, ReadContentFormat::Markdown),
+            render(&document, OutputContentFormat::Markdown),
             "## A \\*heading\\*\n\nfirst\nsecond\n\n---"
         );
         assert_eq!(
-            render(&document, ReadContentFormat::Text),
+            render(&document, OutputContentFormat::Text),
             "A *heading*\n\nfirst\nsecond\n\n—"
         );
     }
@@ -3961,15 +3661,15 @@ mod tests {
         };
         let expected = "[~~_**value**_~~](https://example.test/a)";
         assert_eq!(
-            render(&with_marks(marks), ReadContentFormat::Markdown),
+            render(&with_marks(marks), OutputContentFormat::Markdown),
             expected
         );
         assert_eq!(
-            render(&with_marks(reversed), ReadContentFormat::Markdown),
+            render(&with_marks(reversed), OutputContentFormat::Markdown),
             expected
         );
         assert_eq!(
-            render(&with_marks(vec![]), ReadContentFormat::Text),
+            render(&with_marks(vec![]), OutputContentFormat::Text),
             "value"
         );
     }
@@ -3985,10 +3685,10 @@ mod tests {
             }]
         })]);
         assert_eq!(
-            render(&document, ReadContentFormat::Markdown),
+            render(&document, OutputContentFormat::Markdown),
             "**``  a`b  ``**"
         );
-        assert_eq!(render(&document, ReadContentFormat::Text), " a`b ");
+        assert_eq!(render(&document, OutputContentFormat::Text), " a`b ");
     }
 
     #[test]
@@ -4014,11 +3714,11 @@ mod tests {
             }),
         ]);
         assert_eq!(
-            render(&document, ReadContentFormat::Markdown),
+            render(&document, OutputContentFormat::Markdown),
             "- outer\n  3. inner\n\n> quoted\n>\n> again\n\n````rust\nlet ticks = ```;\n````"
         );
         assert_eq!(
-            render(&document, ReadContentFormat::Text),
+            render(&document, OutputContentFormat::Text),
             "• outer\n  3. inner\n\nquoted\n\nagain\n\nlet ticks = ```;"
         );
     }
@@ -4038,21 +3738,21 @@ mod tests {
         assert_eq!(
             render(
                 &linked("https://example.test/a b"),
-                ReadContentFormat::Markdown
+                OutputContentFormat::Markdown
             ),
             "[click](https://example.test/a%20b)"
         );
         assert_eq!(
             render(
                 &linked("mailto:user@example.test"),
-                ReadContentFormat::Markdown
+                OutputContentFormat::Markdown
             ),
             "[click](mailto:user@example.test)"
         );
         assert_eq!(
             render(
                 &linked("https://example.test/a) [injected](https://evil.test/x"),
-                ReadContentFormat::Markdown
+                OutputContentFormat::Markdown
             ),
             "[click](https://example.test/a%29%20[injected]%28https://evil.test/x)"
         );
@@ -4064,7 +3764,7 @@ mod tests {
             "https://example.test/a\nb",
         ] {
             assert_eq!(
-                render(&linked(unsafe_href), ReadContentFormat::Markdown),
+                render(&linked(unsafe_href), OutputContentFormat::Markdown),
                 "click"
             );
         }
@@ -4089,14 +3789,14 @@ mod tests {
             ]
         })]);
         assert_eq!(
-            render(&document, ReadContentFormat::Markdown),
+            render(&document, OutputContentFormat::Markdown),
             "@Ada :wave: DONE 1700000000000 [card](https://example.test/card)[attachment: diagram][attachment]"
         );
         assert_eq!(
-            render(&document, ReadContentFormat::Text),
+            render(&document, OutputContentFormat::Text),
             "@Ada :wave: DONE 1700000000000 https://example.test/card[attachment: diagram][attachment]"
         );
-        let rendered = render(&document, ReadContentFormat::Markdown);
+        let rendered = render(&document, OutputContentFormat::Markdown);
         for secret in ["secret-user", "secret-media", "secret-inline"] {
             assert!(!rendered.contains(secret));
         }
@@ -4108,17 +3808,17 @@ mod tests {
             ]}),
         ]);
         assert_eq!(
-            render(&block_fallbacks, ReadContentFormat::Markdown),
+            render(&block_fallbacks, OutputContentFormat::Markdown),
             "[card](https://example.test/block)\n\n[attachment: chart]"
         );
-        assert!(!render(&block_fallbacks, ReadContentFormat::Text).contains("secret-single"));
+        assert!(!render(&block_fallbacks, OutputContentFormat::Text).contains("secret-single"));
 
         let adversarial_card = doc(vec![json!({
             "type": "blockCard",
             "attrs": { "url": "https://example.test/a) [injected](https://evil.test/x" }
         })]);
         assert_eq!(
-            render(&adversarial_card, ReadContentFormat::Markdown),
+            render(&adversarial_card, OutputContentFormat::Markdown),
             "[card](https://example.test/a%29%20[injected]%28https://evil.test/x)"
         );
     }
@@ -4140,11 +3840,11 @@ mod tests {
             json!({ "type": "futureLeaf", "attrs": { "text": "not trusted" } }),
         ]);
         assert_eq!(
-            render(&document, ReadContentFormat::Markdown),
+            render(&document, OutputContentFormat::Markdown),
             "[x] ship\n\nDetails\n\ninside\n\npreserved\n\n[unsupported content]"
         );
         assert_eq!(
-            render(&document, ReadContentFormat::Text),
+            render(&document, OutputContentFormat::Text),
             "☑ ship\n\nDetails\n\ninside\n\npreserved\n\n[unsupported content]"
         );
     }
@@ -4167,7 +3867,7 @@ mod tests {
             ]
         })]);
 
-        let markdown = render(&document, ReadContentFormat::Markdown);
+        let markdown = render(&document, OutputContentFormat::Markdown);
         assert_eq!(
             markdown,
             "**Decision (decided):** Use the broker renderer\n\n**Decision (undecided):** Choose the rollout date"
@@ -4177,7 +3877,7 @@ mod tests {
         assert!(!markdown.contains("opaque-"));
 
         assert_eq!(
-            render(&document, ReadContentFormat::Text),
+            render(&document, OutputContentFormat::Text),
             "Decision (decided): Use the broker renderer\n\nDecision (undecided): Choose the rollout date"
         );
     }
@@ -4197,11 +3897,11 @@ mod tests {
             ]
         })]);
         assert_eq!(
-            render(&document, ReadContentFormat::Markdown),
+            render(&document, OutputContentFormat::Markdown),
             "| Name | Value \\| detail |\n| --- | --- |\n| Ada Lovelace |  |"
         );
         assert_eq!(
-            render(&document, ReadContentFormat::Text),
+            render(&document, OutputContentFormat::Text),
             "Name | Value | detail\nAda Lovelace | "
         );
     }
@@ -4218,11 +3918,11 @@ mod tests {
             ]
         })]);
         assert_eq!(
-            render(&document, ReadContentFormat::Markdown),
+            render(&document, OutputContentFormat::Markdown),
             "a\nb\nc`  ``     ``` `edge` ``"
         );
         assert_eq!(
-            render(&document, ReadContentFormat::Text),
+            render(&document, OutputContentFormat::Text),
             "a\nb\nc   `edge`"
         );
     }
@@ -4235,34 +3935,44 @@ mod tests {
             "content": [{ "type": "text", "text": "x" }]
         })]);
         assert_eq!(
-            render(&document, ReadContentFormat::Markdown),
+            render(&document, OutputContentFormat::Markdown),
             "```\nx\n```"
         );
 
         let escaped = doc(vec![paragraph("***")]);
         assert_eq!(
-            render_adf_bounded(&escaped, ReadContentFormat::Markdown, 5),
+            render_adf_bounded(&escaped, OutputContentFormat::Markdown, 5),
             Err(ContentRenderError::OutputTooLarge { max_bytes: 5 })
         );
-        assert_eq!(render(&escaped, ReadContentFormat::Markdown), "\\*\\*\\*");
+        assert_eq!(render(&escaped, OutputContentFormat::Markdown), "\\*\\*\\*");
     }
 
-    fn render_storage(source: &str, format: ReadContentFormat) -> String {
+    fn render_storage(source: &str, format: OutputContentFormat) -> String {
         render_confluence_storage_bounded(source, format, 1024 * 1024)
             .unwrap()
+            .value()
+            .as_str()
             .unwrap()
-            .value
+            .to_owned()
     }
 
     #[test]
-    fn storage_native_returns_none_after_full_validation() {
+    fn storage_validation_checks_complete_source_without_selection() {
         assert_eq!(
-            render_confluence_storage_bounded("<p>valid</p>", ReadContentFormat::Native, 1024)
-                .unwrap(),
-            None
+            validate_confluence_storage_bounded_with_budget(
+                "<p>valid</p>",
+                u64::MAX,
+                &mut RenderBudget::default()
+            )
+            .unwrap(),
+            ()
         );
         assert_eq!(
-            render_confluence_storage_bounded("<ac:link>", ReadContentFormat::Native, 1024),
+            validate_confluence_storage_bounded_with_budget(
+                "<ac:link>",
+                u64::MAX,
+                &mut RenderBudget::default()
+            ),
             Err(ContentRenderError::MalformedDocument)
         );
     }
@@ -4279,11 +3989,11 @@ mod tests {
             "<img src=\"https://ignored.test/id\" alt=\"diagram [v2]\"></p>"
         );
         assert_eq!(
-            render_storage(source, ReadContentFormat::Markdown),
+            render_storage(source, OutputContentFormat::Markdown),
             "## Plan & scope\n\nHello **bold**, _careful_, ~~old~~, ``a`b`` & \\*literal\\*\\.\n\n> quoted\n> again\n\n[safe](https://example.test/a%20b) unsafe label [image: diagram \\[v2\\]]"
         );
         assert_eq!(
-            render_storage(source, ReadContentFormat::Text),
+            render_storage(source, OutputContentFormat::Text),
             "Plan & scope\n\nHello bold, careful, old, a`b & *literal*.\n\nquoted\nagain\n\nsafe unsafe label [image: diagram [v2]]"
         );
     }
@@ -4293,11 +4003,11 @@ mod tests {
         let source =
             "<p>a<strong> b </strong>c <em> d</em> e<a href=\"https://example.test\"> f </a>g</p>";
         assert_eq!(
-            render_storage(source, ReadContentFormat::Markdown),
+            render_storage(source, OutputContentFormat::Markdown),
             "a **b** c _d_ e [f](https://example.test/) g"
         );
         assert_eq!(
-            render_storage(source, ReadContentFormat::Text),
+            render_storage(source, OutputContentFormat::Text),
             "a b c d e f g"
         );
     }
@@ -4312,7 +4022,7 @@ mod tests {
             "<![CDATA[<ri:user ri:account-id=\"literal-id\" /> *literal*]]>",
             "</ac:plain-text-body></ac:structured-macro>"
         );
-        let rendered = render_storage(source, ReadContentFormat::Markdown);
+        let rendered = render_storage(source, OutputContentFormat::Markdown);
         assert_eq!(
             rendered,
             "visible\n\n```\n<ri:user ri:account-id=\"literal-id\" /> *literal*\n```"
@@ -4332,11 +4042,11 @@ mod tests {
             "<![CDATA[*code* <ri:user/>]]></ac:plain-text-body></ac:structured-macro>"
         );
         assert_eq!(
-            render_storage(source, ReadContentFormat::Markdown),
+            render_storage(source, OutputContentFormat::Markdown),
             "\\*label\\* \\[x\\]\\(https://evil\\.test\\)\n\n\\# prose \\*literal\\*\n\n```\n*code* <ri:user/>\n```"
         );
         assert_eq!(
-            render_storage(source, ReadContentFormat::Text),
+            render_storage(source, OutputContentFormat::Text),
             "*label* [x](https://evil.test)\n\n# prose *literal*\n\n*code* <ri:user/>"
         );
     }
@@ -4350,7 +4060,7 @@ mod tests {
             "<ac:structured-macro ac:name=\"excerpt\"><ac:plain-text-body>",
             "safe<script>macro-secret</script>end</ac:plain-text-body></ac:structured-macro>"
         );
-        let rendered = render_storage(source, ReadContentFormat::Text);
+        let rendered = render_storage(source, OutputContentFormat::Text);
         assert_eq!(rendered, "beforeafter\n\nsafeend");
         for secret in [
             "script-secret",
@@ -4377,7 +4087,7 @@ mod tests {
             "<script>unterminated",
         ] {
             assert_eq!(
-                render_confluence_storage_bounded(source, ReadContentFormat::Markdown, 1024),
+                render_confluence_storage_bounded(source, OutputContentFormat::Markdown, 1024),
                 Err(ContentRenderError::MalformedDocument),
                 "source must be rejected without exposing it: {source:?}"
             );
@@ -4388,7 +4098,7 @@ mod tests {
     fn storage_preflight_rejects_node_work_and_expansion_overages_before_parsing() {
         let too_many_nodes = "<br>".repeat(MAX_ADF_RENDER_NODES + 1);
         assert_eq!(
-            render_confluence_storage_bounded(&too_many_nodes, ReadContentFormat::Text, 1024,),
+            render_confluence_storage_bounded(&too_many_nodes, OutputContentFormat::Text, 1024,),
             Err(ContentRenderError::NodeLimitExceeded)
         );
 
@@ -4400,7 +4110,7 @@ mod tests {
         assert_eq!(
             render_confluence_storage_with_limits(
                 "<p a=1 b=2 c=3 d=4>x</p>",
-                ReadContentFormat::Text,
+                OutputContentFormat::Text,
                 1024,
                 tight_work,
             ),
@@ -4415,7 +4125,7 @@ mod tests {
         assert_eq!(
             render_confluence_storage_with_limits(
                 "<future-node /><future-node />",
-                ReadContentFormat::Text,
+                OutputContentFormat::Text,
                 1024,
                 tight_expansion,
             ),
@@ -4432,32 +4142,32 @@ mod tests {
             "<pre><code>let ticks = ```;</code></pre>"
         );
         assert_eq!(
-            render_storage(source, ReadContentFormat::Markdown),
+            render_storage(source, OutputContentFormat::Markdown),
             "- one\n- two\n  1. nested\n\n| Name | Value \\| detail |\n| --- | --- |\n| Ada Lovelace |  |\n\n````\nlet ticks = ```;\n````"
         );
         assert_eq!(
-            render_storage(source, ReadContentFormat::Text),
+            render_storage(source, OutputContentFormat::Text),
             "• one\n• two\n  1. nested\n\nName | Value | detail\nAda Lovelace |\n\nlet ticks = ```;"
         );
 
         assert_eq!(
             render_storage(
                 "<ol start=\"42\"><li>first</li><li>second</li></ol>",
-                ReadContentFormat::Markdown,
+                OutputContentFormat::Markdown,
             ),
             "42. first\n43. second"
         );
         assert_eq!(
             render_storage(
                 "<ol start=\"42\"><li></li><li>visible</li></ol>",
-                ReadContentFormat::Markdown,
+                OutputContentFormat::Markdown,
             ),
             "43. visible"
         );
         for invalid in ["0", "-2", "+3", "4 other"] {
             let source = format!("<ol start=\"{invalid}\"><li>first</li></ol>");
             assert_eq!(
-                render_storage(&source, ReadContentFormat::Markdown),
+                render_storage(&source, OutputContentFormat::Markdown),
                 "1. first"
             );
         }
@@ -4465,7 +4175,7 @@ mod tests {
         assert_eq!(
             render_storage(
                 "<pre><code class=\"language-rust\">fn main() {}\n</code></pre>",
-                ReadContentFormat::Markdown,
+                OutputContentFormat::Markdown,
             ),
             "```rust\nfn main() {}\n```"
         );
@@ -4477,7 +4187,7 @@ mod tests {
         ] {
             let source = format!("<pre><code class=\"{class}\">x\n</code></pre>");
             assert_eq!(
-                render_storage(&source, ReadContentFormat::Markdown),
+                render_storage(&source, OutputContentFormat::Markdown),
                 "```\nx\n```"
             );
         }
@@ -4498,7 +4208,7 @@ mod tests {
             "<ac:structured-macro ac:name=\"info\"><ac:rich-text-body><p>Useful info</p>",
             "</ac:rich-text-body></ac:structured-macro>"
         );
-        let markdown = render_storage(source, ReadContentFormat::Markdown);
+        let markdown = render_storage(source, OutputContentFormat::Markdown);
         assert_eq!(
             markdown,
             "read roadmap\n\n[attachment: design\\.png] [user: Ada]\n\n[image: chart\\.png]\n\n```rust\nfn main() {}\n```\n\nUseful info"
@@ -4507,7 +4217,7 @@ mod tests {
             assert!(!markdown.contains(secret));
         }
         assert_eq!(
-            render_storage(source, ReadContentFormat::Text),
+            render_storage(source, OutputContentFormat::Text),
             "read roadmap\n\n[attachment: design.png] [user: Ada]\n\n[image: chart.png]\n\nfn main() {}\n\nUseful info"
         );
     }
@@ -4525,9 +4235,9 @@ mod tests {
             "</ac:task-body></ac:task></ac:task-list>"
         );
 
-        let markdown = render_storage(source, ReadContentFormat::Markdown);
+        let markdown = render_storage(source, OutputContentFormat::Markdown);
         assert_eq!(markdown, "- [x] Ship **release**\n\n- [ ] Write docs");
-        let text = render_storage(source, ReadContentFormat::Text);
+        let text = render_storage(source, OutputContentFormat::Text);
         assert_eq!(text, "☑ Ship release\n\n☐ Write docs");
         for sentinel in [
             "task-list-sentinel",
@@ -4553,9 +4263,9 @@ mod tests {
             "</ac:adf-content></ac:adf-node></ac:adf-extension>"
         );
 
-        let markdown = render_storage(source, ReadContentFormat::Markdown);
+        let markdown = render_storage(source, OutputContentFormat::Markdown);
         assert_eq!(markdown, "Readable _ADF content_");
-        let text = render_storage(source, ReadContentFormat::Text);
+        let text = render_storage(source, OutputContentFormat::Text);
         assert_eq!(text, "Readable ADF content");
         for sentinel in [
             "extension-attribute-sentinel",
@@ -4584,10 +4294,10 @@ mod tests {
             "</ac:adf-extension>"
         );
 
-        let markdown = render_storage(source, ReadContentFormat::Markdown);
+        let markdown = render_storage(source, OutputContentFormat::Markdown);
         assert_eq!(markdown, "First **item**\n\nSecond _item_");
         assert!(!markdown.contains("fallback-prose-sentinel"));
-        let text = render_storage(source, ReadContentFormat::Text);
+        let text = render_storage(source, OutputContentFormat::Text);
         assert_eq!(text, "First item\n\nSecond item");
         assert!(!text.contains("fallback-prose-sentinel"));
 
@@ -4596,10 +4306,10 @@ mod tests {
             "<ac:adf-fallback><p>must-not-render</p></ac:adf-fallback></ac:adf-extension>"
         );
         assert_eq!(
-            render_storage(empty_primary, ReadContentFormat::Markdown),
+            render_storage(empty_primary, OutputContentFormat::Markdown),
             ""
         );
-        assert_eq!(render_storage(empty_primary, ReadContentFormat::Text), "");
+        assert_eq!(render_storage(empty_primary, OutputContentFormat::Text), "");
     }
 
     #[test]
@@ -4611,10 +4321,10 @@ mod tests {
             "</ac:adf-extension>"
         );
 
-        let markdown = render_storage(source, ReadContentFormat::Markdown);
+        let markdown = render_storage(source, OutputContentFormat::Markdown);
         assert_eq!(markdown, "Readable _fallback_");
         assert!(!markdown.contains("metadata-sentinel"));
-        let text = render_storage(source, ReadContentFormat::Text);
+        let text = render_storage(source, OutputContentFormat::Text);
         assert_eq!(text, "Readable fallback");
         assert!(!text.contains("metadata-sentinel"));
     }
@@ -4628,12 +4338,12 @@ mod tests {
             "ri:content-id=\"attachment-id-sentinel\" /></ac:link></p>"
         );
 
-        let markdown = render_storage(source, ReadContentFormat::Markdown);
+        let markdown = render_storage(source, OutputContentFormat::Markdown);
         assert_eq!(
             markdown,
             "[user: Ada] [attachment: design \\[final\\]\\.pdf]"
         );
-        let text = render_storage(source, ReadContentFormat::Text);
+        let text = render_storage(source, OutputContentFormat::Text);
         assert_eq!(text, "[user: Ada] [attachment: design [final].pdf]");
         for sentinel in [
             "link-attribute-sentinel",
@@ -4656,12 +4366,12 @@ mod tests {
             "<ac:parameter ac:name=\"title\">noformat-parameter-secret</ac:parameter>",
             "</ac:structured-macro>"
         );
-        let markdown = render_storage(source, ReadContentFormat::Markdown);
+        let markdown = render_storage(source, OutputContentFormat::Markdown);
         assert_eq!(markdown, "```rust\n\n```\n\n```\n\n```");
         assert!(!markdown.contains("code-parameter-secret"));
         assert!(!markdown.contains("noformat-parameter-secret"));
 
-        let text = render_storage(source, ReadContentFormat::Text);
+        let text = render_storage(source, OutputContentFormat::Text);
         assert_eq!(text, "");
         assert!(!text.contains("code-parameter-secret"));
         assert!(!text.contains("noformat-parameter-secret"));
@@ -4677,7 +4387,7 @@ mod tests {
             "<ac:structured-macro ac:name=\"html\"><ac:plain-text-body>",
             "active macro secret</ac:plain-text-body></ac:structured-macro>"
         );
-        let rendered = render_storage(source, ReadContentFormat::Markdown);
+        let rendered = render_storage(source, OutputContentFormat::Markdown);
         assert_eq!(
             rendered,
             "beforeafter\n\nsafe child\n\n[unsupported content]\n\n[unsupported content]"
@@ -4702,7 +4412,7 @@ mod tests {
             "<a href=\"https://example.test/a) [injected](https://evil.test/\">attack</a> ",
             "<a href=\"mailto:user@example.test\">mail</a></p>"
         );
-        let rendered = render_storage(source, ReadContentFormat::Markdown);
+        let rendered = render_storage(source, OutputContentFormat::Markdown);
         assert_eq!(
             rendered,
             "credentials [attack](https://example.test/a%29%20[injected]%28https://evil.test/) [mail](mailto:user@example.test)"
@@ -4721,7 +4431,7 @@ mod tests {
         assert_eq!(
             render_confluence_storage_with_limits(
                 "<div><div><div><div>deep</div></div></div></div>",
-                ReadContentFormat::Text,
+                OutputContentFormat::Text,
                 1024,
                 limits,
             ),
@@ -4735,7 +4445,7 @@ mod tests {
         assert_eq!(
             render_confluence_storage_with_limits(
                 "<p><span>one</span><span>two</span></p>",
-                ReadContentFormat::Text,
+                OutputContentFormat::Text,
                 1024,
                 node_limits,
             ),
@@ -4749,7 +4459,7 @@ mod tests {
         assert_eq!(
             render_confluence_storage_with_limits(
                 "<p><strong>x</strong></p>",
-                ReadContentFormat::Text,
+                OutputContentFormat::Text,
                 1024,
                 work_limits,
             ),
@@ -4757,18 +4467,20 @@ mod tests {
         );
 
         assert_eq!(
-            render_confluence_storage_bounded("<p>é🙂</p>", ReadContentFormat::Text, 6)
+            render_confluence_storage_bounded("<p>é🙂</p>", OutputContentFormat::Text, 6)
                 .unwrap()
+                .value()
+                .as_str()
                 .unwrap()
-                .value,
+                .to_owned(),
             "é🙂"
         );
         assert_eq!(
-            render_confluence_storage_bounded("<p>é🙂</p>", ReadContentFormat::Text, 5),
+            render_confluence_storage_bounded("<p>é🙂</p>", OutputContentFormat::Text, 5),
             Err(ContentRenderError::OutputTooLarge { max_bytes: 5 })
         );
         assert_eq!(
-            render_confluence_storage_bounded("<p>***</p>", ReadContentFormat::Markdown, 5),
+            render_confluence_storage_bounded("<p>***</p>", OutputContentFormat::Markdown, 5),
             Err(ContentRenderError::OutputTooLarge { max_bytes: 5 })
         );
     }
@@ -4788,7 +4500,7 @@ mod tests {
         ];
         for document in malformed {
             assert_eq!(
-                render_adf_bounded(&document, ReadContentFormat::Markdown, 1024),
+                render_adf_bounded(&document, OutputContentFormat::Markdown, 1024),
                 Err(ContentRenderError::MalformedDocument)
             );
         }
@@ -4812,7 +4524,7 @@ mod tests {
         assert!(
             render_adf_with_limits(
                 &nested(2),
-                ReadContentFormat::Text,
+                OutputContentFormat::Text,
                 u64::MAX,
                 1024,
                 limits,
@@ -4824,7 +4536,7 @@ mod tests {
         assert_eq!(
             render_adf_with_limits(
                 &nested(4),
-                ReadContentFormat::Text,
+                OutputContentFormat::Text,
                 u64::MAX,
                 1024,
                 limits,
@@ -4840,13 +4552,13 @@ mod tests {
         let within = doc((0..MAX_ADF_RENDER_NODES - 1)
             .map(|_| json!({ "type": "mention" }))
             .collect());
-        assert!(render_adf_bounded(&within, ReadContentFormat::Text, 0).is_ok());
+        assert!(render_adf_bounded(&within, OutputContentFormat::Text, 0).is_ok());
 
         let over = doc((0..MAX_ADF_RENDER_NODES)
             .map(|_| json!({ "type": "mention" }))
             .collect());
         assert_eq!(
-            render_adf_bounded(&over, ReadContentFormat::Text, 0),
+            render_adf_bounded(&over, OutputContentFormat::Text, 0),
             Err(ContentRenderError::NodeLimitExceeded)
         );
     }
@@ -4873,7 +4585,7 @@ mod tests {
         assert_eq!(
             render_adf_with_limits(
                 &document,
-                ReadContentFormat::Markdown,
+                OutputContentFormat::Markdown,
                 u64::MAX,
                 1024,
                 limits,
@@ -4887,34 +4599,36 @@ mod tests {
     fn enforces_exact_byte_and_multibyte_caps_without_truncation() {
         let ascii = doc(vec![paragraph("abcd")]);
         assert_eq!(
-            render_adf_bounded(&ascii, ReadContentFormat::Text, 4)
+            render_adf_bounded(&ascii, OutputContentFormat::Text, 4)
                 .unwrap()
+                .value()
+                .as_str()
                 .unwrap()
-                .value,
+                .to_owned(),
             "abcd"
         );
         assert_eq!(
-            render_adf_bounded(&ascii, ReadContentFormat::Text, 3),
+            render_adf_bounded(&ascii, OutputContentFormat::Text, 3),
             Err(ContentRenderError::OutputTooLarge { max_bytes: 3 })
         );
 
         let multibyte = doc(vec![paragraph("é🙂")]);
         assert_eq!("é🙂".len(), 6);
-        assert!(render_adf_bounded(&multibyte, ReadContentFormat::Text, 6).is_ok());
+        assert!(render_adf_bounded(&multibyte, OutputContentFormat::Text, 6).is_ok());
         assert_eq!(
-            render_adf_bounded(&multibyte, ReadContentFormat::Text, 5),
+            render_adf_bounded(&multibyte, OutputContentFormat::Text, 5),
             Err(ContentRenderError::OutputTooLarge { max_bytes: 5 })
         );
     }
 
     #[test]
     fn serialization_uses_the_contract_shape() {
-        let rendered = RenderedBody::new(ReadContentFormat::Markdown, "hello".to_string());
+        let rendered = SelectedContent::markdown("hello");
         assert_eq!(
             serde_json::to_value(rendered).unwrap(),
             json!({ "format": "markdown", "value": "hello" })
         );
-        assert_eq!(ReadContentFormat::Text.as_str(), "text");
+        assert_eq!(OutputContentFormat::Text.as_str(), "text");
     }
 
     #[test]
@@ -4922,27 +4636,27 @@ mod tests {
         let source = serde_json::to_string(&doc(vec![paragraph("ADF *body*")])).unwrap();
         let mut budget = RenderBudget::default();
         assert_eq!(
-            render_confluence_adf_bounded_with_budget(
+            select_confluence_adf_bounded_with_budget(
                 &source,
-                ReadContentFormat::Markdown,
+                OutputContentFormat::Markdown,
                 source.len() as u64,
                 1024,
                 &mut budget,
             )
             .unwrap()
+            .value()
+            .as_str()
             .unwrap()
-            .value,
+            .to_owned(),
             "ADF \\*body\\*"
         );
 
         let mut budget = RenderBudget::default();
         assert_eq!(
-            render_confluence_adf_bounded_with_budget(
+            validate_confluence_adf_bounded_with_budget(
                 &source,
-                ReadContentFormat::Native,
                 source.len() as u64 - 1,
-                1024,
-                &mut budget,
+                &mut budget
             ),
             Err(ContentRenderError::SourceTooLarge {
                 max_bytes: source.len() as u64 - 1
@@ -4952,12 +4666,10 @@ mod tests {
         let malformed = "{not-json}";
         let mut budget = RenderBudget::default();
         assert_eq!(
-            render_confluence_adf_bounded_with_budget(
+            validate_confluence_adf_bounded_with_budget(
                 malformed,
-                ReadContentFormat::Native,
                 malformed.len() as u64,
-                1024,
-                &mut budget,
+                &mut budget
             ),
             Err(ContentRenderError::MalformedDocument)
         );
@@ -4965,28 +4677,24 @@ mod tests {
         let malformed_structure = r#"{"type":"doc","version":1}"#;
         let mut budget = RenderBudget::default();
         assert_eq!(
-            render_confluence_adf_bounded_with_budget(
+            validate_confluence_adf_bounded_with_budget(
                 malformed_structure,
-                ReadContentFormat::Native,
                 malformed_structure.len() as u64,
-                1024,
-                &mut budget,
+                &mut budget
             ),
             Err(ContentRenderError::MalformedDocument)
         );
     }
 
     #[test]
-    fn confluence_storage_source_and_aggregate_work_are_bounded_in_native_mode() {
+    fn confluence_storage_source_and_aggregate_work_are_bounded_during_validation() {
         let source = "<p>body</p>";
         let mut budget = RenderBudget::default();
         assert_eq!(
-            render_confluence_storage_bounded_with_budget(
+            validate_confluence_storage_bounded_with_budget(
                 source,
-                ReadContentFormat::Native,
                 source.len() as u64 - 1,
-                1024,
-                &mut budget,
+                &mut budget
             ),
             Err(ContentRenderError::SourceTooLarge {
                 max_bytes: source.len() as u64 - 1
@@ -4995,30 +4703,22 @@ mod tests {
 
         let mut exhausted = RenderBudget::with_limits(0, 1);
         assert_eq!(
-            render_confluence_storage_bounded_with_budget(
+            validate_confluence_storage_bounded_with_budget(
                 source,
-                ReadContentFormat::Native,
                 source.len() as u64,
-                1024,
-                &mut exhausted,
+                &mut exhausted
             ),
             Err(ContentRenderError::NodeLimitExceeded)
         );
     }
 
     #[test]
-    fn source_size_and_aggregate_work_are_bounded_in_native_mode() {
+    fn source_size_and_aggregate_work_are_bounded_during_validation() {
         let document = doc(vec![paragraph("body")]);
         let serialized = serde_json::to_vec(&document).unwrap().len() as u64;
         let mut budget = RenderBudget::default();
         assert_eq!(
-            render_adf_bounded_with_budget(
-                &document,
-                ReadContentFormat::Native,
-                serialized - 1,
-                1024,
-                &mut budget,
-            ),
+            validate_adf_bounded_with_budget(&document, serialized - 1, &mut budget),
             Err(ContentRenderError::SourceTooLarge {
                 max_bytes: serialized - 1
             })
@@ -5026,14 +4726,245 @@ mod tests {
 
         let mut exhausted = RenderBudget::with_limits(0, 1);
         assert_eq!(
-            render_adf_bounded_with_budget(
+            validate_adf_bounded_with_budget(&document, serialized, &mut exhausted),
+            Err(ContentRenderError::NodeLimitExceeded)
+        );
+    }
+    #[test]
+    fn native_adf_selection_is_object_valued_and_preserves_the_document() {
+        let document = doc(vec![paragraph("é🙂 **raw**")]);
+        let bytes = serde_json::to_vec(&document).unwrap().len() as u64;
+        let selected = select_adf_bounded_with_budget(
+            &document,
+            OutputContentFormat::Adf,
+            bytes,
+            bytes,
+            &mut RenderBudget::default(),
+        )
+        .unwrap();
+        assert_eq!(selected.format(), OutputContentFormat::Adf);
+        assert_eq!(selected.value(), &document);
+        assert_eq!(
+            serde_json::to_value(selected).unwrap(),
+            json!({"format":"adf","value":document})
+        );
+        assert_eq!(
+            select_adf_bounded_with_budget(
                 &document,
-                ReadContentFormat::Native,
-                serialized,
-                1024,
-                &mut exhausted,
+                OutputContentFormat::Adf,
+                bytes,
+                bytes - 1,
+                &mut RenderBudget::default()
+            ),
+            Err(ContentRenderError::OutputTooLarge {
+                max_bytes: bytes - 1
+            })
+        );
+        assert_eq!(
+            select_adf_bounded_with_budget(
+                &document,
+                OutputContentFormat::Adf,
+                bytes - 1,
+                bytes,
+                &mut RenderBudget::default()
+            ),
+            Err(ContentRenderError::SourceTooLarge {
+                max_bytes: bytes - 1
+            })
+        );
+    }
+
+    #[test]
+    fn confluence_native_selections_use_parsed_adf_and_exact_storage() {
+        let source = "  { \"type\" : \"doc\", \"version\": 1, \"content\": [] }  ";
+        let selected = select_confluence_adf_bounded_with_budget(
+            source,
+            OutputContentFormat::Adf,
+            source.len() as u64,
+            1000,
+            &mut RenderBudget::default(),
+        )
+        .unwrap();
+        assert_eq!(selected.value(), &doc(vec![]));
+        let storage = "<p>é🙂 &amp;  <strong>raw</strong></p>";
+        let selected = select_confluence_storage_bounded_with_budget(
+            storage,
+            OutputContentFormat::Storage,
+            storage.len() as u64,
+            storage.len() as u64,
+            &mut RenderBudget::default(),
+        )
+        .unwrap();
+        assert_eq!(selected.format(), OutputContentFormat::Storage);
+        assert_eq!(selected.value(), &json!(storage));
+        assert!(
+            select_confluence_storage_bounded_with_budget(
+                storage,
+                OutputContentFormat::Storage,
+                storage.len() as u64,
+                storage.len() as u64 - 1,
+                &mut RenderBudget::default()
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn concrete_native_selection_still_rejects_malformed_sources_and_exhaustion() {
+        let malformed = json!({"type":"doc","version":1,"content":[{"type":"text","text":4}]});
+        assert_eq!(
+            select_adf_bounded_with_budget(
+                &malformed,
+                OutputContentFormat::Adf,
+                1000,
+                1000,
+                &mut RenderBudget::default()
+            ),
+            Err(ContentRenderError::MalformedDocument)
+        );
+        assert_eq!(
+            select_confluence_adf_bounded_with_budget(
+                "{invalid",
+                OutputContentFormat::Adf,
+                1000,
+                1000,
+                &mut RenderBudget::default()
+            ),
+            Err(ContentRenderError::MalformedDocument)
+        );
+        assert_eq!(
+            select_confluence_storage_bounded_with_budget(
+                "<ac:link>",
+                OutputContentFormat::Storage,
+                1000,
+                1000,
+                &mut RenderBudget::default()
+            ),
+            Err(ContentRenderError::MalformedDocument)
+        );
+        assert_eq!(
+            select_adf_bounded_with_budget(
+                &doc(vec![]),
+                OutputContentFormat::Adf,
+                1000,
+                1000,
+                &mut RenderBudget::with_limits(0, 100)
             ),
             Err(ContentRenderError::NodeLimitExceeded)
+        );
+        assert!(
+            select_confluence_storage_bounded_with_budget(
+                "<p>x</p>",
+                OutputContentFormat::Storage,
+                1000,
+                1000,
+                &mut RenderBudget::with_limits(100, 0)
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn selectors_never_fallback_to_another_source_format() {
+        assert_eq!(
+            select_adf_bounded_with_budget(
+                &doc(vec![]),
+                OutputContentFormat::Storage,
+                1000,
+                1000,
+                &mut RenderBudget::default()
+            ),
+            Err(ContentRenderError::UnsupportedFormat)
+        );
+        assert_eq!(
+            select_confluence_storage_bounded_with_budget(
+                "<p>x</p>",
+                OutputContentFormat::Adf,
+                1000,
+                1000,
+                &mut RenderBudget::default()
+            ),
+            Err(ContentRenderError::UnsupportedFormat)
+        );
+        for format in [OutputContentFormat::Adf, OutputContentFormat::Storage] {
+            assert_eq!(
+                select_gitlab_markdown_bounded_with_budget(
+                    "x",
+                    format,
+                    1000,
+                    1000,
+                    &mut RenderBudget::default()
+                ),
+                Err(ContentRenderError::UnsupportedFormat)
+            );
+        }
+    }
+
+    #[test]
+    fn empty_native_sources_remain_present_selected_content() {
+        for format in [OutputContentFormat::Markdown, OutputContentFormat::Text] {
+            for source in ["", " ", "<p></p>"] {
+                assert_eq!(
+                    select_confluence_storage_bounded_with_budget(
+                        source,
+                        format,
+                        100,
+                        if source.is_empty() { 0 } else { 100 },
+                        &mut RenderBudget::default()
+                    )
+                    .unwrap()
+                    .value(),
+                    &json!("")
+                );
+            }
+            assert_eq!(
+                select_confluence_storage_bounded_with_budget(
+                    "<future></future>",
+                    format,
+                    100,
+                    100,
+                    &mut RenderBudget::default()
+                )
+                .unwrap()
+                .value(),
+                &json!("[unsupported content]")
+            );
+        }
+        assert_eq!(
+            select_adf_bounded_with_budget(
+                &doc(vec![]),
+                OutputContentFormat::Markdown,
+                1000,
+                1000,
+                &mut RenderBudget::default()
+            )
+            .unwrap()
+            .value(),
+            &json!("")
+        );
+        assert_eq!(
+            select_confluence_storage_bounded_with_budget(
+                "",
+                OutputContentFormat::Storage,
+                0,
+                0,
+                &mut RenderBudget::default()
+            )
+            .unwrap()
+            .value(),
+            &json!("")
+        );
+        assert_eq!(
+            select_gitlab_markdown_bounded_with_budget(
+                "",
+                OutputContentFormat::Markdown,
+                0,
+                0,
+                &mut RenderBudget::default()
+            )
+            .unwrap()
+            .value(),
+            &json!("")
         );
     }
 }

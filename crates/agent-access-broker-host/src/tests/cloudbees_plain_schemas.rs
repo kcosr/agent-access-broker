@@ -31,6 +31,7 @@ async fn fixture() -> Fixture {
         config.providers.insert(provider);
         config.policy.resources.push(ResourceDefinition {
             id: "ci-job".into(),
+            browser_url: None,
             display_name: None,
             resource_type: CLOUDBEES_CI_JOB_RESOURCE.id().clone(),
             selector: ResourceSelector::Exact {

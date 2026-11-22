@@ -43,8 +43,8 @@ exact names that client exposes. Broker wire names and canonical service/action
 IDs do not identify aliases added by a client.
 
 Jira `project.list` lists live authorized projects with only `maxResults` and
-`pageToken`. It has independent action permission and supports whole-result
-Markdown. Continue empty `scan_budget` pages using `nextPageToken` until
+`pageToken`. It has independent action permission and returns structured JSON.
+Continue empty `scan_budget` pages using `nextPageToken` until
 `exhausted`; issue search has its own contract. Local
 `resource_access_describe` reports policy access and registered references.
 
@@ -88,9 +88,9 @@ complete-file budget within the action schema's maximum. The default budget is
 64 KiB or the lower configured ceiling. Check `file.contentStatus` before using
 `file.content`: oversized and unsupported text return metadata with an explicit
 omission status. HTTP MCP can use these larger inline reads but still applies
-its serialized response limit, including both text and structured result copies
-and JSON escaping. Stdio MCP can instead use `file.raw.download` with an absolute
-`outputPath` for larger or binary files. See
+its serialized response limit, including structured content, the optional text
+copy and JSON escaping. Stdio MCP can instead use `file.raw.download` with an
+absolute `outputPath` for larger or binary files. See
 [repository file reads](providers-gitlab-rest.md#repository-file-reads).
 
 Teams `notification.send` uses the same destination alias and `simple` or
@@ -172,8 +172,10 @@ notifications or background import refresh are added.
 
 Keep `mcp.public_url` at the canonical `/mcp` base. Scoped paths append exactly one
 canonical service ID. Encoded aliases, extra segments and trailing slashes are
-rejected without redirects. The only accepted query is the per-request
-[`outputSchemas`](#output-schemas) selection. Allow both `/mcp` and `/mcp/<service>` in
+rejected without redirects. Endpoint queries can select
+[output schemas](#output-schemas), an
+[output-content preference](#output-content-formats) and
+[text copies](#tool-result-text-copies). Allow both `/mcp` and `/mcp/<service>` in
 reverse-proxy rules using the same identity, context, Host and Origin protections.
 All connections share broker sessions, control concurrency, invocation limits and
 audit. Two clients with four service connections each consume the default eight
@@ -391,13 +393,15 @@ Presence of `X-Agent-Access-User` selects username mode before principal-token
 authentication. Duplicate/malformed names or bearer fields, both caller carriers,
 a fingerprint alongside a username, and alternate principal credential carriers
 are rejected. A wrong caller, wrong transport, missing capability or unknown/paused
-human never falls back to an ordinary token, cookie or fingerprint. The only
-accepted query is one [`outputSchemas`](#output-schemas) selection; every other
-query, including a bare `?` delimiter, is rejected before dispatch with HTTP
-400 JSON
-`{"error":"Invalid MCP endpoint query; only outputSchemas=on or outputSchemas=off is accepted"}`
-in every admission mode, including username mode: a malformed query is not an
-identity failure. The selection never identifies anyone. Ordinary token precedence over
+human never falls back to an ordinary token, cookie or fingerprint. Accepted
+query keys are [`outputSchemas`](#output-schemas),
+[`preferredOutputContentFormat`](#output-content-formats) and
+[`includeTextCopy`](#tool-result-text-copies), each at most once in any order
+with its literal, unencoded value. A bare `?`, empty segments or values,
+duplicates, unknown keys and malformed values are rejected before dispatch.
+Ordinary-token/fingerprint requests receive HTTP 400; trusted-username ingress
+retains the audited `identity_assertion_invalid` admission envelope. These
+presentation settings never identify anyone. Ordinary token precedence over
 fingerprint identity applies only without the user header.
 
 Protected `Connection` nominations are rejected. Every MCP `Trailer` declaration
@@ -447,7 +451,10 @@ token_file = "/home/me/.config/agent-access/token"
 The client header and scheme must match the selected broker identity source.
 `Authorization` with `Bearer` matches both published broker templates. Use an
 issued token for managed identity, or a token registered by the configured static
-identity source. The anonymous quickstart keeps client identity disabled.
+identity source. Local stdio provider listing and calls require authenticated
+runtime catalog access. The anonymous HTTP quickstart does not provide that
+access; configure an identity source and matching grants before using local
+stdio provider tools, or use an already configured authenticated ingress.
 
 Alternatively, set these variables in the environment that launches your MCP
 client, then forward all four to the subprocess:
@@ -579,9 +586,9 @@ Confluence retains its page/blogpost type restriction even for all-space grants.
 
 The following fixed Broker wire names accept flat JSON arguments, without the provider
 `inputs`/`requestFile` wrapper. They read broker metadata without changing
-upstream state, and their successful object appears identically in text and
-`structuredContent`. Local stdio helpers also accept optional absolute
-`outputPath`; when set, that object is saved as JSON and the tool returns a file
+upstream state, and their successful object appears in `structuredContent` and,
+by default, as an identical JSON text copy. Local stdio helpers also accept
+optional absolute `outputPath`; when set, that object is saved as JSON and the tool returns a file
 receipt instead. Because this can overwrite a local file, stdio helper tools
 advertise `readOnlyHint: false` and `destructiveHint: true` for their complete
 argument contract. HTTP helpers reject `outputPath` and retain
@@ -677,7 +684,9 @@ Aggregate stdio helpers use ordinary `/v1/services` visibility, including
 anonymous access where the broker permits it and supported
 non-agent token classes. Their fixed names resolve through a bounded helper
 registry without fetching the authenticated provider catalog. Native provider
-tools require the complete caller runtime catalog and its bounded registry. Descriptions and raw schemas come from broker
+tools require authenticated access to the complete caller runtime catalog and
+its bounded registry. An anonymous catalog request fails before provider dispatch,
+even when the Broker permits anonymous direct HTTP invocation. Descriptions and raw schemas come from broker
 capability definitions. Invoke `actions_describe` additionally checks the fresh
 caller catalog and returns its IO, sensitive-field, presentation metadata and
 exact native MCP wrapper schema. Gateways are omitted from ordinary service/action
@@ -724,7 +733,7 @@ both, and the adapter rejects a call that sends neither.
 
 An argument the tool schema does not declare is a tool error that names it and
 lists the arguments the tool accepts, for example
-``unsupported argument `readContentFormat`; this tool accepts: inputs, outputPath, requestFile``.
+``unsupported argument `unknownOption`; this tool accepts: inputs, outputPath, requestFile``.
 Both transports and the discovery helpers apply this rule. The error repeats
 only names that are plain identifiers (a letter followed by up to 63 letters,
 digits, or underscores) and never argument values.
@@ -736,8 +745,9 @@ JSON and multipart-upload tools, including writes, accept optional `outputPath`:
 ```
 
 The adapter saves the complete successful broker envelope as JSON, including
-nested Markdown when `responseFormat: "markdown"` is selected. It returns a
-small receipt in text and `structuredContent` instead of the saved result.
+each selected rich-text value at its declared field. It returns a
+small receipt in `structuredContent` and the optional text copy instead of the
+saved result.
 The receipt keeps correlation/status identifiers, sets `operationStatus` to
 `succeeded` for confirmed success, and adds
 `output: {status, path, size, sha256, contentType, sensitive}`. `size` is the actual
@@ -852,13 +862,107 @@ the client must restart the process. This bounds input buffering even for an
 unterminated frame. Other concurrent requests may have uncertain outcomes. Use
 the file input mode to keep large payloads out of protocol frames.
 
-Actions advertising response presentation accept `readContentFormat` and/or
-`responseFormat`. CLI defaults apply when supported. Explicit whole-result
-Markdown overrides an ambient embedded-content default; conflicting explicit
-formats are rejected. Responses retain the broker envelope in both MCP text and
-structured content, or in the saved JSON envelope when `outputPath` is used.
-Rate-limited tool errors are the one exception to the text copy; see
-[rate limits](#rate-limits).
+## Tool-result text copies
+
+MCP tool results carry the complete result in `structuredContent`. By default,
+`content` also contains a JSON text copy. Rate-limit errors use the Broker's
+readable message as their text, and stdio-local errors use a safe message also
+available at `structuredContent.error.message`. The text adds no information
+that is absent from the structured result.
+
+Clients that consume `structuredContent` can omit the top-level text copy:
+
+```text
+https://broker.example/mcp?includeTextCopy=false
+https://broker.example/mcp/jira?preferredOutputContentFormat=adf&includeTextCopy=false
+```
+
+For local stdio, select the setting when starting the process:
+
+```bash
+agent-access mcp serve --include-text-copy=false
+agent-access mcp serve --service jira --include-text-copy=false
+```
+
+Both controls default to `true` and accept only literal lowercase `true` or
+`false`. HTTP applies the setting independently to every request; it is not
+remembered by the session. Stdio keeps the startup setting for the process.
+The control is not an MCP tool argument, a TOML setting or an environment setting.
+
+With `false`, every tool result has `content: []` and retains the complete
+`structuredContent`, `isError` and `_meta`. This includes helpers, denials,
+provider failures, rate limits, local file receipts and oversize receipts.
+Imported `result.upstreamMcp.content` remains part of the provider payload.
+HTTP and JSON-RPC protocol errors remain separate from tool results.
+
+The setting does not change body formats, tool schemas, discovery pagination,
+provider calls or saved file contents. HTTP discovery cursors can be continued
+with either text-copy setting. Serialized response budgets count the content
+actually emitted, so omitting the copy can let a result fit within the same wire
+limit. Provider/body limits, Broker-JSON receipt limits and resource-access
+limits still apply. The Broker does not detect client support or restore a copy
+automatically; configure `false` only for clients that read `structuredContent`.
+
+## Output content formats
+
+Ordinary results retain the Broker JSON envelope in `structuredContent` and the
+optional text copy, or in the saved JSON envelope when `outputPath` is used.
+Each declared rich-text field contains one `{format,value}`. Markdown is preferred
+by default; ADF uses an object value, while Markdown, text and storage use strings.
+The text-copy setting is independent of this body representation.
+
+Body-capable action schemas expose optional `outputContentFormat` beside `inputs`.
+It is an exact request from the action's supported `markdown`, `text`, `adf` or
+`storage` formats. Unsupported selections fail without provider lookup. Omit the
+argument to use the connection preference, service preference, then Markdown.
+If the chosen preference is unsupported, the action's declared native format is
+used without trying lower preference tiers. Body-free actions ignore preferences
+and do not expose the exact argument. Write `contentFormat` and upstream
+`bodyFormat` remain provider inputs with their own documented meanings.
+
+HTTP MCP accepts the optional literal `preferredOutputContentFormat` query
+parameter:
+
+```text
+https://broker.example/mcp?preferredOutputContentFormat=text
+https://broker.example/mcp/jira?preferredOutputContentFormat=adf
+```
+
+The value must be `markdown`, `text`, `adf`, or `storage`. It can be combined
+with `includeTextCopy=true|false` and `outputSchemas=on|off` in any order, with
+each key appearing at most once. Empty values or query segments, including a
+trailing `&`, duplicate keys, unknown keys, malformed values and encoded key/value
+aliases return HTTP 400
+before dispatch. Trusted-username ingress retains the audited
+`identity_assertion_invalid` admission envelope for malformed queries.
+`mcp.public_url` remains query-free. The preference belongs to
+each HTTP request and does not mutate session identity or view. Keep the same
+preference while continuing paginated discovery; a cross-preference cursor is
+rejected.
+
+Stdio uses the client setting `[defaults].preferred_output_content_format`, or
+`AGENT_ACCESS_PREFERRED_OUTPUT_CONTENT_FORMAT` when that setting is absent.
+`agent-access mcp serve --preferred-output-content-format text` overrides it for
+the process. Without a process override, configuration retains its per-call
+reload behavior. These preferences are not additional MCP tool arguments.
+`actions_describe` reports the effective connection default; the canonical
+catalog keeps service defaults.
+
+Retired format settings at startup exit 3 on stderr before protocol output. An
+invalid setting introduced by a later stdio reload produces a normal tool error
+without dispatch and leaves the process alive. Refresh discovery after upgrading
+the Broker: even calls with no format argument receive the new tagged bodies.
+See [upgrade requirements](operator-guide.md#output-content-contract-upgrade).
+
+Stdio validates selected values on inline and file-bound successful responses.
+Invalid paths, tags or value types produce `isError: true` with a bounded
+`response_content_invalid` receipt in `structuredContent` and the optional JSON
+text copy.
+The receipt preserves known completion, sets `retrySafe: false`, and includes
+neither the invalid content nor a fabricated output path. The operation is not
+replayed. A server presentation-error receipt with `mutationStatus: "applied"`
+means the write
+completed but its response could not be produced; do not repeat it.
 
 ## Output schemas
 
@@ -878,18 +982,33 @@ responses and the non-MCP CLI `actions describe` output.
 
 HTTP evaluates the parameter on every request and keeps no session state, so
 configure it in the client's endpoint URL, which repeats it on every request.
-The only accepted query is one `outputSchemas` parameter with the exact value
-`on` or `off`; a repeated, empty, encoded or unknown parameter and any other form
-is rejected with HTTP 400 before dispatch (see
-[request restrictions](#request-header-and-body-restrictions)). It applies alike
+The `outputSchemas` value must be exactly `on` or `off`. It can be combined
+with `preferredOutputContentFormat=markdown|text|adf|storage` and
+`includeTextCopy=true|false`, each key at most once in any order. Malformed
+queries are rejected before dispatch; see
+[request restrictions](#request-header-and-body-restrictions). It applies alike
 to bearer, trusted username and fingerprint connections and never changes
 identity, execution context, grants or credentials. Keep `mcp.public_url` at
-the query-free `/mcp` base. Proxies must forward the query unchanged; a relay
-that caches tool definitions or pools upstream sessions must keep the
-selections apart. Tool-list cursors bind the selection, so a cursor is refused
-under the other selection; restart listing without a cursor. HTTP pages are
-byte-bounded, so their boundaries can differ between selections. The stdio
-option requires an explicit value and is fixed for the process lifetime,
+the query-free `/mcp` base. For example, this client URL advertises schemas,
+prefers text bodies and omits the duplicate text copy:
+
+```text
+https://broker.example.com/mcp?outputSchemas=on&preferredOutputContentFormat=text&includeTextCopy=false
+```
+
+The corresponding stdio startup options compose in the same way:
+
+```bash
+agent-access mcp serve --output-schemas on --preferred-output-content-format text --include-text-copy=false
+```
+
+Proxies must forward the query unchanged; a relay that caches tool definitions
+or pools upstream sessions must keep the schema and content-preference
+selections apart. Tool-list cursors bind both,
+so changing either selection requires restarting listing without a cursor.
+Text-copy selection does not affect cursors. HTTP pages are byte-bounded, so
+their boundaries can differ between selections. The stdio option requires an
+explicit value and is fixed for the process lifetime,
 including across configuration and token rotation.
 
 Scoped readiness and import publication always measure the schema-bearing
@@ -910,10 +1029,10 @@ delivery shape:
 | Tool | `structuredContent` alternatives |
 | --- | --- |
 | HTTP MCP action | Broker envelope; HTTP MCP failure |
-| Stdio JSON or upload action | Broker envelope; local file receipt |
-| Stdio download action | Download receipt with the metadata `result`; Broker envelope |
+| Stdio JSON or upload action | Broker envelope; local file receipt; local tool error |
+| Stdio download action | Download receipt with the metadata `result`; Broker envelope; local tool error |
 | HTTP MCP helper | Discovery result; HTTP MCP failure |
-| Stdio helper | Discovery result; local file receipt; Broker error envelope |
+| Stdio helper | Discovery result; local file receipt; Broker error envelope; local tool error |
 
 - The Broker envelope requires `agentRequestId`, `brokerRequestId`, `decision`
   (`allow`, `deny` or `error`), `service`, `action` and `resourceScopes`, with
@@ -931,32 +1050,39 @@ delivery shape:
   receipt never repeats `result`; a download receipt keeps the metadata
   envelope's `result`.
 - Local stdio adapter errors, such as an invalid argument or an unreadable
-  request file, are text only with `isError: true` and have no
-  `structuredContent`.
+  request file, have `isError: true` and `structuredContent.error.message`.
+  Disabling text copies preserves this structured error.
 
-Read the action payload at `structuredContent.result`, after checking
-`isError`, `decision` and `error`: on `allow` it follows the action's success
-schema; a denial or error may omit it or carry failure details. The `result`
-schema is the union of:
+Use `mcpTool.inputSchema` to locate tool arguments, including the provider's
+fields inside `inputs`. Use `mcpTool.outputSchema` to locate delivered fields
+inside `structuredContent`. For an inline action response, the action payload
+is at `structuredContent.result`; check `isError`, `decision` and `error` before
+using it. Helpers and receipts have the separate shapes above, and a denial or
+error may omit `result` or carry failure details. The `result` schema is the
+union of:
 
-- the success payload, with an optional `renderedBody` (`{format, value}`) at
-  each declared body owner, present only when `readContentFormat` is `markdown`
-  or `text`;
-- the whole-result Markdown `{format: "markdown", value}` when the action
-  supports `responseFormat: "markdown"`;
+- the success payload, with selected `{format,value}` objects at the declared
+  `bodyFields`: `adf` has an object value, while `markdown`, `text` and `storage`
+  have string values;
 - the action's own failure payload, when it declares one, merged with the
-  shared failure fields;
+  shared failure fields: native fields on denials, errors and mutation receipts,
+  or selected bodies on an allowed result that undergoes presentation;
 - the shared failure fields alone: mutation receipts (`mutationStatus`,
   `retrySafe`, `verificationStage`, `safeLocators`), `executionState`,
   `deadlineKind`, upstream rate-limit details (`limitScope`, `service`,
   `retryAfterSeconds`, `retryAt`) and `hints.upstreamResourceOwnership`.
 
-Payload schemas cover every supported configuration and input of the action,
-so a declared field can be absent from a particular result; `required` lists
-only fields that are always present. Objects are open: validators accept fields
-the schema does not declare, and clients should tolerate them. Clients that
-validate `structuredContent` against `outputSchema`, including on `isError`
-results, accept every shape the Broker delivers. Refresh tool discovery after
+Provider payload schemas cover every supported configuration and input of the
+action. Composed schemas cover all four concrete content formats so a valid
+preference-selected response can use a newly enabled native format after
+discovery. Exact format arguments remain limited by the current action's
+`outputContentFormats`. Schemas preserve optional and nullable body owners/fields;
+`ownerEquals` predicates leave nonmatching fields in their native shape. A
+declared field can be absent from a particular result; `required` lists only
+fields that are always present. Objects are open: validators accept fields the
+schema does not declare, and clients should tolerate them. Clients that validate
+`structuredContent` against `outputSchema`, including on `isError` results,
+accept every shape the Broker delivers. Refresh tool discovery after
 upgrading the Broker.
 
 Imported actions advertise a wrapper fixed per adapter and output kind:
@@ -1034,8 +1160,9 @@ configuration for a later attempt, and neither transport retries automatically.
 A tool call rejected with Broker status 429 is a tool error. For `rate_limited` (a
 Broker limit on how often you may invoke the service) and
 `upstream_rate_limited` (the upstream service throttled the request), both the
-local stdio adapter and the Broker's HTTP MCP endpoint make the tool error's
-text the Broker's message, which names the service and the wait, for example
+local stdio adapter and the Broker's HTTP MCP endpoint, when text copies are
+enabled, make the tool error's text the Broker's message, which names the service
+and the wait, for example
 `jira is rate limiting requests. Retry after 30s (at 2026-09-25T14:03:30Z).`
 HTTP MCP does so whether the Broker refused the call at admission or the
 upstream service throttled it after dispatch. The complete envelope stays in
@@ -1043,7 +1170,9 @@ structured content. Broker admission limits use the reserved
 `broker/request.admit` tuple without `result`; upstream failures may include
 `result.retryAfterSeconds`/`result.retryAt` when the wait is known. With
 `outputPath`, the destination is left untouched. `concurrency_limited` keeps the
-ordinary JSON text.
+ordinary JSON text when text copies are enabled. With `includeTextCopy=false`
+(or stdio `--include-text-copy=false`), all these errors have empty `content`;
+their complete structured envelope is unchanged.
 
 Agents should wait the reported duration (or retry later when it is absent)
 before retrying, and must not retry in a loop. A validated, correlated

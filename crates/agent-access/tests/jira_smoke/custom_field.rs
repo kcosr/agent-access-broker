@@ -139,7 +139,7 @@ fn inputs(value: Value) -> Value {
 }
 
 fn send(inputs: &Value) -> Value {
-    json!({"version":"agent-access.send.v1","kind":"invoke","service":"jira","action":ACTION,"inputs":inputs})
+    json!({"version":"agent-access.send.v2","kind":"invoke","service":"jira","action":ACTION,"inputs":inputs})
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

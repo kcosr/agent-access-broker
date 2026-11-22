@@ -31,8 +31,8 @@ pub(super) async fn list_tools(
     let catalog = fetch_catalog(settings).await?;
     Ok(ToolListing {
         tools: project_catalog(&catalog, view, output_schemas)?,
-        // Cursors bind the complete projection, including its selection.
-        binding: json!({"view":view,"outputSchemas":output_schemas,"identity":catalog.identity,"executionContext":catalog.execution_context}),
+        // Cursors bind schema selection and content preference; text copies do not affect discovery.
+        binding: json!({"view":view,"outputSchemas":output_schemas,"identity":catalog.identity,"executionContext":catalog.execution_context,"preferredOutputContentFormat":settings.preferred_output_content_format}),
     })
 }
 
@@ -75,8 +75,8 @@ struct Arguments {
     output_path: Option<PathBuf>,
     #[serde(default)]
     secret_sources: Vec<crate::SecretSourceBinding>,
-    read_content_format: Option<agent_access_provider::presentation::ReadContentFormat>,
-    response_format: Option<agent_access_provider::presentation::ResponseFormat>,
+    #[serde(default, deserialize_with = "crate::optional_content_format")]
+    output_content_format: Option<agent_access_provider::presentation::OutputContentFormat>,
 }
 
 #[derive(Debug)]
@@ -94,12 +94,21 @@ pub(super) async fn call_tool(
     output_schemas: OutputSchemas,
     name: &str,
     arguments: Map<String, Value>,
+    include_text_copy: bool,
 ) -> Result<CallToolResult> {
     // Detail has its own bounded control admission. Its authoritative readiness
     // and authenticated limits projection let this helper retain scoped-view
     // checks without an execution-capacity-dependent catalog round trip.
     if matches!(view, McpView::Service(_)) && name == "services_describe" {
-        return super::discovery::call(settings, view, output_schemas, name, arguments).await;
+        return super::discovery::call(
+            settings,
+            view,
+            output_schemas,
+            name,
+            arguments,
+            include_text_copy,
+        )
+        .await;
     }
     // Aggregate discovery keeps its ordinary broker authorization, including
     // permitted anonymous reads. Fixed helper names are reserved, so resolve
@@ -120,6 +129,7 @@ pub(super) async fn call_tool(
                 output_schemas,
                 helper.as_str(),
                 arguments,
+                include_text_copy,
             )
             .await;
         }
@@ -142,6 +152,7 @@ pub(super) async fn call_tool(
                     output_schemas,
                     helper.as_str(),
                     arguments,
+                    include_text_copy,
                 )
                 .await;
             }
@@ -295,25 +306,22 @@ pub(super) async fn call_tool(
     };
     let is_error = status >= 400 || value.get("decision").and_then(Value::as_str) != Some("allow");
     let file_receipt = args.output_path.is_some() && !is_error;
-    if file_receipt && action.supports_json_file_output() {
-        crate::validate_embedded_invoke_result(
+    if !is_error && action.supports_json_file_output() {
+        crate::validate_invoke_result(
+            status,
             &value,
-            options.read_content_format,
-            &action.rendered_body_owners,
-            &action.optional_rendered_body_owner_prefixes,
-        )
-        .map_err(|_| anyhow::anyhow!("broker response has an invalid rendered body"))?;
-        if options.response_format == agent_access_provider::presentation::ResponseFormat::Markdown
-        {
-            crate::markdown_result_value(&value)
-                .map_err(|_| anyhow::anyhow!("broker response has an invalid Markdown result"))?;
+            options.output_content_format,
+            &action.body_fields,
+            &action.sensitive_output_pointers,
+        )?;
+        if file_receipt {
+            value = reserved
+                .take()
+                .expect("file output was reserved")
+                .save_json(&value)?;
         }
-        value = reserved
-            .take()
-            .expect("file output was reserved")
-            .save_json(&value)?;
     }
-    let mut result = envelope_result(status, value, is_error)?;
+    let mut result = envelope_result(status, value, is_error, include_text_copy)?;
     if !file_receipt && !action.sensitive_output_pointers.is_empty() {
         result["_meta"] =
             json!({"agent-access/sensitive-output-pointers":action.sensitive_output_pointers});
@@ -322,15 +330,23 @@ pub(super) async fn call_tool(
 }
 
 /// A tool result with the broker envelope (or file receipt) as structured
-/// content. The text repeats it as JSON, except for broker and upstream rate
-/// limits: their text is the broker's message, which names the wait, because
-/// agents often see only text.
-pub(super) fn envelope_result(status: u16, value: Value, is_error: bool) -> Result<Value> {
-    let text = match crate::rate_limit_message(status, &value) {
-        Some(message) if is_error => message.to_owned(),
-        _ => serde_json::to_string(&value)?,
+/// content. When enabled, the text repeats it as JSON, except for broker and
+/// upstream rate limits: their text is the broker's message, which names the wait.
+pub(super) fn envelope_result(
+    status: u16,
+    value: Value,
+    is_error: bool,
+    include_text_copy: bool,
+) -> Result<Value> {
+    let content = if include_text_copy {
+        let text = match crate::rate_limit_message(status, &value) {
+            Some(message) if is_error => message.to_owned(),
+            _ => serde_json::to_string(&value)?,
+        };
+        json!([{"type":"text","text":text}])
+    } else {
+        json!([])
     };
-    let content = json!([{"type":"text","text":text}]);
     Ok(json!({"content":content,"structuredContent":value,"isError":is_error}))
 }
 
@@ -345,8 +361,8 @@ pub(super) fn save_json_response(path: &Path, value: &Value) -> Result<Value> {
 fn invoke_request(inputs: Value, options: ResponseOptions) -> InvokeRequest {
     InvokeRequest {
         inputs,
-        read_content_format: options.read_content_format,
-        response_format: options.response_format,
+        output_content_format: options.output_content_format,
+        preferred_output_content_format: options.preferred_output_content_format,
         body_parts: vec![],
     }
 }
@@ -356,67 +372,19 @@ fn response_options(
     args: &Arguments,
     action: &ApiActionSpec,
 ) -> Result<ResponseOptions> {
-    let explicit_read = args.read_content_format.map(|format| match format {
-        agent_access_provider::presentation::ReadContentFormat::Native => {
-            crate::ReadContentFormatArg::Native
-        }
-        agent_access_provider::presentation::ReadContentFormat::Markdown => {
-            crate::ReadContentFormatArg::Markdown
-        }
-        agent_access_provider::presentation::ReadContentFormat::Text => {
-            crate::ReadContentFormatArg::Text
-        }
-    });
-    let explicit_output = args
-        .response_format
-        .map(|format| match format {
-            agent_access_provider::presentation::ResponseFormat::Json => {
-                Ok(crate::OutputFormatArg::Json)
-            }
-            agent_access_provider::presentation::ResponseFormat::Markdown => {
-                Ok(crate::OutputFormatArg::Markdown)
-            }
-            _ => Err(anyhow::anyhow!(
-                "this client does not support the responseFormat"
-            )),
-        })
-        .transpose()?;
-    let options = crate::resolve_generic_response_options_from_action(
+    crate::resolve_response_options(
         settings,
+        args.output_content_format,
         Some(action),
-        explicit_read,
-        explicit_output,
         &action.action,
     )
     .map_err(|error| {
-        // Share CLI precedence and conflict rules, but describe the MCP
-        // arguments the caller can actually supply instead of CLI flags.
-        anyhow::Error::msg(
+        anyhow::anyhow!(
             error
                 .to_string()
-                .replace("--read-content-format", "readContentFormat")
-                .replace("--output-format", "responseFormat")
-                .replace("read-content format", "readContentFormat")
-                .replace("read-content default", "readContentFormat default"),
+                .replace("--output-content-format", "outputContentFormat")
         )
-    })?;
-    if options.read_content_format != agent_access_provider::presentation::ReadContentFormat::Native
-        && !action
-            .read_content_formats
-            .iter()
-            .any(|format| format == options.read_content_format.as_str())
-    {
-        bail!("readContentFormat is unsupported for this action");
-    }
-    if options.response_format != agent_access_provider::presentation::ResponseFormat::Json
-        && !action
-            .response_formats
-            .iter()
-            .any(|format| format == options.response_format.as_str())
-    {
-        bail!("responseFormat is unsupported for this action");
-    }
-    Ok(options)
+    })
 }
 
 fn resolve_inputs(args: &Arguments, action: &ApiActionSpec) -> Result<Value> {
@@ -631,7 +599,13 @@ async fn fetch_catalog(settings: &crate::ResolvedCliSettings) -> Result<ApiCatal
     {
         bail!("unsupported broker catalog version");
     }
-    serde_json::from_value(value).map_err(|_| anyhow::anyhow!("invalid broker catalog"))
+    let mut catalog = crate::parse_runtime_catalog(value)
+        .map_err(|_| anyhow::anyhow!("invalid broker catalog"))?;
+    agent_access_core::mcp::apply_output_content_preference(
+        &mut catalog,
+        settings.preferred_output_content_format,
+    );
+    Ok(catalog)
 }
 
 async fn decode_invocation_json(response: reqwest::Response) -> Result<(u16, Value)> {
@@ -733,8 +707,7 @@ mod tests {
             identity_header: "X-Agent-Access-Identity-Token".into(),
             identity_scheme: "raw".into(),
             allow_insecure_broker_http: false,
-            read_content_format: Default::default(),
-            output_format: Default::default(),
+            preferred_output_content_format: None,
         }
     }
     fn args(value: Value) -> Arguments {
@@ -800,6 +773,7 @@ mod tests {
                 OutputSchemas::On,
                 &tool_name("jira-team", "issue.view"),
                 arguments.as_object().unwrap().clone(),
+                true,
             )
             .await
             .unwrap_err();
@@ -886,6 +860,7 @@ mod tests {
                     OutputSchemas::On,
                     "services_describe",
                     json!({"service":"jira-team"}).as_object().unwrap().clone(),
+                    true,
                 )
                 .await
                 .unwrap(),
@@ -959,6 +934,7 @@ mod tests {
                     .as_object()
                     .unwrap()
                     .clone(),
+                true,
             )
             .await
             .unwrap_err();
@@ -979,6 +955,7 @@ mod tests {
                 .as_object()
                 .unwrap()
                 .clone(),
+            true,
         )
         .await
         .unwrap_err();
@@ -994,6 +971,7 @@ mod tests {
             OutputSchemas::On,
             "services_describe",
             json!({"service":"jira-team"}).as_object().unwrap().clone(),
+            true,
         )
         .await
         .unwrap();
@@ -1002,49 +980,39 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn presentation_options_preserve_cli_default_and_conflict_rules() {
+    async fn presentation_options_keep_soft_preferences_and_exact_selection_distinct() {
+        use agent_access_provider::presentation::OutputContentFormat::*;
         let server = MockServer::start().await;
         let mut settings = settings(&server);
-        settings.read_content_format = agent_access_provider::presentation::ReadContentFormat::Text;
+        settings.preferred_output_content_format = Some(Storage);
         let mut action = action();
-        action.read_content_formats = vec!["native".into(), "markdown".into(), "text".into()];
-        action.response_formats = vec!["json".into(), "markdown".into()];
+        action.output_content_formats = vec![Markdown, Text, Adf];
         let selected = response_options(
             &settings,
-            &args(json!({"inputs":{}, "responseFormat":"markdown"})),
+            &args(json!({"inputs":{},"outputContentFormat":"adf"})),
             &action,
         )
         .unwrap();
-        assert_eq!(
-            selected.read_content_format,
-            agent_access_provider::presentation::ReadContentFormat::Native
-        );
-        assert_eq!(
-            selected.response_format,
-            agent_access_provider::presentation::ResponseFormat::Markdown
-        );
-        let explicit_error = response_options(
+        assert_eq!(selected.output_content_format, Some(Adf));
+        assert_eq!(selected.preferred_output_content_format, Some(Storage));
+        let omitted = response_options(&settings, &args(json!({"inputs":{}})), &action).unwrap();
+        assert_eq!(omitted.output_content_format, None);
+        assert_eq!(omitted.preferred_output_content_format, Some(Storage));
+        let error = response_options(
             &settings,
-            &args(json!({"inputs":{}, "responseFormat":"markdown", "readContentFormat":"text"})),
+            &args(json!({"inputs":{},"outputContentFormat":"storage"})),
             &action,
         )
         .unwrap_err()
         .to_string();
-        assert!(explicit_error.contains("responseFormat"));
-        assert!(explicit_error.contains("readContentFormat"));
-        assert!(!explicit_error.contains("--"), "{explicit_error}");
-        settings.output_format = agent_access_provider::presentation::ResponseFormat::Markdown;
-        let ambient_error = response_options(&settings, &args(json!({"inputs":{}})), &action)
-            .unwrap_err()
-            .to_string();
-        assert!(ambient_error.contains("responseFormat markdown"));
-        assert!(ambient_error.contains("readContentFormat default"));
-        assert!(!ambient_error.contains("--"), "{ambient_error}");
-        action.read_content_formats.clear();
-        action.response_formats.clear();
+        assert!(error.contains("outputContentFormat"));
+        assert!(!error.contains("--"));
+        action.output_content_formats.clear();
         assert_eq!(
-            response_options(&settings, &args(json!({"inputs":{}})), &action).unwrap(),
-            ResponseOptions::default()
+            response_options(&settings, &args(json!({"inputs":{}})), &action)
+                .unwrap()
+                .preferred_output_content_format,
+            Some(Storage)
         );
     }
 
@@ -1356,6 +1324,7 @@ mod tests {
                 .as_object()
                 .unwrap()
                 .clone(),
+            true,
         )
         .await
         .unwrap_err();
@@ -1392,6 +1361,7 @@ mod tests {
             OutputSchemas::On,
             "services_list",
             Map::new(),
+            true,
         )
         .await
         .unwrap();
@@ -1420,6 +1390,7 @@ mod tests {
                 OutputSchemas::On,
                 &name,
                 Map::new(),
+                true,
             )
             .await
             .unwrap_err();
@@ -1468,6 +1439,7 @@ mod tests {
                     .as_object()
                     .unwrap()
                     .clone(),
+                true,
             )
             .await
             .unwrap();
@@ -1493,6 +1465,7 @@ mod tests {
                     .as_object()
                     .unwrap()
                     .clone(),
+                true,
             )
             .await
             .unwrap_err();
@@ -1500,6 +1473,106 @@ mod tests {
         }
         assert_eq!(std::fs::read_to_string(&output).unwrap(), "preserve");
         assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn resource_access_preserves_broker_complexity_errors_as_structured_results() {
+        let server = MockServer::start().await;
+        let envelope = json!({
+            "agentRequestId": "agent", "brokerRequestId": "broker", "decision": "error",
+            "reasonCode": "resource_access_too_complex", "result": null,
+            "error": {"message": "Resource access response exceeds the result size limit."}
+        });
+        Mock::given(method("GET"))
+            .and(path("/v1/services/confluence/resource-access"))
+            .respond_with(ResponseTemplate::new(422).set_body_json(&envelope))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let result = call_tool(
+            &settings(&server),
+            &McpView::Aggregate,
+            OutputSchemas::On,
+            "resource_access_describe",
+            json!({"service":"confluence"}).as_object().unwrap().clone(),
+            true,
+        )
+        .await
+        .unwrap();
+        let result = serde_json::to_value(result).unwrap();
+        assert_eq!(result["isError"], true);
+        assert_eq!(result["structuredContent"], envelope);
+        assert_eq!(
+            serde_json::from_str::<Value>(result["content"][0]["text"].as_str().unwrap()).unwrap(),
+            envelope
+        );
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn resource_access_local_mcp_wrapper_overflow_has_no_partial_result() {
+        let server = MockServer::start().await;
+        let result = json!({
+            "service": "confluence", "executionContext":"default",
+            "availability":{"state":"available","requirements":[],"message": "x".repeat(8 * 1024 * 1024)},
+            "coverageSemantics":"single_target", "access":[],
+            "registeredResources":{"source":"broker_configuration","items":[],"nextCursor":null}, "liveListings":[]
+        });
+        Mock::given(method("GET"))
+            .and(path("/v1/services/confluence/resource-access"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&result))
+            .expect(2)
+            .mount(&server)
+            .await;
+        let result = call_tool(
+            &settings(&server),
+            &McpView::Aggregate,
+            OutputSchemas::On,
+            "resource_access_describe",
+            json!({"service":"confluence"}).as_object().unwrap().clone(),
+            true,
+        )
+        .await
+        .unwrap();
+        let result = serde_json::to_value(result).unwrap();
+        assert_eq!(result["isError"], true);
+        assert_eq!(result["structuredContent"]["decision"], "error");
+        assert_eq!(
+            result["structuredContent"]["reasonCode"],
+            "resource_access_too_complex"
+        );
+        assert!(result["structuredContent"]["result"].is_null());
+        assert!(
+            result["structuredContent"]
+                .get("registeredResources")
+                .is_none()
+        );
+        assert!(serde_json::to_vec(&result).unwrap().len() < 1024);
+        let without_copy = call_tool(
+            &settings(&server),
+            &McpView::Aggregate,
+            OutputSchemas::On,
+            "resource_access_describe",
+            json!({"service":"confluence"}).as_object().unwrap().clone(),
+            false,
+        )
+        .await
+        .unwrap();
+        let without_copy = serde_json::to_value(without_copy).unwrap();
+        assert_eq!(without_copy["isError"], false);
+        assert_eq!(without_copy["content"], json!([]));
+        assert_eq!(
+            without_copy["structuredContent"]["availability"]["message"]
+                .as_str()
+                .unwrap()
+                .len(),
+            8 * 1024 * 1024
+        );
+        assert!(
+            serde_json::to_vec(&without_copy).unwrap().len()
+                <= agent_access_core::RESOURCE_ACCESS_MAX_RESPONSE_BYTES
+        );
         server.verify().await;
     }
 
@@ -1548,6 +1621,7 @@ mod tests {
             OutputSchemas::On,
             "services_list",
             json!({"outputPath":output}).as_object().unwrap().clone(),
+            true,
         )
         .await
         .unwrap();
@@ -1565,6 +1639,7 @@ mod tests {
                 .as_object()
                 .unwrap()
                 .clone(),
+            true,
         )
         .await
         .unwrap_err();
@@ -1578,6 +1653,7 @@ mod tests {
                 OutputSchemas::On,
                 "services_list",
                 json!({"outputPath":output}).as_object().unwrap().clone(),
+                true,
             )
             .await
             .unwrap_err();
@@ -1629,6 +1705,7 @@ mod tests {
                 .as_object()
                 .unwrap()
                 .clone(),
+            true,
         )
         .await
         .unwrap();
@@ -1686,7 +1763,7 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/v1/invoke/jira-team/issue.view"))
             .and(header("X-Agent-Access-Identity-Token", "broker-secret"))
-            .and(body_json(json!({"inputs":{"issue":"ABC-1"},"readContentFormat":"native","responseFormat":"json"})))
+            .and(body_json(json!({"inputs":{"issue":"ABC-1"}})))
             .respond_with(ResponseTemplate::new(403).set_body_json(body.clone()))
             .expect(1)
             .mount(&server)
@@ -1700,6 +1777,7 @@ mod tests {
                 .as_object()
                 .unwrap()
                 .clone(),
+            true,
         )
         .await
         .unwrap();
@@ -1712,6 +1790,7 @@ mod tests {
             OutputSchemas::On,
             "unknown",
             Map::new(),
+            true,
         )
         .await
         .unwrap_err();
@@ -1744,6 +1823,7 @@ mod tests {
                 .as_object()
                 .unwrap()
                 .clone(),
+            true,
         )
         .await
         .unwrap();
@@ -1799,6 +1879,7 @@ mod tests {
                 .as_object()
                 .unwrap()
                 .clone(),
+            true,
         )
         .await
         .unwrap_err();
@@ -1838,6 +1919,7 @@ mod tests {
                     .as_object()
                     .unwrap()
                     .clone(),
+                true,
             )
             .await;
             let receipt = if save_fails {
@@ -1896,6 +1978,7 @@ mod tests {
                         .as_object()
                         .unwrap()
                         .clone(),
+                    true,
                 )
                 .await
                 .unwrap_err();
@@ -1933,6 +2016,7 @@ mod tests {
                     .as_object()
                     .unwrap()
                     .clone(),
+                true,
             )
             .await;
             if status == 403 {
@@ -1948,16 +2032,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn markdown_file_output_keeps_json_envelope_and_rejects_invalid_wrapper() {
+    async fn selected_content_file_output_keeps_json_envelope_and_rejects_invalid_body() {
         for formatted in [
             json!({"format":"markdown","value":"# Issue\nDetails\n"}),
             json!({"format":"markdown","value":42}),
         ] {
             let server = MockServer::start().await;
             let mut action = action();
-            action.response_formats = vec!["json".into(), "markdown".into()];
+            action.output_content_formats =
+                vec![agent_access_provider::presentation::OutputContentFormat::Markdown];
+            action.native_output_content_format =
+                Some(agent_access_provider::presentation::OutputContentFormat::Markdown);
+            action.default_output_content_format = action.native_output_content_format;
+            action.body_fields = vec![agent_access_provider::presentation::BodyField::new(
+                "/result",
+                "description",
+            )];
             serve_catalog(&server, action).await;
-            let body = allow(formatted.clone());
+            let body = allow(json!({"description":formatted.clone()}));
             Mock::given(method("POST"))
                 .respond_with(ResponseTemplate::new(200).set_body_json(body.clone()))
                 .mount(&server)
@@ -1966,7 +2058,7 @@ mod tests {
             let destination = temp.path().join("formatted.json");
             std::fs::write(&destination, "original").unwrap();
             let result = call_tool(&settings(&server), &McpView::Aggregate, OutputSchemas::On, &tool_name("jira-team", "issue.view"),
-                json!({"inputs":{"issue":"ABC-1"},"responseFormat":"markdown","outputPath":destination}).as_object().unwrap().clone()).await;
+                json!({"inputs":{"issue":"ABC-1"},"outputContentFormat":"markdown","outputPath":destination}).as_object().unwrap().clone(), true).await;
             if formatted["value"].is_string() {
                 let result = serde_json::to_value(result.unwrap()).unwrap();
                 assert_eq!(
@@ -2005,7 +2097,8 @@ mod tests {
                     json!({"inputs":{"issue":"ABC-1"},"outputPath":output})
                         .as_object()
                         .unwrap()
-                        .clone()
+                        .clone(),
+                    true
                 )
                 .await
                 .is_err()
@@ -2050,6 +2143,7 @@ mod tests {
                 OutputSchemas::On,
                 &tool_name("jira-team", "issue.view"),
                 arguments.as_object().unwrap().clone(),
+                true,
             )
             .await
             .unwrap_err()
@@ -2065,6 +2159,7 @@ mod tests {
             OutputSchemas::On,
             &tool_name("jira-team", "issue.view"),
             json!({"outputPath":output}).as_object().unwrap().clone(),
+            true,
         )
         .await
         .unwrap_err();
@@ -2125,7 +2220,7 @@ mod tests {
                         .insert_header("Retry-After", "12")
                         .set_body_json(&envelope),
                 )
-                .expect(1)
+                .expect(2)
                 .mount(&server)
                 .await;
             let temp = tempfile::tempdir().unwrap();
@@ -2135,29 +2230,37 @@ mod tests {
             if output {
                 arguments["outputPath"] = json!(destination);
             }
-            let result = call_tool(
-                &settings(&server),
-                &McpView::Aggregate,
-                OutputSchemas::On,
-                &tool_name("jira-team", "issue.view"),
-                arguments.as_object().unwrap().clone(),
-            )
-            .await
-            .unwrap();
-            let result = serde_json::to_value(result).unwrap();
-            assert_eq!(result["isError"], true, "{reason_code}");
-            assert_eq!(result["structuredContent"], envelope, "{reason_code}");
-            let text = if reason_code == "concurrency_limited" {
-                serde_json::to_string(&envelope).unwrap()
-            } else {
-                message.to_owned()
-            };
-            assert_eq!(
-                result["content"],
-                json!([{"type":"text","text":text}]),
-                "{reason_code}"
-            );
-            assert_eq!(std::fs::read_to_string(&destination).unwrap(), "original");
+            for include_text_copy in [true, false] {
+                let result = call_tool(
+                    &settings(&server),
+                    &McpView::Aggregate,
+                    OutputSchemas::On,
+                    &tool_name("jira-team", "issue.view"),
+                    arguments.as_object().unwrap().clone(),
+                    include_text_copy,
+                )
+                .await
+                .unwrap();
+                let result = serde_json::to_value(result).unwrap();
+                assert_eq!(result["isError"], true, "{reason_code}");
+                assert_eq!(result["structuredContent"], envelope, "{reason_code}");
+                let text = if reason_code == "concurrency_limited" {
+                    serde_json::to_string(&envelope).unwrap()
+                } else {
+                    message.to_owned()
+                };
+                assert_eq!(
+                    result["content"],
+                    if include_text_copy {
+                        json!([{"type":"text","text":text}])
+                    } else {
+                        json!([])
+                    },
+                    "{reason_code}"
+                );
+                assert_eq!(std::fs::read_to_string(&destination).unwrap(), "original");
+            }
+            server.verify().await;
         }
     }
 
@@ -2188,6 +2291,7 @@ mod tests {
                     .as_object()
                     .unwrap()
                     .clone(),
+                true,
             )
             .await
             .unwrap();
@@ -2243,6 +2347,7 @@ mod tests {
             OutputSchemas::On,
             &tool_name("jira-team", "issue.view"),
             json!({"inputs":{}}).as_object().unwrap().clone(),
+            true,
         )
         .await
         .unwrap_err();
@@ -2293,6 +2398,7 @@ mod tests {
                 .as_object()
                 .unwrap()
                 .clone(),
+            true,
         )
         .await;
         assert!(result.is_err());
@@ -2335,6 +2441,7 @@ mod tests {
                 .as_object()
                 .unwrap()
                 .clone(),
+            true,
         )
         .await
         .unwrap();
@@ -2393,13 +2500,14 @@ mod tests {
                 .as_object()
                 .unwrap()
                 .clone(),
+            true,
         )
         .await
         .unwrap_err();
         let failure = error
             .downcast_ref::<crate::output::LocalOutputFailure>()
             .unwrap();
-        let result = envelope_result(200, failure.details.clone(), true).unwrap();
+        let result = envelope_result(200, failure.details.clone(), true, true).unwrap();
         assert_eq!(result["isError"], true);
         assert_eq!(
             result["structuredContent"]["operationStatus"],
@@ -2489,7 +2597,7 @@ mod tests {
                 .as_object()
                 .unwrap()
                 .clone(),
-        )
+         true)
         .await
         .unwrap();
         let result = serde_json::to_value(result).unwrap();
@@ -2553,5 +2661,49 @@ mod tests {
                 .get("contentType")
                 .is_none()
         );
+    }
+    #[tokio::test]
+    async fn inline_content_accepts_new_native_representation_and_omission_after_discovery() {
+        use agent_access_provider::presentation::{BodyField, OutputContentFormat};
+        for result in [
+            json!({"description":{"format":"adf","value":{"type":"doc","version":1,"content":[]}}}),
+            json!({"title":"body disabled"}),
+        ] {
+            let server = MockServer::start().await;
+            let mut selected = action();
+            selected.output_content_formats =
+                vec![OutputContentFormat::Markdown, OutputContentFormat::Text];
+            selected.native_output_content_format = Some(OutputContentFormat::Markdown);
+            selected.default_output_content_format = Some(OutputContentFormat::Markdown);
+            selected.body_fields = vec![BodyField::new("/result", "description").optional()];
+            serve_catalog(&server, selected).await;
+            Mock::given(method("POST"))
+                .and(body_json(
+                    json!({"inputs":{"issue":"ABC-1"},"preferredOutputContentFormat":"adf"}),
+                ))
+                .respond_with(ResponseTemplate::new(200).set_body_json(allow(result.clone())))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let mut settings = settings(&server);
+            settings.preferred_output_content_format = Some(OutputContentFormat::Adf);
+            let response = call_tool(
+                &settings,
+                &McpView::Aggregate,
+                OutputSchemas::On,
+                &tool_name("jira-team", "issue.view"),
+                json!({"inputs":{"issue":"ABC-1"}})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+                true,
+            )
+            .await
+            .unwrap();
+            let response = serde_json::to_value(response).unwrap();
+            assert_eq!(response["isError"], false);
+            assert_eq!(response["structuredContent"]["result"], result);
+            server.verify().await;
+        }
     }
 }

@@ -29,6 +29,10 @@
 //!   validated request or earlier verified responses, never from the
 //!   unreadable one ([`ProviderError::unverified_after_mutation`] maps a
 //!   failed read-back);
+//! - a confirmed successful body-bearing write whose local presentation can fail:
+//!   [`MutationReceipt::applied`], retained through
+//!   [`crate::ProviderResult::with_presentation_recovery_receipt`] without adding
+//!   receipt fields to the ordinary successful result;
 //! - a batch in which an item may have applied before it failed:
 //!   [`MutationReceipt::unknown`], keeping the batch's partial result.
 //!
@@ -54,6 +58,8 @@ pub enum MutationStatus {
     /// `applied_unverified`: the upstream applied the write, but it could not
     /// be verified.
     AppliedUnverified,
+    /// `applied`: the provider confirmed the write completed.
+    Applied,
 }
 
 impl MutationStatus {
@@ -63,6 +69,7 @@ impl MutationStatus {
             Self::NotApplied => "not_applied",
             Self::Unknown => "unknown",
             Self::AppliedUnverified => "applied_unverified",
+            Self::Applied => "applied",
         }
     }
 
@@ -88,6 +95,12 @@ pub struct MutationReceipt {
 }
 
 impl MutationReceipt {
+    /// The provider verified completion. Retain this independently before
+    /// presentation so a local failure never suggests replaying the write.
+    pub const fn applied() -> Self {
+        Self::with_status(MutationStatus::Applied)
+    }
+
     /// The write's request never reached the upstream, as
     /// [`UpstreamError::NotSent`](crate::UpstreamError::NotSent) proves:
     /// `mutationStatus: "not_applied"` and `retrySafe: true`. Report it with
@@ -210,6 +223,20 @@ impl ProviderError {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn completed_receipt_is_applied_without_locators_or_retry() {
+        let receipt = super::MutationReceipt::applied();
+        let mut value = serde_json::json!({});
+        receipt.write_into(&mut value);
+        assert_eq!(
+            value,
+            serde_json::json!({"mutationStatus":"applied","retrySafe":false})
+        );
+        assert_eq!(receipt.status(), super::MutationStatus::Applied);
+        assert!(receipt.verification_stage().is_none());
+        assert!(receipt.safe_locators().is_none());
+    }
+
     use super::*;
     use crate::{Decision, ReasonCode};
 

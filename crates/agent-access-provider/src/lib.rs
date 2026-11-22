@@ -34,8 +34,8 @@
 //!   package with [`module_metadata!`].
 //! - [`presentation`] holds response presentation: the
 //!   [`ActionPresentation`](presentation::ActionPresentation) a descriptor
-//!   attaches, the renderer traits, the shared render budget and the Markdown
-//!   helpers renderers use.
+//!   attaches, the body codec, concrete selected content, shared source budgets,
+//!   request preference resolution and declared-field validation.
 //! - [`host`] holds the cooperation ports the Broker host implements and
 //!   calls: the network factory contract, construction of admitted request
 //!   values, the initial correlation, hook and deadline scopes, service-scoped
@@ -182,6 +182,7 @@ mod authorization;
 mod backend;
 mod capabilities;
 mod config;
+mod containment;
 mod continuation;
 mod contract;
 mod correlation;
@@ -197,6 +198,7 @@ mod gateway;
 pub mod host;
 mod identifiers;
 mod invocation;
+mod location;
 mod lookup;
 mod media_type;
 mod module;
@@ -246,6 +248,12 @@ pub use config::{
     validate_provider_upload_limit_relation, validate_tenant_host, validate_upload_limits,
     validate_upstream_allowlist, validate_upstream_base_url, validate_url_patterns,
 };
+pub use containment::{
+    ContainmentAncestor, ContainmentAuthorization, ContainmentBoundary,
+    ContainmentCollectionAuthorization, ContainmentEffect, ContainmentError, ContainmentEvidence,
+    ContainmentEvidenceLevel, ContainmentIdentity, ContainmentObligation, ContainmentProvenance,
+    ContainmentScopeCapabilities, ContentLocation, OfflineContainmentProof, TypedResourceSelector,
+};
 pub use continuation::{
     AdmissionStage, ContinuationBinding, ContinuationError, ContinuationFailures,
     ContinuationFamily, ContinuationLifetime, ContinuationOwner, ContinuationSigner,
@@ -288,6 +296,11 @@ pub use identifiers::{ResourceScopes, is_action_name, is_service_name};
 pub use invocation::{
     BrokerBodyPart, BrokerBodyPartFile, BrokerBodyPartSpec, InvocationIdentity, SearchAuthorization,
 };
+pub use location::{
+    LocationEntryCapability, LocationNormalizationError, LocationNormalizationRequest,
+    LocationNormalizer, NormalizedResourceLocation, ResourceContainer, ResourceSelectorProjection,
+    ResourceSelectorProjector,
+};
 pub use lookup::LookupAccess;
 pub use media_type::{MediaTypeDeclaration, MediaTypePolicyConfig};
 pub use module::{ModuleMetadata, SDK_PACKAGE};
@@ -304,9 +317,10 @@ pub use provider::{Provider, ServiceProvider};
 pub use reason::{Decision, HookPhase, InvalidReasonCodeId, ReasonCode, ReasonCodeId};
 pub use resource::{
     GIT_REPOSITORY_RESOURCE, NamespaceSelectorDescriptor, NamespaceSelectorMetadata,
-    ResourceActionInputs, ResourceAttributeDescriptor, ResourceAttributeMetadata,
-    ResourceAttributes, ResourcePattern, ResourceSelector, ResourceType, ResourceTypeDescriptor,
-    ResourceTypeMetadata, ResourceTypeRegistry, is_canonical_repository_path,
+    NonScalarResourceSelector, ResourceActionInputs, ResourceAttributeDescriptor,
+    ResourceAttributeMetadata, ResourceAttributes, ResourcePattern, ResourceSelector, ResourceType,
+    ResourceTypeDescriptor, ResourceTypeMetadata, ResourceTypeRegistry, ScalarResourceSelector,
+    SubtreeSelectorDescriptor, SubtreeSelectorMetadata, is_canonical_repository_path,
     is_repository_selector_path,
 };
 pub use result::{
@@ -317,7 +331,7 @@ pub use result_schema::{
     ActionResultSchemas, ResultSchemaBundle, shared_failure_result_schema,
     with_shared_failure_properties,
 };
-pub use scope::{ScopeRequest, ScopeResolution};
+pub use scope::{LocalScopeRequest, ScopeEvidence, ScopeRequest, ScopeResolution};
 pub use search::{
     ExactSearchProjection, SearchAuthorizationClause, SearchAuthorizationScope,
     SearchProjectionError,

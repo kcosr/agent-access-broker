@@ -2,6 +2,8 @@
 mod comment_bodies;
 #[path = "jira_smoke/custom_field.rs"]
 mod custom_field;
+#[path = "common/jira_catalog.rs"]
+mod jira_catalog;
 #[path = "common/list_mcp.rs"]
 mod list_mcp;
 #[path = "jira_smoke/project_list.rs"]
@@ -12,6 +14,8 @@ mod project_view;
 mod search_access;
 #[path = "jira_smoke/search_exclusions.rs"]
 mod search_exclusions;
+#[path = "jira_smoke/transitions.rs"]
+mod transitions;
 use agent_access_broker_host::test_support::{
     FixtureDir, IsolatedBroker, ProviderFixture, RunningBroker,
 };
@@ -32,6 +36,7 @@ use agent_access_provider::{REQUEST_ID_HEADER, RESULT_METADATA_HEADER, SearchLim
 use async_trait::async_trait;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use serde_json::json;
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::process::Command;
@@ -190,7 +195,7 @@ async fn jira_issue_type_discovery_surfaces_paging_authorization_and_create() {
     std::fs::write(
         &request_path,
         json!({
-            "version":"agent-access.send.v1", "kind":"invoke", "service":"jira",
+            "version":"agent-access.send.v2", "kind":"invoke", "service":"jira",
             "action":"issue_type.list", "inputs":{"project":"PROJ"}
         })
         .to_string(),
@@ -214,15 +219,7 @@ async fn jira_issue_type_discovery_surfaces_paging_authorization_and_create() {
     assert_eq!(status, reqwest::StatusCode::OK, "{http}");
     assert_eq!(http["result"], invoked["result"]);
     let markdown = authenticated_jira_cli(&base_url)
-        .args([
-            "jira",
-            "issue-type",
-            "list",
-            "--project",
-            "PROJ",
-            "--output-format",
-            "markdown",
-        ])
+        .args(["jira", "issue-type", "list", "--project", "PROJ"])
         .output()
         .unwrap();
     assert_success("issue type Markdown", &markdown);
@@ -435,16 +432,8 @@ async fn cli_invokes_jira_read_actions_against_stubbed_backend() {
     .await;
     let base_url = broker.public_url();
 
-    let issue = Command::new(env!("CARGO_BIN_EXE_agent-access"))
-        .args([
-            "--url",
-            &base_url,
-            "--no-token",
-            "jira",
-            "issue",
-            "view",
-            "PROJ-1",
-        ])
+    let issue = authenticated_jira_cli(&base_url)
+        .args(["jira", "issue", "view", "PROJ-1"])
         .output()
         .unwrap();
     assert!(
@@ -469,15 +458,12 @@ async fn cli_invokes_jira_read_actions_against_stubbed_backend() {
     assert_eq!(issue_json["result"]["priority"]["name"], "Medium");
     assert_eq!(issue_json["result"]["labels"][0], "agent");
     assert_eq!(
-        issue_json["result"]["description"]["content"][0]["content"][0]["text"],
+        issue_json["result"]["description"]["value"],
         "visible issue description"
     );
 
-    let issue_by_url = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let issue_by_url = authenticated_jira_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "jira",
             "issue",
             "view",
@@ -500,15 +486,12 @@ async fn cli_invokes_jira_read_actions_against_stubbed_backend() {
         "https://example.atlassian.net/browse/PROJ-1"
     );
     assert_eq!(
-        issue_by_url_json["result"]["description"]["content"][0]["content"][0]["text"],
+        issue_by_url_json["result"]["description"]["value"],
         "visible issue description"
     );
 
-    let search = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let search = authenticated_jira_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "jira",
             "issue",
             "search",
@@ -564,17 +547,8 @@ async fn cli_invokes_jira_read_actions_against_stubbed_backend() {
             "project IN (PROJ) ORDER BY updated DESC",
         ),
     ] {
-        let output = Command::new(env!("CARGO_BIN_EXE_agent-access"))
-            .args([
-                "--url",
-                &base_url,
-                "--no-token",
-                "jira",
-                "issue",
-                "search",
-                "--jql",
-                query,
-            ])
+        let output = authenticated_jira_cli(&base_url)
+            .args(["jira", "issue", "search", "--jql", query])
             .output()
             .unwrap();
         assert_success("scope-only Jira search without explicit projects", &output);
@@ -584,17 +558,8 @@ async fn cli_invokes_jira_read_actions_against_stubbed_backend() {
         );
     }
 
-    let list = Command::new(env!("CARGO_BIN_EXE_agent-access"))
-        .args([
-            "--url",
-            &base_url,
-            "--no-token",
-            "jira",
-            "issue",
-            "attachment",
-            "list",
-            "PROJ-1",
-        ])
+    let list = authenticated_jira_cli(&base_url)
+        .args(["jira", "issue", "attachment", "list", "PROJ-1"])
         .output()
         .unwrap();
     assert!(
@@ -768,16 +733,18 @@ async fn jira_issue_links_require_universal_token_authority_and_preserve_absence
     drop(store);
     // Keep the existing positive PROJ grant as well as the all-projects grant.
     // Universal access is effective coverage, not a single grant shape.
-    let base_document = jira_document(&directory, JiraAccess::AnonymousService)
-        .replace(
-            "[identity]\nmode = \"anonymous\"\nauthority = \"toml\"",
-            "[identity]\nmode = \"required\"\nauthority = \"managed\"",
-        )
-        .replace("group:anonymous", "user:agent-one")
-        .replace(
-            "credential_mode = \"service\"",
-            "credential_mode = \"service\"\nexecution_contexts = [\"default\"]",
+    let mut base_document: toml::Value =
+        toml::from_str(&jira_document(&directory, JiraAccess::AnonymousService)).unwrap();
+    base_document["identity"] =
+        toml::Value::try_from(json!({"mode":"required","authority":"managed"})).unwrap();
+    for grant in base_document["policy"]["grants"].as_array_mut().unwrap() {
+        grant["subjects"] = toml::Value::try_from(vec!["user:agent-one"]).unwrap();
+        grant.as_table_mut().unwrap().insert(
+            "execution_contexts".into(),
+            toml::Value::try_from(vec!["default"]).unwrap(),
         );
+    }
+    let base_document = toml::to_string(&base_document).unwrap();
     let document = format!(
         r#"{base}
 [[identity.sources]]
@@ -847,8 +814,8 @@ execution_contexts = ["default"]
                 "issue",
                 "view",
                 "PROJ-1",
-                "--output-format",
-                format,
+                "--output-content-format",
+                if format == "json" { "adf" } else { format },
             ])
             .output()
             .unwrap();
@@ -874,9 +841,6 @@ execution_contexts = ["default"]
     );
     issue_context::assert_context(&result["result"], true);
     let markdown = String::from_utf8(run(&unrestricted_token, "markdown")).unwrap();
-    assert!(markdown.contains("## Issue links"));
-    assert!(markdown.contains("## Parent"));
-    assert!(markdown.contains("## Subtasks"));
     assert!(markdown.contains("PARENT-42"));
     assert!(markdown.contains("CHILD-42"));
     for text in [
@@ -898,9 +862,6 @@ execution_contexts = ["default"]
     assert_eq!(scoped["result"]["summary"], "Source issue");
     issue_context::assert_context(&scoped["result"], false);
     let scoped_markdown = String::from_utf8(run(&scoped_token, "markdown")).unwrap();
-    assert!(!scoped_markdown.contains("## Issue links"));
-    assert!(!scoped_markdown.contains("## Parent"));
-    assert!(!scoped_markdown.contains("## Subtasks"));
     assert!(!scoped_markdown.contains("PARENT-42"));
     assert!(!scoped_markdown.contains("CHILD-42"));
     for text in ["CM-42", "OPS-7", "Linked release title", "is blocked by"] {
@@ -934,9 +895,8 @@ execution_contexts = ["default"]
     );
     assert_eq!(empty["result"]["subtasks"], json!([]));
     let empty_markdown = String::from_utf8(run(&unrestricted_token, "markdown")).unwrap();
-    assert!(empty_markdown.contains("## Issue links\n\nNone."));
-    assert!(empty_markdown.contains("## Parent\n\nNo parent returned."));
-    assert!(empty_markdown.contains("## Subtasks\n\nNone."));
+    let empty_selected: serde_json::Value = serde_json::from_str(&empty_markdown).unwrap();
+    assert_eq!(empty_selected["result"], empty["result"]);
     *backend.issue_view_links.lock().unwrap() = None;
     backend.issue_view_context.lock().unwrap().subtasks = None;
     let absent: serde_json::Value =
@@ -948,9 +908,8 @@ execution_contexts = ["default"]
         Some(&serde_json::Value::Null)
     );
     let absent_markdown = String::from_utf8(run(&unrestricted_token, "markdown")).unwrap();
-    assert!(!absent_markdown.contains("## Issue links"));
-    assert!(!absent_markdown.contains("## Subtasks"));
-    assert!(absent_markdown.contains("No parent returned."));
+    let absent_selected: serde_json::Value = serde_json::from_str(&absent_markdown).unwrap();
+    assert_eq!(absent_selected["result"], absent["result"]);
     assert_eq!(
         *backend.issue_view_requests.lock().unwrap(),
         vec![true, true, false, false, true, true, true, true]
@@ -1038,239 +997,120 @@ async fn jira_normalized_reads_work_across_cli_send_and_http_without_extra_provi
     let base_url = broker.public_url();
     let mut provider_call_cursor = 0;
 
-    let native = authenticated_jira_cli(&base_url)
-        .args(["jira", "issue", "view", "PROJ-1"])
-        .output()
-        .unwrap();
-    assert_success("native issue view", &native);
-    let native_json: serde_json::Value = serde_json::from_slice(&native.stdout).unwrap();
-    assert_eq!(
-        native_json["result"]["description"]["content"][0]["content"][0]["text"],
-        ISSUE_BODY
-    );
-    assert!(native_json["result"].get("renderedBody").is_none());
-    assert_new_backend_operations(
-        &backend,
-        &mut provider_call_cursor,
-        &["issue_metadata", "issue_metadata", "issue"],
-    );
-
-    let typed_embedded = authenticated_jira_cli(&base_url)
-        .args([
-            "jira",
-            "issue",
-            "view",
-            "PROJ-1",
-            "--read-content-format",
-            "markdown",
-        ])
-        .output()
-        .unwrap();
-    assert_success("typed embedded issue view", &typed_embedded);
-    let typed_embedded_json: serde_json::Value =
-        serde_json::from_slice(&typed_embedded.stdout).unwrap();
-    assert_eq!(
-        typed_embedded_json["result"]["renderedBody"],
-        serde_json::json!({"format":"markdown", "value":ISSUE_BODY})
-    );
-    assert_eq!(
-        typed_embedded_json["result"]["description"]["content"][0]["content"][0]["text"],
-        ISSUE_BODY
-    );
-    assert_new_backend_operations(
-        &backend,
-        &mut provider_call_cursor,
-        &["issue_metadata", "issue_metadata", "issue"],
-    );
-
-    let typed_markdown = authenticated_jira_cli(&base_url)
-        .args([
-            "jira",
-            "issue",
-            "view",
-            "PROJ-1",
-            "--output-format",
-            "markdown",
-        ])
-        .output()
-        .unwrap();
-    assert_success("typed Markdown issue view", &typed_markdown);
-    let typed_markdown_stdout = String::from_utf8(typed_markdown.stdout).unwrap();
-    assert!(typed_markdown.stderr.is_empty());
-    assert!(typed_markdown_stdout.starts_with("# `PROJ-1` — Normalized read issue\n"));
-    assert!(typed_markdown_stdout.contains("## Description\n\nnormalizedreadissuebody\n"));
-    assert!(!typed_markdown_stdout.contains("\"decision\""));
-    assert!(!typed_markdown_stdout.contains("\"type\":\"doc\""));
-    assert_new_backend_operations(
-        &backend,
-        &mut provider_call_cursor,
-        &["issue_metadata", "issue_metadata", "issue"],
-    );
-
-    let generic_embedded = authenticated_jira_cli(&base_url)
-        .args([
-            "invoke",
-            "jira.issue.view",
-            "--input-json",
-            r#"{"issue":"PROJ-1"}"#,
-            "--read-content-format",
+    let assert_body = |value: &serde_json::Value, format: &str, text: &str| {
+        let selected = &value["result"]["description"];
+        assert_eq!(selected["format"], format, "{value}");
+        if format == "adf" {
+            assert_eq!(selected["value"], jira_adf_text(text));
+        } else {
+            assert_eq!(selected["value"], text);
+        }
+        assert!(value["result"].get("renderedBody").is_none());
+        assert_eq!(selected.as_object().unwrap().len(), 2);
+    };
+    for (args, format) in [
+        (vec!["jira", "issue", "view", "PROJ-1"], "markdown"),
+        (
+            vec![
+                "jira",
+                "issue",
+                "view",
+                "PROJ-1",
+                "--output-content-format",
+                "adf",
+            ],
+            "adf",
+        ),
+        (
+            vec![
+                "invoke",
+                "jira.issue.view",
+                "--input-json",
+                r#"{"issue":"PROJ-1"}"#,
+                "--output-content-format",
+                "text",
+            ],
             "text",
-        ])
-        .output()
-        .unwrap();
-    assert_success("generic embedded issue view", &generic_embedded);
-    let generic_embedded_json: serde_json::Value =
-        serde_json::from_slice(&generic_embedded.stdout).unwrap();
-    assert_eq!(
-        generic_embedded_json["result"]["renderedBody"],
-        serde_json::json!({"format":"text", "value":ISSUE_BODY})
-    );
-    assert_new_backend_operations(
-        &backend,
-        &mut provider_call_cursor,
-        &["issue_metadata", "issue_metadata", "issue"],
-    );
-
-    let generic_markdown = authenticated_jira_cli(&base_url)
-        .args([
-            "invoke",
-            "jira.issue.view",
-            "--input-json",
-            r#"{"issue":"PROJ-1"}"#,
-            "--output-format",
+        ),
+    ] {
+        let output = authenticated_jira_cli(&base_url)
+            .args(args)
+            .output()
+            .unwrap();
+        assert_success("selected issue body", &output);
+        let value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_body(&value, format, ISSUE_BODY);
+        assert_new_backend_operations(
+            &backend,
+            &mut provider_call_cursor,
+            &["issue_metadata", "issue_metadata", "issue"],
+        );
+    }
+    for (options, format) in [
+        (json!({"preferredOutputContentFormat":"storage"}), "adf"),
+        (
+            json!({"preferredOutputContentFormat":"adf", "outputContentFormat":"markdown"}),
             "markdown",
-        ])
-        .output()
-        .unwrap();
-    assert_success("generic Markdown issue view", &generic_markdown);
-    let generic_markdown_stdout = String::from_utf8(generic_markdown.stdout).unwrap();
-    assert!(generic_markdown.stderr.is_empty());
-    assert!(generic_markdown_stdout.starts_with("# `PROJ-1` — Normalized read issue\n"));
-    assert!(generic_markdown_stdout.contains(ISSUE_BODY));
-    assert_new_backend_operations(
-        &backend,
-        &mut provider_call_cursor,
-        &["issue_metadata", "issue_metadata", "issue"],
-    );
-
-    let send_embedded_path = temp_path("jira-normalized-read-send-embedded.json");
-    std::fs::write(
-        &send_embedded_path,
-        r#"{"version":"agent-access.send.v1","kind":"invoke","service":"jira","action":"issue.view","inputs":{"issue":"PROJ-1"},"readContentFormat":"markdown"}"#,
-    )
-    .unwrap();
-    let send_embedded = authenticated_jira_cli(&base_url)
-        .args([
-            "send",
-            "--request-file",
-            send_embedded_path.to_str().unwrap(),
-        ])
-        .output()
-        .unwrap();
-    assert_success("send embedded issue view", &send_embedded);
-    let send_embedded_json: serde_json::Value =
-        serde_json::from_slice(&send_embedded.stdout).unwrap();
-    assert_eq!(
-        send_embedded_json["result"]["renderedBody"],
-        serde_json::json!({"format":"markdown", "value":ISSUE_BODY})
-    );
-    assert_new_backend_operations(
-        &backend,
-        &mut provider_call_cursor,
-        &["issue_metadata", "issue_metadata", "issue"],
-    );
-
-    let send_markdown_path = temp_path("jira-normalized-read-send-markdown.json");
-    std::fs::write(
-        &send_markdown_path,
-        r#"{"version":"agent-access.send.v1","kind":"invoke","service":"jira","action":"issue.view","inputs":{"issue":"PROJ-1"},"responseFormat":"markdown"}"#,
-    )
-    .unwrap();
-    let send_markdown = authenticated_jira_cli(&base_url)
-        .args([
-            "send",
-            "--request-file",
-            send_markdown_path.to_str().unwrap(),
-        ])
-        .output()
-        .unwrap();
-    assert_success("send Markdown issue view", &send_markdown);
-    let send_markdown_json: serde_json::Value =
-        serde_json::from_slice(&send_markdown.stdout).unwrap();
-    assert_eq!(send_markdown_json["result"]["format"], "markdown");
-    assert!(
-        send_markdown_json["result"]["value"]
-            .as_str()
+        ),
+    ] {
+        let request_path = temp_path("jira-selected-body-send.json");
+        let mut request = json!({"version":"agent-access.send.v2","kind":"invoke","service":"jira","action":"issue.view","inputs":{"issue":"PROJ-1"}});
+        request
+            .as_object_mut()
             .unwrap()
-            .contains(ISSUE_BODY)
-    );
-    assert_new_backend_operations(
-        &backend,
-        &mut provider_call_cursor,
-        &["issue_metadata", "issue_metadata", "issue"],
-    );
-
+            .extend(options.as_object().unwrap().clone());
+        std::fs::write(&request_path, request.to_string()).unwrap();
+        let output = authenticated_jira_cli(&base_url)
+            .args(["send", "--request-file", request_path.to_str().unwrap()])
+            .output()
+            .unwrap();
+        std::fs::remove_file(request_path).unwrap();
+        assert_success("send selected issue body", &output);
+        assert_body(
+            &serde_json::from_slice(&output.stdout).unwrap(),
+            format,
+            ISSUE_BODY,
+        );
+        assert_new_backend_operations(
+            &backend,
+            &mut provider_call_cursor,
+            &["issue_metadata", "issue_metadata", "issue"],
+        );
+    }
     let client = reqwest::Client::new();
-    let direct_embedded = client
-        .post(format!("{base_url}/v1/invoke/jira/issue.view"))
-        .header("X-Agent-Access-Identity-Token", "agent-token")
-        .header(REQUEST_ID_HEADER, "direct-http-jira-embedded")
-        .json(&serde_json::json!({
-            "inputs":{"issue":"PROJ-1"},
-            "readContentFormat":"markdown"
-        }))
-        .send()
-        .await
-        .unwrap();
-    let direct_embedded_status = direct_embedded.status();
-    let direct_embedded_json: serde_json::Value = direct_embedded.json().await.unwrap();
-    assert_eq!(
-        direct_embedded_status,
-        reqwest::StatusCode::OK,
-        "direct embedded response: {direct_embedded_json}"
-    );
-    assert_eq!(
-        direct_embedded_json["result"]["renderedBody"],
-        serde_json::json!({"format":"markdown", "value":ISSUE_BODY})
-    );
-    assert_new_backend_operations(
-        &backend,
-        &mut provider_call_cursor,
-        &["issue_metadata", "issue_metadata", "issue"],
-    );
-
-    let direct_markdown = client
-        .post(format!("{base_url}/v1/invoke/jira/issue.view"))
-        .header("X-Agent-Access-Identity-Token", "agent-token")
-        .header(REQUEST_ID_HEADER, "direct-http-jira-markdown")
-        .json(&serde_json::json!({
-            "inputs":{"issue":"PROJ-1"},
-            "responseFormat":"markdown"
-        }))
-        .send()
-        .await
-        .unwrap();
-    let direct_markdown_status = direct_markdown.status();
-    let direct_markdown_json: serde_json::Value = direct_markdown.json().await.unwrap();
-    assert_eq!(
-        direct_markdown_status,
-        reqwest::StatusCode::OK,
-        "direct Markdown response: {direct_markdown_json}"
-    );
-    assert_eq!(direct_markdown_json["result"]["format"], "markdown");
-    assert!(
-        direct_markdown_json["result"]["value"]
-            .as_str()
+    for (index, (options, format)) in [
+        (json!({}), "markdown"),
+        (json!({"preferredOutputContentFormat":"storage"}), "adf"),
+        (
+            json!({"preferredOutputContentFormat":"adf","outputContentFormat":"text"}),
+            "text",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut request = json!({"inputs":{"issue":"PROJ-1"}});
+        request
+            .as_object_mut()
             .unwrap()
-            .contains(ISSUE_BODY)
-    );
-    assert_new_backend_operations(
-        &backend,
-        &mut provider_call_cursor,
-        &["issue_metadata", "issue_metadata", "issue"],
-    );
-
-    let search_markdown = authenticated_jira_cli(&base_url)
+            .extend(options.as_object().unwrap().clone());
+        let response = client
+            .post(format!("{base_url}/v1/invoke/jira/issue.view"))
+            .header("X-Agent-Access-Identity-Token", "agent-token")
+            .header(REQUEST_ID_HEADER, format!("jira-selected-http-{index}"))
+            .json(&request)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        assert_body(&response.json().await.unwrap(), format, ISSUE_BODY);
+        assert_new_backend_operations(
+            &backend,
+            &mut provider_call_cursor,
+            &["issue_metadata", "issue_metadata", "issue"],
+        );
+    }
+    let search = authenticated_jira_cli(&base_url)
         .args([
             "jira",
             "issue",
@@ -1279,21 +1119,14 @@ async fn jira_normalized_reads_work_across_cli_send_and_http_without_extra_provi
             "PROJ",
             "--jql",
             "project = PROJ",
-            "--output-format",
-            "markdown",
         ])
         .output()
         .unwrap();
-    assert_success("body-free search Markdown", &search_markdown);
-    let search_markdown_stdout = String::from_utf8(search_markdown.stdout).unwrap();
-    assert!(search_markdown.stderr.is_empty());
-    assert!(search_markdown_stdout.starts_with("# Jira issue search\n"));
-    assert!(search_markdown_stdout.contains("## `PROJ-1` — Normalized read issue\n"));
-    assert!(!search_markdown_stdout.contains("## Description"));
-    assert!(!search_markdown_stdout.contains(SEARCH_BODY));
+    assert_success("body-free JSON search", &search);
+    let search: serde_json::Value = serde_json::from_slice(&search.stdout).unwrap();
+    assert!(!search.to_string().contains(SEARCH_BODY));
     assert_new_backend_operations(&backend, &mut provider_call_cursor, &["search"]);
-
-    let comment_add = authenticated_jira_cli(&base_url)
+    let comment = authenticated_jira_cli(&base_url)
         .args([
             "jira",
             "issue",
@@ -1305,35 +1138,27 @@ async fn jira_normalized_reads_work_across_cli_send_and_http_without_extra_provi
             COMMENT_BODY,
             "--content-format",
             "plain_text",
-            "--read-content-format",
+            "--output-content-format",
             "markdown",
         ])
         .output()
         .unwrap();
-    assert_success("mutation readback embedded Markdown", &comment_add);
-    let comment_add_json: serde_json::Value = serde_json::from_slice(&comment_add.stdout).unwrap();
+    assert_success("mutation selected body", &comment);
+    let comment: serde_json::Value = serde_json::from_slice(&comment.stdout).unwrap();
     assert_eq!(
-        comment_add_json["result"]["comment"]["renderedBody"],
-        serde_json::json!({"format":"markdown", "value":COMMENT_BODY})
+        comment["result"]["comment"]["body"],
+        json!({"format":"markdown","value":COMMENT_BODY})
     );
-    assert_eq!(
-        comment_add_json["result"]["comment"]["body"]["content"][0]["content"][0]["text"],
-        COMMENT_BODY
-    );
+    assert!(comment["result"]["comment"].get("renderedBody").is_none());
     assert_new_backend_operations(
         &backend,
         &mut provider_call_cursor,
         &["issue_metadata", "issue_metadata", "add_comment"],
     );
-
     let audit = broker.audit().unwrap().text();
-    assert!(audit.contains("\"action\":\"issue.view\""));
-    assert!(audit.contains("\"action\":\"search\""));
-    assert!(audit.contains("\"action\":\"comment.add\""));
-    assert!(!audit.contains(ISSUE_BODY));
-    assert!(!audit.contains(COMMENT_BODY));
-    assert!(!audit.contains(SEARCH_BODY));
-
+    for secret in [ISSUE_BODY, COMMENT_BODY, SEARCH_BODY] {
+        assert!(!audit.contains(secret));
+    }
     stop(broker).await;
 }
 
@@ -1378,16 +1203,8 @@ async fn jira_moved_issue_denial_does_not_leak_content() {
     .await;
     let base_url = broker.public_url();
 
-    let issue = Command::new(env!("CARGO_BIN_EXE_agent-access"))
-        .args([
-            "--url",
-            &base_url,
-            "--no-token",
-            "jira",
-            "issue",
-            "view",
-            "PROJ-2",
-        ])
+    let issue = authenticated_jira_cli(&base_url)
+        .args(["jira", "issue", "view", "PROJ-2"])
         .output()
         .unwrap();
     assert_eq!(
@@ -1460,8 +1277,8 @@ fn renamed_issue_backend(alias: &str, key: &str, project: &str, secret: &str) ->
 }
 
 fn jira_cli(base_url: &str, args: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_agent-access"))
-        .args(["--url", base_url, "--no-token", "jira"])
+    authenticated_jira_cli(base_url)
+        .arg("jira")
         .args(args)
         .output()
         .unwrap()
@@ -1806,11 +1623,8 @@ async fn cli_invokes_jira_write_stream_and_verify_actions_against_stubbed_backen
     .await;
     let base_url = broker.public_url();
 
-    let issue_update = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let issue_update = authenticated_jira_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "jira",
             "issue",
             "update",
@@ -1843,11 +1657,8 @@ async fn cli_invokes_jira_write_stream_and_verify_actions_against_stubbed_backen
         r#"{"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"text","text":"secret issue description"}]}]}"#,
     )
     .unwrap();
-    let description_update = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let description_update = authenticated_jira_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "jira",
             "issue",
             "update",
@@ -1892,11 +1703,8 @@ async fn cli_invokes_jira_write_stream_and_verify_actions_against_stubbed_backen
         assert_eq!(issue_updates[1].1.notify_users, Some(true));
     }
 
-    let issue_create = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let issue_create = authenticated_jira_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "jira",
             "issue",
             "create",
@@ -1932,11 +1740,8 @@ async fn cli_invokes_jira_write_stream_and_verify_actions_against_stubbed_backen
         );
     }
 
-    let child_create = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let child_create = authenticated_jira_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "jira",
             "issue",
             "child",
@@ -1971,12 +1776,8 @@ async fn cli_invokes_jira_write_stream_and_verify_actions_against_stubbed_backen
         "matched"
     );
 
-    let child_invoke = Command::new(env!("CARGO_BIN_EXE_agent-access"))
-        .args([
-            "--url",
-            &base_url,
-            "--no-token",
-            "invoke",
+    let child_invoke = authenticated_jira_cli(&base_url)
+        .args(["invoke",
             "jira.issue.child.create",
             "--input-json",
             r#"{"project":"PROJ","issueTypeId":"10001","summary":"secret child invoke summary","parentIssue":"PROJ-1"}"#,
@@ -2002,18 +1803,9 @@ async fn cli_invokes_jira_write_stream_and_verify_actions_against_stubbed_backen
         assert_eq!(created_issues[2].parent_issue.as_deref(), Some("PROJ-1"));
     }
 
-    let parent_set = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let parent_set = authenticated_jira_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
-            "jira",
-            "issue",
-            "parent",
-            "set",
-            "PROJ-3",
-            "--parent",
-            "PROJ-1",
+            "jira", "issue", "parent", "set", "PROJ-3", "--parent", "PROJ-1",
         ])
         .output()
         .unwrap();
@@ -2024,11 +1816,8 @@ async fn cli_invokes_jira_write_stream_and_verify_actions_against_stubbed_backen
     assert_eq!(parent_set_json["result"]["issue"]["key"], "PROJ-3");
     assert_eq!(parent_set_json["result"]["parentIssue"]["key"], "PROJ-1");
 
-    let parent_invoke = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let parent_invoke = authenticated_jira_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "invoke",
             "jira.issue.parent.set",
             "--input-json",
@@ -2050,11 +1839,8 @@ async fn cli_invokes_jira_write_stream_and_verify_actions_against_stubbed_backen
         assert_eq!(parent_updates[0].1.parent_issue, "PROJ-1");
     }
 
-    let dependency = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let dependency = authenticated_jira_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "jira",
             "issue",
             "dependency",
@@ -2077,11 +1863,8 @@ async fn cli_invokes_jira_write_stream_and_verify_actions_against_stubbed_backen
     assert_eq!(dependency_json["result"]["blockingIssue"]["key"], "PROJ-2");
     assert_eq!(dependency_json["result"]["blockedIssue"]["key"], "PROJ-3");
 
-    let dependency_invoke = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let dependency_invoke = authenticated_jira_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "invoke",
             "jira.issue.dependency.add",
             "--input-json",
@@ -2106,11 +1889,8 @@ async fn cli_invokes_jira_write_stream_and_verify_actions_against_stubbed_backen
 
     let body_path = temp_path("jira-comment.md");
     std::fs::write(&body_path, "## secret comment body\n\nMarkdown content.").unwrap();
-    let comment = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let comment = authenticated_jira_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "jira",
             "issue",
             "comment",
@@ -2142,11 +1922,8 @@ async fn cli_invokes_jira_write_stream_and_verify_actions_against_stubbed_backen
         );
     }
 
-    let comment_list = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let comment_list = authenticated_jira_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "jira",
             "issue",
             "comment",
@@ -2176,18 +1953,9 @@ async fn cli_invokes_jira_write_stream_and_verify_actions_against_stubbed_backen
             .is_none()
     );
 
-    let comment_view = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let comment_view = authenticated_jira_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
-            "jira",
-            "issue",
-            "comment",
-            "view",
-            "10042",
-            "--issue",
-            "PROJ-1",
+            "jira", "issue", "comment", "view", "10042", "--issue", "PROJ-1",
         ])
         .output()
         .unwrap();
@@ -2200,7 +1968,7 @@ async fn cli_invokes_jira_write_stream_and_verify_actions_against_stubbed_backen
     let comment_view_json: serde_json::Value =
         serde_json::from_slice(&comment_view.stdout).unwrap();
     assert_eq!(
-        comment_view_json["result"]["comment"]["body"]["content"][0]["content"][0]["text"],
+        comment_view_json["result"]["comment"]["body"]["value"],
         "existing secret comment body"
     );
 
@@ -2210,11 +1978,8 @@ async fn cli_invokes_jira_write_stream_and_verify_actions_against_stubbed_backen
         "secret reply body with *literal* punctuation",
     )
     .unwrap();
-    let comment_reply = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let comment_reply = authenticated_jira_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "jira",
             "issue",
             "comment",
@@ -2258,12 +2023,8 @@ async fn cli_invokes_jira_write_stream_and_verify_actions_against_stubbed_backen
         );
     }
 
-    let comment_update = Command::new(env!("CARGO_BIN_EXE_agent-access"))
-        .args([
-            "--url",
-            &base_url,
-            "--no-token",
-            "jira",
+    let comment_update = authenticated_jira_cli(&base_url)
+        .args(["jira",
             "issue",
             "comment",
             "update",
@@ -2292,19 +2053,9 @@ async fn cli_invokes_jira_write_stream_and_verify_actions_against_stubbed_backen
         "updated secret comment body"
     );
 
-    let property_list = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let property_list = authenticated_jira_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
-            "jira",
-            "issue",
-            "comment",
-            "property",
-            "list",
-            "10042",
-            "--issue",
-            "PROJ-1",
+            "jira", "issue", "comment", "property", "list", "10042", "--issue", "PROJ-1",
         ])
         .output()
         .unwrap();
@@ -2328,11 +2079,8 @@ async fn cli_invokes_jira_write_stream_and_verify_actions_against_stubbed_backen
         1
     );
 
-    let property_get = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let property_get = authenticated_jira_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "jira",
             "issue",
             "comment",
@@ -2360,11 +2108,8 @@ async fn cli_invokes_jira_write_stream_and_verify_actions_against_stubbed_backen
 
     let property_value_path = temp_path("jira-comment-property.json");
     std::fs::write(&property_value_path, r#"{"status":"set-secret-property"}"#).unwrap();
-    let property_set = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let property_set = authenticated_jira_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "jira",
             "issue",
             "comment",
@@ -2387,11 +2132,8 @@ async fn cli_invokes_jira_write_stream_and_verify_actions_against_stubbed_backen
     );
     assert_eq!(backend.set_properties.lock().unwrap().len(), 1);
 
-    let property_delete = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let property_delete = authenticated_jira_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "jira",
             "issue",
             "comment",
@@ -2415,18 +2157,9 @@ async fn cli_invokes_jira_write_stream_and_verify_actions_against_stubbed_backen
         vec!["agent-access.review".to_string()]
     );
 
-    let comment_delete = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let comment_delete = authenticated_jira_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
-            "jira",
-            "issue",
-            "comment",
-            "delete",
-            "10042",
-            "--issue",
-            "PROJ-1",
+            "jira", "issue", "comment", "delete", "10042", "--issue", "PROJ-1",
         ])
         .output()
         .unwrap();
@@ -2441,11 +2174,8 @@ async fn cli_invokes_jira_write_stream_and_verify_actions_against_stubbed_backen
         vec!["10042".to_string()]
     );
 
-    let legacy_comment = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let legacy_comment = authenticated_jira_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "jira",
             "issue",
             "comment",
@@ -2464,17 +2194,8 @@ async fn cli_invokes_jira_write_stream_and_verify_actions_against_stubbed_backen
         String::from_utf8_lossy(&legacy_comment.stderr)
     );
 
-    let missing_locator = Command::new(env!("CARGO_BIN_EXE_agent-access"))
-        .args([
-            "--url",
-            &base_url,
-            "--no-token",
-            "jira",
-            "issue",
-            "comment",
-            "view",
-            "10042",
-        ])
+    let missing_locator = authenticated_jira_cli(&base_url)
+        .args(["jira", "issue", "comment", "view", "10042"])
         .output()
         .unwrap();
     assert_eq!(missing_locator.status.code(), Some(3));
@@ -2485,11 +2206,8 @@ async fn cli_invokes_jira_write_stream_and_verify_actions_against_stubbed_backen
 
     let upload_path = temp_path("evidence.txt");
     std::fs::write(&upload_path, b"upload bytes").unwrap();
-    let upload = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let upload = authenticated_jira_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "jira",
             "issue",
             "attach",
@@ -2512,17 +2230,8 @@ async fn cli_invokes_jira_write_stream_and_verify_actions_against_stubbed_backen
         b"upload bytes"
     );
 
-    let list = Command::new(env!("CARGO_BIN_EXE_agent-access"))
-        .args([
-            "--url",
-            &base_url,
-            "--no-token",
-            "jira",
-            "issue",
-            "attachment",
-            "list",
-            "PROJ-1",
-        ])
+    let list = authenticated_jira_cli(&base_url)
+        .args(["jira", "issue", "attachment", "list", "PROJ-1"])
         .output()
         .unwrap();
     assert!(
@@ -2542,11 +2251,8 @@ async fn cli_invokes_jira_write_stream_and_verify_actions_against_stubbed_backen
     );
 
     let output_path = temp_path("downloaded-evidence.txt");
-    let download = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let download = authenticated_jira_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "jira",
             "issue",
             "attachment",
@@ -2571,11 +2277,8 @@ async fn cli_invokes_jira_write_stream_and_verify_actions_against_stubbed_backen
         download_json["result"].get("contentBase64").is_none(),
         "download JSON must not echo attachment bytes when --output writes a file"
     );
-    let stdout_download = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let stdout_download = authenticated_jira_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "jira",
             "issue",
             "attachment",
@@ -2595,11 +2298,8 @@ async fn cli_invokes_jira_write_stream_and_verify_actions_against_stubbed_backen
     );
     assert_eq!(stdout_download.stdout, b"downloaded bytes");
 
-    let verify = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let verify = authenticated_jira_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "jira",
             "issue",
             "verify",
@@ -2788,7 +2488,7 @@ async fn cli_send_invokes_jira_relationship_actions_against_stubbed_backend() {
     let request_path = temp_path("jira-send-dependency.json");
     std::fs::write(
         &request_path,
-        r#"{"version":"agent-access.send.v1","kind":"invoke","service":"jira","action":"issue.dependency.add","inputs":{"blockingIssue":"PROJ-2","blockedIssue":"PROJ-3"}}"#,
+        r#"{"version":"agent-access.send.v2","kind":"invoke","service":"jira","action":"issue.dependency.add","inputs":{"blockingIssue":"PROJ-2","blockedIssue":"PROJ-3"}}"#,
     )
     .unwrap();
     let send = Command::new(env!("CARGO_BIN_EXE_agent-access"))
@@ -2822,7 +2522,7 @@ async fn cli_send_invokes_jira_relationship_actions_against_stubbed_backend() {
     let parent_request_path = temp_path("jira-send-parent.json");
     std::fs::write(
         &parent_request_path,
-        r#"{"version":"agent-access.send.v1","kind":"invoke","service":"jira","action":"issue.parent.set","inputs":{"issue":"PROJ-3","parentIssue":"PROJ-1"}}"#,
+        r#"{"version":"agent-access.send.v2","kind":"invoke","service":"jira","action":"issue.parent.set","inputs":{"issue":"PROJ-3","parentIssue":"PROJ-1"}}"#,
     )
     .unwrap();
     let parent_send = Command::new(env!("CARGO_BIN_EXE_agent-access"))
@@ -2859,7 +2559,7 @@ async fn cli_send_invokes_jira_relationship_actions_against_stubbed_backend() {
     let child_request_path = temp_path("jira-send-child.json");
     std::fs::write(
         &child_request_path,
-        r#"{"version":"agent-access.send.v1","kind":"invoke","service":"jira","action":"issue.child.create","inputs":{"project":"PROJ","issueTypeId":"10001","summary":"send child summary","parentIssue":"PROJ-1"}}"#,
+        r#"{"version":"agent-access.send.v2","kind":"invoke","service":"jira","action":"issue.child.create","inputs":{"project":"PROJ","issueTypeId":"10001","summary":"send child summary","parentIssue":"PROJ-1"}}"#,
     )
     .unwrap();
     let child_send = Command::new(env!("CARGO_BIN_EXE_agent-access"))
@@ -3445,6 +3145,15 @@ fn cli_download_short_body_exits_5_and_preserves_existing_output_file_against_st
     });
     let encoded_metadata = BASE64.encode(serde_json::to_vec(&metadata).unwrap());
     let server = std::thread::spawn(move || {
+        let (mut catalog_stream, _) = listener.accept().unwrap();
+        let mut catalog_request = [0_u8; 4096];
+        let count = catalog_stream.read(&mut catalog_request).unwrap();
+        assert!(
+            String::from_utf8_lossy(&catalog_request[..count]).starts_with("GET /v1/spec/catalog ")
+        );
+        let catalog = jira_catalog::catalog().to_string();
+        write!(catalog_stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{catalog}", catalog.len()).unwrap();
+        drop(catalog_stream);
         let (mut stream, _) = listener.accept().unwrap();
         let mut request = [0_u8; 4096];
         let _ = stream.read(&mut request);
@@ -3500,6 +3209,7 @@ struct StubJiraBackend {
     created_issues: Mutex<Vec<JiraIssueCreateRequest>>,
     updated_issues: Mutex<Vec<(String, JiraIssueUpdateRequest)>>,
     custom_field_updates: Mutex<Vec<(String, String, serde_json::Value)>>,
+    transition_writes: Mutex<Vec<(String, String, Option<String>)>>,
     parent_updates: Mutex<Vec<(String, JiraIssueParentSetRequest)>>,
     issue_parent_readbacks: Mutex<BTreeMap<String, JiraIssueParentReadback>>,
     issue_link_types: Mutex<Vec<JiraIssueLinkType>>,
@@ -3552,6 +3262,64 @@ impl StubJiraBackend {
 
 #[async_trait]
 impl JiraBackend for StubJiraBackend {
+    async fn issue_status(
+        &self,
+        issue_id: &str,
+        credential: &agent_access_jira::AtlassianCredential,
+    ) -> Result<JiraBackendResponse<serde_json::Value>, JiraBackendError> {
+        self.record_credential("issue_status", credential);
+        let issue = self
+            .issues
+            .values()
+            .find(|issue| issue.id == issue_id)
+            .unwrap();
+        let changed = !self.transition_writes.lock().unwrap().is_empty();
+        Ok(JiraBackendResponse {
+            value: serde_json::json!({"id":issue.id,"key":issue.key,"fields":{"project":{"key":issue.project},"status":{"id":if changed {"10002"} else {"10000"},"name":if changed {"Stalled"} else {"New"}}}}),
+            status: 200,
+            duration_ms: 1,
+        })
+    }
+    async fn issue_transitions(
+        &self,
+        issue_id: &str,
+        include_fields: bool,
+        transition_id: Option<&str>,
+        credential: &agent_access_jira::AtlassianCredential,
+    ) -> Result<JiraBackendResponse<serde_json::Value>, JiraBackendError> {
+        self.record_credential("issue_transitions", credential);
+        assert_eq!(issue_id, "10001");
+        assert!(transition_id.is_none() || transition_id == Some("31"));
+        let mut value = serde_json::json!({"transitions":[{"id":"31","name":"Stall work","to":{"id":"10002","name":"Stalled"}}]});
+        if include_fields {
+            value["transitions"][0]["fields"] = serde_json::json!({"resolution":{"name":"Resolution","required":false,"allowedValues":[{"id":"1","name":"Fixed"}]}});
+        }
+        Ok(JiraBackendResponse {
+            value,
+            status: 200,
+            duration_ms: 1,
+        })
+    }
+    async fn transition_issue(
+        &self,
+        issue_id: &str,
+        transition_id: &str,
+        resolution_id: Option<&str>,
+        credential: &agent_access_jira::AtlassianCredential,
+    ) -> Result<JiraBackendResponse<()>, JiraBackendError> {
+        self.record_credential("transition_issue", credential);
+        self.transition_writes.lock().unwrap().push((
+            issue_id.into(),
+            transition_id.into(),
+            resolution_id.map(str::to_owned),
+        ));
+        Ok(JiraBackendResponse {
+            value: (),
+            status: 204,
+            duration_ms: 1,
+        })
+    }
+
     async fn project_list(
         &self,
         _request: agent_access_jira::JiraProjectListRequest,
@@ -4148,7 +3916,8 @@ async fn stop(broker: RunningBroker) {
 /// Who may call the broker, and with which Jira grants.
 #[derive(Clone, Copy, Debug)]
 enum JiraAccess {
-    /// Anonymous callers use the service credential on project PROJ.
+    /// Anonymous HTTP callers and the authenticated CLI principal use the
+    /// service credential on project PROJ.
     AnonymousService,
     /// The static principal `agent-one`, a member of group `agents`, uses the
     /// service credential on PROJ.
@@ -4211,7 +3980,7 @@ selector = {{ kind = "all" }}
 allowed_execution_contexts = ["default"]
 
 [[policy.grants]]
-subjects = [{service_subject}]
+subjects = {service_subjects}
 service = "jira"
 actions = {actions}
 resources = {{ resource_ids = ["project-proj"] }}
@@ -4229,20 +3998,33 @@ path = {audit}
         lookup_username = secret_ref(directory, "jira-lookup-username.txt", "lookup@example.com"),
         lookup_token = secret_ref(directory, "jira-lookup-token.txt", "jira-lookup-token"),
         resource_type = JIRA_PROJECT_RESOURCE.id().as_str(),
-        service_subject = toml_string(match access {
-            JiraAccess::AnonymousService => "group:anonymous",
-            JiraAccess::AgentService | JiraAccess::AgentPerUser => "group:agents",
-        }),
+        service_subjects = serde_json::to_string(match access {
+            JiraAccess::AnonymousService => &["group:anonymous", "user:agent-one"][..],
+            JiraAccess::AgentService | JiraAccess::AgentPerUser => &["group:agents"][..],
+        })
+        .unwrap(),
         spool = toml_string(directory.join("upload-spool").display()),
         audit = toml_string(directory.join("audit.jsonl").display()),
     );
     document.push_str(&match access {
-        JiraAccess::AnonymousService => r#"
+        JiraAccess::AnonymousService => format!(
+            r#"
 [identity]
-mode = "anonymous"
+mode = "optional"
 authority = "toml"
-"#
-        .to_string(),
+
+[[identity.sources]]
+name = "local"
+type = "static_principals"
+header = "X-Agent-Access-Identity-Token"
+scheme = "raw"
+
+[[identity.sources.principals]]
+principal = "agent-one"
+token_refs = [{agent_token}]
+"#,
+            agent_token = secret_ref(directory, "agent-token.txt", "agent-token")
+        ),
         JiraAccess::AgentService | JiraAccess::AgentPerUser => format!(
             r#"
 [identity]
@@ -4382,6 +4164,14 @@ fn assert_success(label: &str, output: &std::process::Output) {
 
 fn authenticated_jira_cli(base_url: &str) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_agent-access"));
+    let config = temp_path("jira-cli-defaults.toml");
+    std::fs::write(&config, "").unwrap();
+    for (key, _) in std::env::vars_os() {
+        if key.to_string_lossy().starts_with("AGENT_ACCESS_") {
+            command.env_remove(key);
+        }
+    }
+    command.arg("--config").arg(config);
     command.args([
         "--url",
         base_url,

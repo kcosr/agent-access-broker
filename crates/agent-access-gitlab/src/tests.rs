@@ -582,11 +582,12 @@ async fn project_upload_attachment_refusals_follow_scope_resolution() {
             inputs.clone(),
         )
         .lookup_credential(test_credential());
-        let (scopes, _) = provider
+        let scopes = provider
             .resolve_scopes(fixture.request())
             .await
             .unwrap_or_else(|error| panic!("{case}: scope resolution refused: {error:?}"))
-            .into_parts();
+            .into_scopes()
+            .unwrap();
         assert_eq!(scopes, repository_scopes_from_path("sip/service"), "{case}");
 
         let request = test_invocation("project.upload", inputs);
@@ -2348,7 +2349,7 @@ fn every_configuration_declares_bundled_result_schemas_for_exactly_its_actions()
         config.validate(&context, &mut errors);
         assert!(errors.is_empty(), "{name}: {errors:?}");
         // Descriptor validation checks each schema's profile and budget, and
-        // that every declared renderedBody owner resolves in it.
+        // that every declared body field resolves in it.
         let descriptor = config.descriptor();
         assert_eq!(descriptor.validate(), Ok(()), "{name}");
         for action in &descriptor.actions {
@@ -7560,8 +7561,11 @@ fn gitlab_rest_is_a_project_scoped_invoke_surface_over_the_host_repository_type(
         ["repository"]
     );
     assert_eq!(
-        descriptor.resource_scopes["repository"].resource_type,
-        *GIT_REPOSITORY_RESOURCE.id()
+        descriptor.resource_scopes["repository"]
+            .as_scalar()
+            .unwrap()
+            .0,
+        GIT_REPOSITORY_RESOURCE.id()
     );
     for action in &descriptor.actions {
         let name = action.action.as_str();
@@ -7714,6 +7718,9 @@ async fn fork_suggestions_pin_numeric_scope_state_and_recheck_it_before_writing(
             "repository".to_string(),
             paths.iter().map(|path| path.to_string()).collect(),
         )])
+    };
+    let agent_access_provider::ScopeEvidence::Scalar(scopes) = scopes else {
+        panic!("expected scalar repository evidence")
     };
     assert_eq!(scopes, repositories(&both));
     assert_eq!(
@@ -8417,8 +8424,8 @@ async fn scopes_for(provider: &GitlabProvider, action: &str, inputs: Value) -> R
         .resolve_scopes(fixture.request())
         .await
         .unwrap()
-        .into_parts()
-        .0
+        .into_scopes()
+        .unwrap()
 }
 
 #[tokio::test]
@@ -9161,6 +9168,9 @@ async fn batch_suggestion_apply_conforms_on_success_and_outdated_suggestions() {
             .await
             .unwrap()
             .into_parts();
+        let agent_access_provider::ScopeEvidence::Scalar(scopes) = scopes else {
+            panic!("expected scalar repository evidence")
+        };
         let outcome = provider
             .invoke_strict(
                 InvocationBuilder::new("gitlab", action)
@@ -9187,3 +9197,5 @@ async fn batch_suggestion_apply_conforms_on_success_and_outdated_suggestions() {
         }
     }
 }
+#[path = "tests/content_output.rs"]
+mod content_output;

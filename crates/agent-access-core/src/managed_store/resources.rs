@@ -91,6 +91,7 @@ pub struct ManagedCatalogMutationResult<T> {
 pub struct CreateResourceRequest {
     pub id: Option<String>,
     pub display_name: Option<String>,
+    pub browser_url: Option<String>,
     pub resource_type: ResourceType,
     pub selector: ResourceSelector,
     pub allowed_execution_contexts: Vec<String>,
@@ -104,6 +105,7 @@ pub struct PatchResourceRequest {
     pub id: String,
     pub expected_version: i64,
     pub display_name: Option<Option<String>>,
+    pub browser_url: Option<Option<String>>,
     pub resource_type: Option<ResourceType>,
     pub selector: Option<ResourceSelector>,
     pub allowed_execution_contexts: Option<Vec<String>>,
@@ -307,6 +309,7 @@ impl ManagedStore {
                             .clone()
                             .unwrap_or_else(|| Uuid::new_v4().to_string()),
                         display_name: normalize_optional_text(request.display_name.clone()),
+                        browser_url: request.browser_url.clone(),
                         resource_type: request.resource_type,
                         selector: request.selector.clone(),
                         allowed_execution_contexts: request.allowed_execution_contexts.clone(),
@@ -365,6 +368,9 @@ impl ManagedStore {
                 }
                 if let Some(value) = request.display_name.clone() {
                     record.definition.display_name = normalize_optional_text(value);
+                }
+                if let Some(value) = request.browser_url.clone() {
+                    record.definition.browser_url = value;
                 }
                 if let Some(value) = request.resource_type {
                     record.definition.resource_type = value;
@@ -561,8 +567,8 @@ fn check_catalog_version(actual: i64, expected: i64) -> Result<(), ManagedStoreE
     }
 }
 
-const RESOURCE_RECORD_COLUMNS: &str = "resource_id,resource_type,selector_kind,selector_value,display_name,allowed_execution_contexts_json,enabled,version,created_at,created_by,updated_at,updated_by";
-const RESOURCE_BY_ID_SQL: &str = "SELECT resource_id,resource_type,selector_kind,selector_value,display_name,allowed_execution_contexts_json,enabled,version,created_at,created_by,updated_at,updated_by FROM resources WHERE resource_id=?1";
+const RESOURCE_RECORD_COLUMNS: &str = "resource_id,resource_type,selector_kind,selector_value,display_name,allowed_execution_contexts_json,enabled,version,created_at,created_by,updated_at,updated_by,browser_url";
+const RESOURCE_BY_ID_SQL: &str = "SELECT resource_id,resource_type,selector_kind,selector_value,display_name,allowed_execution_contexts_json,enabled,version,created_at,created_by,updated_at,updated_by,browser_url FROM resources WHERE resource_id=?1";
 
 pub(super) fn resource_by_id(
     conn: &Connection,
@@ -607,6 +613,7 @@ fn resource_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Managed
                 rusqlite::Error::FromSqlConversionFailure(2, Type::Text, Box::new(e))
             })?,
             display_name: row.get(4)?,
+            browser_url: row.get(12)?,
             allowed_execution_contexts: serde_json::from_str(&contexts).map_err(|e| {
                 rusqlite::Error::FromSqlConversionFailure(5, Type::Text, Box::new(e))
             })?,
@@ -798,9 +805,9 @@ fn persist_resource(
     let contexts = serde_json::to_string(&definition.allowed_execution_contexts)
         .map_err(|_| input_invalid("invalid resource contexts"))?;
     let sql = if update {
-        "UPDATE resources SET resource_type=?2,selector_kind=?3,selector_value=?4,display_name=?5,allowed_execution_contexts_json=?6,enabled=?7,version=?8,created_at=?9,created_by=?10,updated_at=?11,updated_by=?12 WHERE resource_id=?1"
+        "UPDATE resources SET resource_type=?2,selector_kind=?3,selector_value=?4,display_name=?5,allowed_execution_contexts_json=?6,enabled=?7,version=?8,created_at=?9,created_by=?10,updated_at=?11,updated_by=?12,browser_url=?13 WHERE resource_id=?1"
     } else {
-        "INSERT INTO resources(resource_id,resource_type,selector_kind,selector_value,display_name,allowed_execution_contexts_json,enabled,version,created_at,created_by,updated_at,updated_by) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)"
+        "INSERT INTO resources(resource_id,resource_type,selector_kind,selector_value,display_name,allowed_execution_contexts_json,enabled,version,created_at,created_by,updated_at,updated_by,browser_url) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)"
     };
     conn.execute(
         sql,
@@ -816,7 +823,8 @@ fn persist_resource(
             record.created_at,
             record.created_by,
             record.updated_at,
-            record.updated_by
+            record.updated_by,
+            definition.browser_url
         ],
     )
     .map_err(sql_unavailable)?;
@@ -1068,6 +1076,7 @@ mod tests {
         CreateResourceRequest {
             id: Some(id.into()),
             display_name: None,
+            browser_url: None,
             resource_type: agent_access_provider::GIT_REPOSITORY_RESOURCE.id().clone(),
             selector,
             allowed_execution_contexts: vec!["internal".into()],
@@ -1168,6 +1177,151 @@ mod tests {
     }
 
     #[test]
+    fn browser_url_changes_are_versioned_private_in_audit_and_preserved_on_reopen() {
+        let (temp, store) = store();
+        let registry = agent_access_provider::ResourceTypeRegistry::new([
+            &agent_access_confluence::CONFLUENCE_CONTENT_RESOURCE,
+        ])
+        .unwrap();
+        let validate = |_: &[ManagedPolicyGrantRecord],
+                        _: &ManagedPolicyRevision,
+                        _: &ManagedPolicySubjectCatalog,
+                        catalog: &ManagedResourceCatalog| {
+            let errors = crate::resource_policy::validate_resource_definition_types(
+                &registry,
+                &catalog.resources,
+            );
+            if errors.is_empty() {
+                Ok(())
+            } else {
+                Err(input_invalid(errors.join("; ")))
+            }
+        };
+        let original =
+            "https://example.atlassian.net/wiki/spaces/ENG/folder/123/Operations+Runbooks";
+        let updated = "https://example.atlassian.net/wiki/spaces/OPS/folder/123/Renamed+Runbooks";
+        let selector = ResourceSelector::Subtree {
+            value: "https://example.atlassian.net/wiki/content/folder/123".into(),
+        };
+        let mut request = create("runbooks", selector.clone());
+        request.resource_type = agent_access_confluence::CONFLUENCE_CONTENT_RESOURCE
+            .id()
+            .clone();
+        request.browser_url = Some(original.into());
+        let created = store.create_resource(request.clone(), &validate).unwrap();
+        assert_eq!(
+            created.record.definition.browser_url.as_deref(),
+            Some(original)
+        );
+        assert_eq!(created.record.definition.selector, selector);
+        assert!(
+            !serde_json::to_string(&created.audit)
+                .unwrap()
+                .contains(original)
+        );
+        store
+            .create_resource_group(group("readers", &["runbooks"], &[]), &validate)
+            .unwrap();
+        let group_before = store.resource_group("readers").unwrap();
+        let patch = |version| PatchResourceRequest {
+            id: "runbooks".into(),
+            expected_version: version,
+            display_name: None,
+            browser_url: None,
+            resource_type: None,
+            selector: None,
+            allowed_execution_contexts: None,
+            enabled: None,
+            attributes: agent_access_provider::ResourceAttributes::default(),
+            updated_by: "admin".into(),
+        };
+        let mut renamed = patch(1);
+        renamed.display_name = Some(Some("Runbooks".into()));
+        let renamed = store.patch_resource(renamed, &validate).unwrap();
+        assert_eq!(
+            renamed.record.definition.browser_url.as_deref(),
+            Some(original)
+        );
+        let mut relinked = patch(2);
+        relinked.browser_url = Some(Some(updated.into()));
+        let relinked = store.patch_resource(relinked, &validate).unwrap();
+        assert_eq!(relinked.record.version, 3);
+        assert_eq!(relinked.record.definition.selector, selector);
+        assert_eq!(relinked.audit.changed_fields, ["browserUrl"]);
+        let audit = serde_json::to_string(&relinked.audit).unwrap();
+        assert!(!audit.contains(original));
+        assert!(!audit.contains(updated));
+        assert!(!audit.contains("Renamed+Runbooks"));
+        assert_eq!(store.resource_group("readers").unwrap(), group_before);
+        assert_eq!(store.resources().unwrap()[0], relinked.record);
+        assert_eq!(
+            store.load_policy_export().unwrap().catalog.resources[0],
+            relinked.record.definition
+        );
+
+        let before = store.load_policy_snapshot().unwrap();
+        let mut mismatch = patch(3);
+        mismatch.browser_url = Some(Some(updated.replace("/123/", "/456/")));
+        assert!(matches!(
+            store.patch_resource(mismatch, &validate),
+            Err(ManagedStoreError::InputInvalid(_))
+        ));
+        let mut changed_target = patch(3);
+        changed_target.selector = Some(ResourceSelector::Subtree {
+            value: "https://example.atlassian.net/wiki/content/folder/456".into(),
+        });
+        assert!(matches!(
+            store.patch_resource(changed_target, &validate),
+            Err(ManagedStoreError::InputInvalid(_))
+        ));
+        let mut stale = patch(2);
+        stale.browser_url = Some(None);
+        assert!(matches!(
+            store.patch_resource(stale, &validate),
+            Err(ManagedStoreError::VersionConflict)
+        ));
+        request.id = Some("duplicate".into());
+        request.browser_url = Some(updated.into());
+        assert!(matches!(
+            store.create_resource(request, &validate),
+            Err(ManagedStoreError::ResourceConflict(_))
+        ));
+        assert_eq!(store.resource("runbooks").unwrap(), relinked.record);
+        assert_eq!(
+            store.load_policy_snapshot().unwrap().revision,
+            before.revision
+        );
+
+        drop(store);
+        let config = ManagedStoreConfig {
+            kind: "sqlite".into(),
+            path: temp.path().join("store.sqlite").display().to_string(),
+            auto_migrate: false,
+            require_registered_principal_for_invocation: false,
+        };
+        let reopened = ManagedStore::open(
+            &config,
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
+        assert_eq!(reopened.resource("runbooks").unwrap(), relinked.record);
+        let mut clear = patch(3);
+        clear.browser_url = Some(None);
+        let cleared = reopened.patch_resource(clear, &validate).unwrap();
+        assert_eq!(cleared.record.version, 4);
+        assert!(cleared.record.definition.browser_url.is_none());
+        assert_eq!(cleared.record.definition.selector, selector);
+        assert_eq!(cleared.audit.changed_fields, ["browserUrl"]);
+        assert!(
+            serde_json::to_value(&cleared.record)
+                .unwrap()
+                .get("browserUrl")
+                .is_none()
+        );
+    }
+
+    #[test]
     fn disabled_exclusions_stay_referenced_and_used_by_explains_group_paths() {
         let (_temp, store) = store();
         store
@@ -1211,6 +1365,7 @@ mod tests {
                     expected_version: 1,
                     attributes: agent_access_provider::ResourceAttributes::default(),
                     display_name: None,
+                    browser_url: None,
                     resource_type: None,
                     selector: None,
                     allowed_execution_contexts: None,
@@ -1331,6 +1486,7 @@ mod tests {
             resources: vec![ResourceDefinition {
                 id: "configured".into(),
                 display_name: None,
+                browser_url: None,
                 resource_type: agent_access_provider::GIT_REPOSITORY_RESOURCE.id().clone(),
                 selector: ResourceSelector::All,
                 allowed_execution_contexts: vec!["internal".into()],

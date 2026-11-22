@@ -11,10 +11,10 @@ fn config(server: &MockServer) -> GitlabProviderConfig {
 }
 fn scope() -> SearchAuthorizationScope {
     SearchAuthorizationScope::from_selectors(
-        vec![ResourceSelector::Namespace {
+        vec![ScalarResourceSelector::Namespace {
             value: "team".into(),
         }],
-        vec![ResourceSelector::Namespace {
+        vec![ScalarResourceSelector::Namespace {
             value: "team/private".into(),
         }],
     )
@@ -887,7 +887,7 @@ async fn assert_project_collection_binding(action: &str) {
         (
             action,
             2,
-            SearchAuthorizationScope::from_selectors(vec![ResourceSelector::All], vec![]),
+            SearchAuthorizationScope::from_selectors(vec![ScalarResourceSelector::All], vec![]),
         ),
     ] {
         let error = provider
@@ -921,7 +921,7 @@ async fn project_list_empty_budget_pages_preserve_independent_allows_and_current
     cfg.search.max_candidate_pages = 1;
     let provider = provider(cfg);
     let scope = scope().union(&SearchAuthorizationScope::from_selectors(
-        vec![ResourceSelector::Exact {
+        vec![ScalarResourceSelector::Exact {
             value: "team/private/reallowed".into(),
         }],
         vec![],
@@ -1370,7 +1370,7 @@ async fn changing_boundaries_inputs_and_explicit_identity_invalidates_continuati
         (
             json!({"search":"needle","maxResults":1,"pageToken":token}),
             SearchAuthorizationScope::from_selectors(
-                vec![ResourceSelector::Exact {
+                vec![ScalarResourceSelector::Exact {
                     value: "team/repo".into(),
                 }],
                 vec![],
@@ -1537,7 +1537,7 @@ fn descriptors_are_independent_sensitive_reads_with_plain_project_schemas() {
             Some(NativeSearchEnforcement::ResultFiltered)
         );
         assert_eq!(action.lookup, LookupRequirement::None);
-        assert!(action.presentation.is_some());
+        assert!(action.presentation.is_none());
         assert!(!action.sensitive_output_pointers.is_empty());
         assert_eq!(action.input_schema["additionalProperties"], false);
     }
@@ -1994,7 +1994,7 @@ async fn exact_path_grants_do_not_follow_moved_projects_but_reused_paths_are_cur
     project(&server, 1, "moved/new-home", 200).await;
     project(&server, 2, "team/old-home", 200).await;
     let exact = SearchAuthorizationScope::from_selectors(
-        vec![ResourceSelector::Exact {
+        vec![ScalarResourceSelector::Exact {
             value: "team/old-home".into(),
         }],
         vec![],

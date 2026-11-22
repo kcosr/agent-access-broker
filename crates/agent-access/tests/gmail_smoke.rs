@@ -230,7 +230,7 @@ async fn gmail_all_agent_surfaces_preserve_actions_and_deny_unsupported_effects(
         "alice@example.test"
     );
     let inputs = r#"{"id":"abc"}"#;
-    let send=json!({"version":"agent-access.send.v1","kind":"invoke","service":"gmail","action":"thread.trash","inputs":{"id":"abc"}}).to_string();
+    let send=json!({"version":"agent-access.send.v2","kind":"invoke","service":"gmail","action":"thread.trash","inputs":{"id":"abc"}}).to_string();
     for args in [
         vec!["gmail", "thread", "trash", "abc"],
         vec!["invoke", "gmail.thread.trash", "--input-json", inputs],
@@ -276,7 +276,7 @@ async fn gmail_all_agent_surfaces_preserve_actions_and_deny_unsupported_effects(
             .status
             .success()
         );
-        let request=json!({"version":"agent-access.send.v1","kind":"invoke","service":"gmail","action":action,"inputs":{"id":"abc"}}).to_string();
+        let request=json!({"version":"agent-access.send.v2","kind":"invoke","service":"gmail","action":action,"inputs":{"id":"abc"}}).to_string();
         assert!(
             !run(&config, &["send", "--request-json", &request])
                 .status

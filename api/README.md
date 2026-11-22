@@ -119,6 +119,11 @@ contracts section of each inventory shows the result per type.
   non-exhaustive and are built with constructors and `with_*` builders, so a
   downstream crate never writes a struct literal or an exhaustive
   destructuring pattern for them.
+- Presentation `SelectedContent` and `ResolvedPresentation` keep private fields.
+  Format-specific constructors enforce selected value types, and resolution pins
+  the concrete format with its admitted descriptor. `OutputContentFormat` is
+  non-exhaustive and has no global default; omission and soft preferences remain
+  separate request controls.
 - Extendable enums are non-exhaustive. A consumer matches them with a
   fallback arm that rejects what it does not support, failing closed: an
   unsupported credential kind, authority, egress route, I/O kind or OAuth
@@ -138,10 +143,9 @@ These shapes are intentionally exhaustive, each an explicit API decision:
 | `IssuedRefreshToken` | Issued, retained and absent are every refresh token outcome the OAuth manager's fences handle. |
 | `RefreshReplay` | A refresh exchange either consumes its input or may reuse it. |
 | `ProviderResultStreamSource` | A body is in memory or streamed, and the host must deliver every source. |
-| `presentation::ReadContentFormat` | Every embedded-body codec receives the format and must render each one. |
 | `AttachmentLimitsConfig`, `MediaTypePolicyConfig`, `SearchLimitsConfig`, `EgressProxyConfig`, `OAuthRegistrationConfig`, `OAuthPermissionProfile`, `OAuthLoginBinding` | Configuration schema: the fields are the documented keys of tables that reject unknown keys, so a new key is a configuration contract change every renderer and validator must handle. Build them from `Default` with struct update syntax or by deserializing. |
-| `host::ScopeRequestParts`, `host::AdmittedRequestParts` | The host supplies every input, so a new input fails to compile until the host provides it. |
-| `InvalidReasonCodeId`, `SigningError`, `SearchProjectionError`, `UnsupportedCredentialMode`, `presentation::RenderError`, `presentation::UnresolvedBodyOwner` | Unit errors by design: they carry no detail, so nothing sensitive leaks through them. |
+| `host::ScopeRequestParts`, `host::LocalScopeRequestParts`, `host::AdmittedRequestParts` | The host supplies every input, so a new input fails to compile until the host provides it. Local locator validation must explicitly account for every caller, context and correlation binding before credentials or lookup are available. |
+| `InvalidReasonCodeId`, `SigningError`, `SearchProjectionError`, `NonScalarResourceSelector`, `UnsupportedCredentialMode`, `presentation::RenderError` | Unit errors by design: they carry no detail, so nothing sensitive leaks through them. `NonScalarResourceSelector` reports that a selector needs containment evidence without exposing its value. |
 
 Changing any of these, or making a non-exhaustive item exhaustive, is an
 incompatible change reviewed under the rules below.

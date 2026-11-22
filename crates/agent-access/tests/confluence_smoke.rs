@@ -1,3 +1,7 @@
+#[path = "confluence_smoke/content_access.rs"]
+mod content_access;
+#[path = "confluence_smoke/draft_publish_access.rs"]
+mod draft_publish_access;
 #[path = "common/list_mcp.rs"]
 mod list_mcp;
 #[path = "confluence_smoke/plain_inputs.rs"]
@@ -15,13 +19,15 @@ use agent_access_confluence::{
     CONFLUENCE_SPACE_RESOURCE, ConfluenceAttachment, ConfluenceAttachmentContent,
     ConfluenceAttachmentListPage, ConfluenceAttachmentUpload, ConfluenceBackend,
     ConfluenceBackendError, ConfluenceBackendResponse, ConfluenceBlog, ConfluenceBlogCreateRequest,
-    ConfluenceBlogUpdateRequest, ConfluenceComment, ConfluenceCommentAuthor,
-    ConfluenceCommentContainerType, ConfluenceCommentCreateRequest, ConfluenceCommentKind,
-    ConfluenceCommentListPage, ConfluenceCommentListRequest, ConfluenceCommentUpdateRequest,
-    ConfluenceDraftContent, ConfluenceDraftCreateRequest, ConfluenceDraftUpdateRequest,
-    ConfluencePage, ConfluencePageAncestor, ConfluencePageChild, ConfluencePageCreateRequest,
-    ConfluencePageHierarchy, ConfluencePageMovePosition, ConfluencePageUpdateRequest,
-    ConfluenceProvider, ConfluenceProviderConfig, ConfluenceSearchBlog, ConfluenceSearchPage,
+    ConfluenceBlogLocation, ConfluenceBlogUpdateRequest, ConfluenceComment,
+    ConfluenceCommentAuthor, ConfluenceCommentContainerType, ConfluenceCommentCreateRequest,
+    ConfluenceCommentKind, ConfluenceCommentListPage, ConfluenceCommentListRequest,
+    ConfluenceCommentUpdateRequest, ConfluenceContentStatus, ConfluenceDraftContent,
+    ConfluenceDraftCreateRequest, ConfluenceDraftUpdateRequest, ConfluenceMetadataBudget,
+    ConfluenceNode, ConfluenceNodeKind, ConfluencePage, ConfluencePageAncestor,
+    ConfluencePageChild, ConfluencePageCreateRequest, ConfluencePageHierarchy,
+    ConfluencePageMovePosition, ConfluencePageUpdateRequest, ConfluenceParent, ConfluenceProvider,
+    ConfluenceProviderConfig, ConfluenceRegularPage, ConfluenceSearchBlog, ConfluenceSearchPage,
     ConfluenceSearchRequest, ConfluenceSpace,
 };
 use agent_access_provider::SearchLimitsConfig;
@@ -112,16 +118,8 @@ async fn cli_invokes_confluence_read_actions_against_stubbed_backend() {
     let broker = start_broker(CONFLUENCE_ACTIONS, backend.clone()).await;
     let base_url = broker.public_url();
 
-    let page = Command::new(env!("CARGO_BIN_EXE_agent-access"))
-        .args([
-            "--url",
-            &base_url,
-            "--no-token",
-            "confluence",
-            "page",
-            "view",
-            "123456",
-        ])
+    let page = confluence_cli()
+        .args(["--url", &base_url, "confluence", "page", "view", "123456"])
         .output()
         .unwrap();
     assert!(
@@ -149,15 +147,14 @@ async fn cli_invokes_confluence_read_actions_against_stubbed_backend() {
         "https://example.atlassian.net/wiki/spaces/ENG"
     );
     assert_eq!(
-        page_json["result"]["body"]["storage"]["value"],
-        "<p>private deploy steps</p>"
+        page_json["result"]["body"],
+        serde_json::json!({"format":"markdown","value":"private deploy steps"})
     );
 
-    let page_by_url = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let page_by_url = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "page",
             "view",
@@ -174,13 +171,15 @@ async fn cli_invokes_confluence_read_actions_against_stubbed_backend() {
     );
     let page_by_url_json: serde_json::Value = serde_json::from_slice(&page_by_url.stdout).unwrap();
     assert_eq!(page_by_url_json["result"]["id"], "123456");
-    assert_eq!(page_by_url_json["resourceScopes"]["space"][0], "ENG");
+    assert_eq!(
+        page_by_url_json["resourceScopes"],
+        serde_json::json!({"page_location":["https://example.atlassian.net/wiki/content/page/123456"]})
+    );
 
-    let search = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let search = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "page",
             "search",
@@ -233,19 +232,25 @@ async fn cli_invokes_confluence_read_actions_against_stubbed_backend() {
         .clone();
     assert_eq!(
         last_search.cql,
-        r#"type = page AND space IN (ENG) AND (title ~ "runbook")"#
+        r#"type = page AND ((((space = "ENG")))) AND (title ~ "runbook")"#
     );
-    assert_eq!(last_search.spaces, vec!["ENG"]);
     assert_eq!(last_search.max_results, 2);
     assert_eq!(last_search.next_page_token, None);
 
     // The same search continues with the continuation, and Confluence
-    // receives only its own cursor.
-    let next_search = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    // receives only its own cursor. The fixture's next page terminates;
+    // repeating cursor-2 would correctly fail the cursor-cycle check.
+    backend
+        .search_page
+        .lock()
+        .unwrap()
+        .as_mut()
+        .unwrap()
+        .next_page_token = None;
+    let next_search = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "page",
             "search",
@@ -272,12 +277,14 @@ async fn cli_invokes_confluence_read_actions_against_stubbed_backend() {
         .unwrap()
         .clone();
     assert_eq!(last_search.next_page_token.as_deref(), Some("cursor-2"));
+    let next_search_json: serde_json::Value = serde_json::from_slice(&next_search.stdout).unwrap();
+    assert!(next_search_json["result"]["nextPageToken"].is_null());
+    assert_eq!(next_search_json["result"]["scanStatus"], "exhausted");
 
-    let mismatch = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let mismatch = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "page",
             "view",
@@ -295,8 +302,8 @@ async fn cli_invokes_confluence_read_actions_against_stubbed_backend() {
         0
     );
 
-    // The supplied page ID, URL or search query is recorded; returned URLs
-    // and page content are not.
+    // Supplied inputs and the canonical operated location are recorded;
+    // returned presentation URLs and page content are not.
     let page_url = |url: &str| serde_json::json!([audit_input("url", "URL", url)]);
     assert_eq!(
         audited_inputs(&broker, "page.view"),
@@ -318,7 +325,9 @@ async fn cli_invokes_confluence_read_actions_against_stubbed_backend() {
     assert!(audit.contains("\"returnedUrlFields\":[\"webUrl\",\"spaceUrl\"]"));
     let outside_inputs = audit_text_without_inputs(&broker);
     assert!(!outside_inputs.contains("https://example.atlassian.net/wiki/pages/viewpage.action"));
-    assert!(!outside_inputs.contains("https://example.atlassian.net/wiki/spaces/ENG"));
+    assert!(outside_inputs.contains("https://example.atlassian.net/wiki/content/page/123456"));
+    assert!(!outside_inputs.contains("https://example.atlassian.net/wiki/spaces/ENG/pages/123456"));
+    assert!(!outside_inputs.contains("\"spaceUrl\":\"https://"));
     assert!(!audit.contains("private deploy steps"));
     assert!(!audit.contains("<p>"));
 
@@ -350,11 +359,10 @@ async fn cli_invokes_confluence_read_actions_against_stubbed_backend() {
     });
     let denied_broker = start_broker(CONFLUENCE_ACTIONS, denied_backend).await;
     let denied_base_url = denied_broker.public_url();
-    let denied = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let denied = confluence_cli()
         .args([
             "--url",
             &denied_base_url,
-            "--no-token",
             "confluence",
             "page",
             "view",
@@ -372,8 +380,21 @@ async fn cli_invokes_confluence_read_actions_against_stubbed_backend() {
         "resource scope is not authorized or unavailable"
     );
     assert_eq!(denied_json["resourceScopes"].as_object().unwrap().len(), 0);
-    let denied_audit = denied_broker.audit().unwrap().text();
-    assert!(denied_audit.contains("\"space\":[\"OPS\"]"));
+    let denied_audit = denied_broker
+        .audit()
+        .unwrap()
+        .require_action("confluence", "page.view");
+    assert_eq!(denied_audit.len(), 1);
+    assert_eq!(
+        denied_audit[0]["resourceScopes"],
+        serde_json::json!({"page_location":["https://example.atlassian.net/wiki/content/page/654321"]})
+    );
+    assert!(
+        denied_audit[0]["providerAudit"]
+            .get("locationProof")
+            .is_none(),
+        "unadmitted denials must not emit detailed location proof summaries"
+    );
     stop(denied_broker).await;
 
     let no_grant_backend = Arc::new(StubConfluenceBackend {
@@ -402,11 +423,10 @@ async fn cli_invokes_confluence_read_actions_against_stubbed_backend() {
     });
     let no_grant_broker = start_broker(&["search"], no_grant_backend.clone()).await;
     let no_grant_base_url = no_grant_broker.public_url();
-    let no_grant = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let no_grant = confluence_cli()
         .args([
             "--url",
             &no_grant_base_url,
-            "--no-token",
             "confluence",
             "page",
             "view",
@@ -456,11 +476,10 @@ async fn cli_invokes_confluence_read_actions_against_stubbed_backend() {
     });
     let page_only_broker = start_broker(&["page.view"], page_only_backend.clone()).await;
     let page_only_base_url = page_only_broker.public_url();
-    let page_only_blog = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let page_only_blog = confluence_cli()
         .args([
             "--url",
             &page_only_base_url,
-            "--no-token",
             "confluence",
             "blog",
             "view",
@@ -502,11 +521,10 @@ async fn cli_invokes_confluence_read_actions_against_stubbed_backend() {
     });
     let blog_only_broker = start_broker(&["blog.view"], blog_only_backend.clone()).await;
     let blog_only_base_url = blog_only_broker.public_url();
-    let blog_only_page = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let blog_only_page = confluence_cli()
         .args([
             "--url",
             &blog_only_base_url,
-            "--no-token",
             "confluence",
             "page",
             "view",
@@ -747,11 +765,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
     let broker = start_broker(CONFLUENCE_ACTIONS, backend.clone()).await;
     let base_url = broker.public_url();
 
-    let create = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let create = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "page",
             "create",
@@ -759,7 +776,9 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
             "ENG",
             "--title",
             "Created Page",
-            "--parent",
+            "--parent-kind",
+            "page",
+            "--parent-id",
             "123456",
             "--content-file",
             storage_body_path.to_str().unwrap(),
@@ -777,7 +796,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
     let create_json: serde_json::Value = serde_json::from_slice(&create.stdout).unwrap();
     assert_eq!(create_json["decision"], "allow");
     assert_eq!(create_json["result"]["pageId"], "900001");
-    assert_eq!(create_json["result"]["parentPageId"], "123456");
+    assert_eq!(
+        create_json["result"]["parent"],
+        serde_json::json!({"kind":"page","id":"123456"})
+    );
     assert_eq!(create_json["result"]["placement"], "requested_parent");
     assert_eq!(create_json["result"]["verification"]["status"], "matched");
     assert_eq!(
@@ -789,11 +811,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         "https://example.atlassian.net/wiki/spaces/ENG"
     );
 
-    let page_move = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let page_move = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "page",
             "move",
@@ -825,11 +846,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         "matched"
     );
 
-    let update = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let update = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "page",
             "update",
@@ -860,11 +880,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         "https://example.atlassian.net/wiki/spaces/ENG"
     );
 
-    let conflict = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let conflict = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "page",
             "update",
@@ -884,11 +903,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
     assert_eq!(conflict_json["reasonCode"], "version_conflict");
     assert_eq!(conflict_json["result"]["currentVersion"], 8);
 
-    let attach = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let attach = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "page",
             "attach",
@@ -911,11 +929,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         "att123"
     );
 
-    let list = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let list = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "page",
             "attachment",
@@ -936,11 +953,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         .unwrap();
     assert_eq!(listed_attachment_id, "att123");
 
-    let download = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let download = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "page",
             "attachment",
@@ -966,11 +982,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
     let download_json: serde_json::Value = serde_json::from_slice(&download.stdout).unwrap();
     assert!(download_json["result"].get("contentBase64").is_none());
 
-    let verify_mismatch = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let verify_mismatch = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "page",
             "verify",
@@ -986,11 +1001,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
     assert_eq!(verify_mismatch_json["decision"], "allow");
     assert_eq!(verify_mismatch_json["reasonCode"], "verification_mismatch");
 
-    let verify = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let verify = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "page",
             "verify",
@@ -1011,11 +1025,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
     let verify_json: serde_json::Value = serde_json::from_slice(&verify.stdout).unwrap();
     assert_eq!(verify_json["result"]["verification"]["status"], "matched");
 
-    let page_footer_list = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let page_footer_list = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "page",
             "footer-comment",
@@ -1039,15 +1052,14 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         "5001"
     );
     assert_eq!(
-        page_footer_list_json["result"]["comments"][0]["body"]["storage"]["value"],
-        "<p>page footer comment</p>"
+        page_footer_list_json["result"]["comments"][0]["body"],
+        serde_json::json!({"format":"markdown","value":"page footer comment"})
     );
 
-    let page_footer_view = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let page_footer_view = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "page",
             "footer-comment",
@@ -1071,11 +1083,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         "123456"
     );
 
-    let page_footer_add = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let page_footer_add = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "page",
             "footer-comment",
@@ -1097,15 +1108,14 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
     let page_footer_add_json: serde_json::Value =
         serde_json::from_slice(&page_footer_add.stdout).unwrap();
     assert_eq!(
-        page_footer_add_json["result"]["comment"]["body"]["storage"]["value"],
-        "<p>comment secret body</p>"
+        page_footer_add_json["result"]["comment"]["body"],
+        serde_json::json!({"format":"markdown","value":"comment secret body"})
     );
 
-    let page_footer_replies = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let page_footer_replies = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "page",
             "footer-comment",
@@ -1129,11 +1139,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         "5002"
     );
 
-    let page_footer_reply = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let page_footer_reply = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "page",
             "footer-comment",
@@ -1159,11 +1168,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         "5001"
     );
 
-    let page_footer_update = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let page_footer_update = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "page",
             "footer-comment",
@@ -1187,16 +1195,15 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
     let page_footer_update_json: serde_json::Value =
         serde_json::from_slice(&page_footer_update.stdout).unwrap();
     assert_eq!(
-        page_footer_update_json["result"]["comment"]["body"]["storage"]["value"],
-        "<p>comment updated secret body</p>"
+        page_footer_update_json["result"]["comment"]["body"],
+        serde_json::json!({"format":"markdown","value":"comment updated secret body"})
     );
     assert_eq!(page_footer_update_json["result"]["version"], 2);
 
-    let page_inline_list = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let page_inline_list = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "page",
             "inline-comment",
@@ -1222,11 +1229,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         "6001"
     );
 
-    let page_inline_view = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let page_inline_view = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "page",
             "inline-comment",
@@ -1250,11 +1256,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         "open"
     );
 
-    let page_inline_update = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let page_inline_update = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "page",
             "inline-comment",
@@ -1279,11 +1284,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         serde_json::from_slice(&page_inline_update.stdout).unwrap();
     assert_eq!(page_inline_update_json["result"]["version"], 2);
 
-    let page_inline_replies = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let page_inline_replies = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "page",
             "inline-comment",
@@ -1307,11 +1311,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         "6002"
     );
 
-    let page_inline_reply = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let page_inline_reply = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "page",
             "inline-comment",
@@ -1337,11 +1340,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         "6001"
     );
 
-    let page_inline_delete = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let page_inline_delete = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "page",
             "inline-comment",
@@ -1360,16 +1362,8 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         serde_json::from_slice(&page_inline_delete.stdout).unwrap();
     assert_eq!(page_inline_delete_json["result"]["status"], "deleted");
 
-    let blog_view = Command::new(env!("CARGO_BIN_EXE_agent-access"))
-        .args([
-            "--url",
-            &base_url,
-            "--no-token",
-            "confluence",
-            "blog",
-            "view",
-            "222222",
-        ])
+    let blog_view = confluence_cli()
+        .args(["--url", &base_url, "confluence", "blog", "view", "222222"])
         .output()
         .unwrap();
     assert!(
@@ -1389,15 +1383,14 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         "https://example.atlassian.net/wiki/spaces/ENG"
     );
     assert_eq!(
-        blog_view_json["result"]["body"]["storage"],
-        "<p>blog secret body</p>"
+        blog_view_json["result"]["body"],
+        serde_json::json!({"format":"markdown","value":"blog secret body"})
     );
 
-    let blog_view_by_url = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let blog_view_by_url = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "blog",
             "view",
@@ -1416,11 +1409,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         serde_json::from_slice(&blog_view_by_url.stdout).unwrap();
     assert_eq!(blog_view_by_url_json["result"]["blogId"], "222222");
 
-    let blog_search = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let blog_search = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "blog",
             "search",
@@ -1448,11 +1440,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         "https://example.atlassian.net/wiki/spaces/ENG"
     );
 
-    let blog_create = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let blog_create = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "blog",
             "create",
@@ -1484,11 +1475,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         "https://example.atlassian.net/wiki/spaces/ENG"
     );
 
-    let blog_update = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let blog_update = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "blog",
             "update",
@@ -1517,11 +1507,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         "https://example.atlassian.net/wiki/pages/viewpage.action?pageId=222222"
     );
 
-    let blog_attach = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let blog_attach = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "blog",
             "attach",
@@ -1543,11 +1532,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         .as_str()
         .unwrap();
 
-    let blog_list = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let blog_list = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "blog",
             "attachment",
@@ -1568,11 +1556,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         blog_attachment_id
     );
 
-    let blog_list_by_url = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let blog_list_by_url = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "blog",
             "attachment",
@@ -1595,11 +1582,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         blog_attachment_id
     );
 
-    let blog_download = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let blog_download = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "blog",
             "attachment",
@@ -1623,11 +1609,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         "diagram secret bytes"
     );
 
-    let blog_verify = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let blog_verify = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "blog",
             "verify",
@@ -1651,11 +1636,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         "matched"
     );
 
-    let blog_footer_list = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let blog_footer_list = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "blog",
             "footer-comment",
@@ -1679,11 +1663,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         "7001"
     );
 
-    let blog_footer_view = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let blog_footer_view = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "blog",
             "footer-comment",
@@ -1707,11 +1690,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         "222222"
     );
 
-    let blog_footer_add = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let blog_footer_add = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "blog",
             "footer-comment",
@@ -1732,21 +1714,23 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
     );
     let blog_footer_add_json: serde_json::Value =
         serde_json::from_slice(&blog_footer_add.stdout).unwrap();
-    let blog_footer_add_body =
-        blog_footer_add_json["result"]["comment"]["body"]["storage"]["value"]
-            .as_str()
-            .unwrap();
-    assert!(
-        blog_footer_add_body.contains("normalized page inline")
-            && blog_footer_add_body.contains("reply")
-            && !blog_footer_add_body.contains("**")
+    assert_eq!(
+        blog_footer_add_json["result"]["comment"]["body"],
+        serde_json::json!({"format":"markdown","value":"normalized page inline **reply** sentinel 715cab"})
     );
+    let comment_id = blog_footer_add_json["result"]["comment"]["commentId"]
+        .as_str()
+        .unwrap();
+    {
+        let comments = backend.comments.lock().unwrap();
+        let native_body = &comments[comment_id].bodies["storage"];
+        assert!(native_body.contains("reply") && !native_body.contains("**"));
+    }
 
-    let blog_footer_replies = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let blog_footer_replies = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "blog",
             "footer-comment",
@@ -1770,11 +1754,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         "7002"
     );
 
-    let blog_footer_reply = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let blog_footer_reply = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "blog",
             "footer-comment",
@@ -1800,11 +1783,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         "7001"
     );
 
-    let blog_footer_update = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let blog_footer_update = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "blog",
             "footer-comment",
@@ -1828,16 +1810,15 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
     let blog_footer_update_json: serde_json::Value =
         serde_json::from_slice(&blog_footer_update.stdout).unwrap();
     assert_eq!(
-        blog_footer_update_json["result"]["comment"]["body"]["storage"]["value"],
-        "<p>comment updated secret body</p>"
+        blog_footer_update_json["result"]["comment"]["body"],
+        serde_json::json!({"format":"markdown","value":"comment updated secret body"})
     );
     assert_eq!(blog_footer_update_json["result"]["version"], 2);
 
-    let blog_inline_list = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let blog_inline_list = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "blog",
             "inline-comment",
@@ -1863,11 +1844,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         "8001"
     );
 
-    let blog_inline_view = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let blog_inline_view = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "blog",
             "inline-comment",
@@ -1891,11 +1871,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         "open"
     );
 
-    let blog_inline_update = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let blog_inline_update = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "blog",
             "inline-comment",
@@ -1920,11 +1899,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         serde_json::from_slice(&blog_inline_update.stdout).unwrap();
     assert_eq!(blog_inline_update_json["result"]["version"], 2);
 
-    let blog_inline_replies = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let blog_inline_replies = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "blog",
             "inline-comment",
@@ -1948,11 +1926,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         "8002"
     );
 
-    let blog_inline_reply = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let blog_inline_reply = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "blog",
             "inline-comment",
@@ -1978,11 +1955,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         "8001"
     );
 
-    let blog_inline_delete = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let blog_inline_delete = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "blog",
             "inline-comment",
@@ -2001,11 +1977,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         serde_json::from_slice(&blog_inline_delete.stdout).unwrap();
     assert_eq!(blog_inline_delete_json["result"]["status"], "deleted");
 
-    let page_draft_create = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let page_draft_create = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "page",
             "draft",
@@ -2039,15 +2014,17 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         .as_str()
         .unwrap()
         .to_string();
-    assert!(page_draft_handle.starts_with("aab_confluence_draft_v4_"));
+    assert!(page_draft_handle.starts_with("aab_confluence_draft_v5_"));
     assert_eq!(page_draft_create_json["result"]["status"], "draft");
-    assert_eq!(page_draft_create_json["result"]["parentPageId"], "654321");
+    assert_eq!(
+        page_draft_create_json["result"]["parent"],
+        serde_json::json!({"kind":"page","id":"654321"})
+    );
 
-    let page_draft_view = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let page_draft_view = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "page",
             "draft",
@@ -2069,15 +2046,14 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
     let page_draft_view_json: serde_json::Value =
         serde_json::from_slice(&page_draft_view.stdout).unwrap();
     assert_eq!(
-        page_draft_view_json["result"]["body"]["storage"]["value"],
-        "<p>create secret body</p>"
+        page_draft_view_json["result"]["body"],
+        serde_json::json!({"format":"markdown","value":"create secret body"})
     );
 
-    let page_draft_attach = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let page_draft_attach = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "page",
             "draft",
@@ -2105,11 +2081,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
             .unwrap()
             .to_string();
 
-    let page_draft_list = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let page_draft_list = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "page",
             "draft",
@@ -2134,11 +2109,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         page_draft_attachment_id
     );
 
-    let page_draft_download = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let page_draft_download = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "page",
             "draft",
@@ -2165,11 +2139,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         "diagram secret bytes"
     );
 
-    let page_draft_verify = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let page_draft_verify = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "page",
             "draft",
@@ -2193,11 +2166,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         String::from_utf8_lossy(&page_draft_verify.stderr)
     );
 
-    let page_draft_update = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let page_draft_update = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "page",
             "draft",
@@ -2221,11 +2193,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         String::from_utf8_lossy(&page_draft_update.stderr)
     );
 
-    let page_draft_publish = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let page_draft_publish = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "page",
             "draft",
@@ -2252,11 +2223,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         page_draft_attachment_id
     );
 
-    let staged_page_draft = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let staged_page_draft = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "page",
             "draft",
@@ -2284,11 +2254,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         .unwrap()
         .to_string();
 
-    let staged_page_attach = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let staged_page_attach = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "page",
             "draft",
@@ -2310,11 +2279,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         "service_action_denied"
     );
 
-    let blog_draft_create = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let blog_draft_create = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "blog",
             "draft",
@@ -2347,11 +2315,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         .unwrap()
         .to_string();
 
-    let blog_draft_attach = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let blog_draft_attach = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "blog",
             "draft",
@@ -2379,11 +2346,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
             .unwrap()
             .to_string();
 
-    let blog_draft_list = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let blog_draft_list = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "blog",
             "draft",
@@ -2408,11 +2374,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         blog_draft_attachment_id
     );
 
-    let blog_draft_download = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let blog_draft_download = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "blog",
             "draft",
@@ -2439,11 +2404,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         "diagram secret bytes"
     );
 
-    let blog_draft_verify = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let blog_draft_verify = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "blog",
             "draft",
@@ -2467,11 +2431,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         String::from_utf8_lossy(&blog_draft_verify.stderr)
     );
 
-    let blog_draft_update = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let blog_draft_update = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "blog",
             "draft",
@@ -2495,11 +2458,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         String::from_utf8_lossy(&blog_draft_update.stderr)
     );
 
-    let staged_blog_draft = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let staged_blog_draft = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "blog",
             "draft",
@@ -2521,11 +2483,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         String::from_utf8_lossy(&staged_blog_draft.stderr)
     );
 
-    let blog_draft_publish = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let blog_draft_publish = confluence_cli()
         .args([
             "--url",
             &base_url,
-            "--no-token",
             "confluence",
             "blog",
             "draft",
@@ -2608,14 +2569,18 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
     assert!(audit.contains("\"action\":\"blog.inline_comment.reply.add\""));
     assert!(audit.contains("\"action\":\"blog.verify\""));
     assert!(audit.contains("\"returnedUrlFields\":[\"webUrl\",\"spaceUrl\"]"));
-    // Creation records its space, title and parent; bodies, returned URLs
-    // and draft handles are never recorded.
+    // Creation records its space, title, parent and canonical operated location;
+    // bodies, returned presentation URLs and draft handles are never recorded.
     assert_eq!(
         audited_inputs(&broker, "page.create"),
         [serde_json::json!([
             audit_input("space", "Space", "ENG"),
             audit_input("title", "Title", "Created Page"),
-            audit_input("parentPageId", "Parent page ID", "123456")
+            audit_input(
+                "parent",
+                "Parent",
+                serde_json::json!({"kind":"page","id":"123456"})
+            )
         ])]
     );
     assert_eq!(
@@ -2632,7 +2597,9 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
     );
     let outside_inputs = audit_text_without_inputs(&broker);
     assert!(!outside_inputs.contains("https://example.atlassian.net/wiki/pages/viewpage.action"));
-    assert!(!outside_inputs.contains("https://example.atlassian.net/wiki/spaces/ENG"));
+    assert!(outside_inputs.contains("https://example.atlassian.net/wiki/content/page/123456"));
+    assert!(!outside_inputs.contains("https://example.atlassian.net/wiki/spaces/ENG/pages/123456"));
+    assert!(!outside_inputs.contains("\"spaceUrl\":\"https://"));
     assert!(!audit.contains("create secret body"));
     assert!(!audit.contains("updated secret body"));
     assert!(!audit.contains("comment secret body"));
@@ -2647,7 +2614,7 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
     assert!(!audit.contains("blog inline reply"));
     assert!(!audit.contains("blog secret body"));
     assert!(!audit.contains("diagram secret bytes"));
-    assert!(!audit.contains("aab_confluence_draft_v4_"));
+    assert!(!audit.contains("aab_confluence_draft_v5_"));
     for sentinel in [
         "normalized markdown sentinel 6f74d1",
         "native atlas sentinel 29ca81",
@@ -2786,8 +2753,72 @@ struct StubConfluenceBackend {
     metadata_calls: Mutex<u32>,
 }
 
+fn read_fixture_node(page: &ConfluencePage) -> ConfluenceNode {
+    assert_eq!(page.status.as_deref(), Some("current"));
+    ConfluenceNode {
+        id: page.id.clone(),
+        kind: ConfluenceNodeKind::Page,
+        space_id: "98765".into(),
+        parent: None,
+        status: ConfluenceContentStatus::Current,
+        version: Some(page.version),
+    }
+}
+
+fn read_fixture_space(
+    id: &str,
+    page: &ConfluencePage,
+) -> Result<ConfluenceBackendResponse<ConfluenceSpace>, ConfluenceBackendError> {
+    if id != "98765" {
+        return Err(ConfluenceBackendError::NotFound);
+    }
+    Ok(ConfluenceBackendResponse {
+        value: ConfluenceSpace {
+            id: id.into(),
+            key: page.space.clone(),
+            web_url: None,
+            alias: None,
+            status: Some("current".into()),
+            homepage_id: Some(page.id.clone()),
+        },
+        status: 200,
+        duration_ms: 1,
+    })
+}
+
 #[async_trait]
 impl ConfluenceBackend for StubConfluenceBackend {
+    async fn hierarchy_node(
+        &self,
+        kind: ConfluenceNodeKind,
+        id: &str,
+        status: ConfluenceContentStatus,
+        _require_parent: bool,
+        credential: &agent_access_confluence::AtlassianCredential,
+        budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceNode>, ConfluenceBackendError> {
+        budget.charge_request()?;
+        if kind != ConfluenceNodeKind::Page || status != ConfluenceContentStatus::Current {
+            return Err(ConfluenceBackendError::NotFound);
+        }
+        let page = self.page_metadata(id, credential).await?;
+        Ok(ConfluenceBackendResponse {
+            value: read_fixture_node(&page.value),
+            status: page.status,
+            duration_ms: page.duration_ms,
+        })
+    }
+
+    async fn space_location_metadata(
+        &self,
+        id: &str,
+        _credential: &agent_access_confluence::AtlassianCredential,
+        budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceSpace>, ConfluenceBackendError> {
+        budget.charge_request()?;
+        read_fixture_space(id, &self.page)
+    }
+
     async fn space_list(
         &self,
         _request: agent_access_confluence::ConfluenceSpaceListRequest,
@@ -2965,7 +2996,10 @@ impl WriteStubConfluenceBackend {
             space: space.key.clone(),
             space_id: space.id.clone(),
             space_alias: None,
-            parent_page_id,
+            parent: parent_page_id.map(|id| ConfluenceParent {
+                kind: ConfluenceNodeKind::Page,
+                id,
+            }),
             web_url: None,
             space_web_url: None,
             status: Some(status.to_string()),
@@ -2981,6 +3015,119 @@ impl WriteStubConfluenceBackend {
 
 #[async_trait]
 impl ConfluenceBackend for WriteStubConfluenceBackend {
+    async fn hierarchy_node(
+        &self,
+        kind: ConfluenceNodeKind,
+        id: &str,
+        status: ConfluenceContentStatus,
+        _require_parent: bool,
+        credential: &agent_access_confluence::AtlassianCredential,
+        budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceNode>, ConfluenceBackendError> {
+        budget.charge_request()?;
+        if kind != ConfluenceNodeKind::Page {
+            return Err(ConfluenceBackendError::NotFound);
+        }
+        self.credentials
+            .lock()
+            .unwrap()
+            .push(credential.static_credential().unwrap().clone());
+        let response = self
+            .page_hierarchy(id, status == ConfluenceContentStatus::Draft, credential)
+            .await?;
+        if response.value.status != status.as_str() {
+            return Err(ConfluenceBackendError::ScopeUnresolved);
+        }
+        Ok(ConfluenceBackendResponse {
+            value: ConfluenceNode {
+                id: response.value.id,
+                kind,
+                space_id: response.value.space_id,
+                parent: response.value.parent_page_id.map(|id| ConfluenceParent {
+                    kind: ConfluenceNodeKind::Page,
+                    id,
+                }),
+                status,
+                version: Some(response.value.version),
+            },
+            status: response.status,
+            duration_ms: response.duration_ms,
+        })
+    }
+
+    async fn regular_page_metadata(
+        &self,
+        id: &str,
+        require_parent: bool,
+        credential: &agent_access_confluence::AtlassianCredential,
+        budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceRegularPage>, ConfluenceBackendError> {
+        let response = self
+            .hierarchy_node(
+                ConfluenceNodeKind::Page,
+                id,
+                ConfluenceContentStatus::Current,
+                require_parent,
+                credential,
+                budget,
+            )
+            .await?;
+        let page = self.page_metadata(id, credential).await?;
+        Ok(ConfluenceBackendResponse {
+            value: ConfluenceRegularPage {
+                node: response.value,
+                title: page.value.title,
+            },
+            status: response.status,
+            duration_ms: response.duration_ms,
+        })
+    }
+
+    async fn blog_location_metadata(
+        &self,
+        id: &str,
+        status: ConfluenceContentStatus,
+        _credential: &agent_access_confluence::AtlassianCredential,
+        budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceBlogLocation>, ConfluenceBackendError> {
+        budget.charge_request()?;
+        let (space_id, version, actual_status) = match status {
+            ConfluenceContentStatus::Current => {
+                let blogs = self.blogs.lock().unwrap();
+                let blog = blogs.get(id).ok_or(ConfluenceBackendError::NotFound)?;
+                (blog.space_id.clone(), blog.version, blog.status.clone())
+            }
+            ConfluenceContentStatus::Draft => {
+                let drafts = self.blog_drafts.lock().unwrap();
+                let draft = drafts.get(id).ok_or(ConfluenceBackendError::NotFound)?;
+                (draft.space_id.clone(), draft.version, draft.status.clone())
+            }
+        };
+        if actual_status.as_deref() != Some(status.as_str()) {
+            return Err(ConfluenceBackendError::ScopeUnresolved);
+        }
+        Ok(ConfluenceBackendResponse {
+            value: ConfluenceBlogLocation {
+                id: id.into(),
+                space_id,
+                version,
+                status,
+            },
+            status: 200,
+            duration_ms: 2,
+        })
+    }
+
+    async fn space_location_metadata(
+        &self,
+        id: &str,
+        credential: &agent_access_confluence::AtlassianCredential,
+        budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceSpace>, ConfluenceBackendError> {
+        budget.charge_request()?;
+        self.space_by_id(id, credential).await
+    }
+
     async fn space_list(
         &self,
         _request: agent_access_confluence::ConfluenceSpaceListRequest,
@@ -3345,8 +3492,11 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
             ));
         }
         let parent_page_id = request
-            .parent_page_id
-            .clone()
+            .parent
+            .map(|parent| {
+                assert_eq!(parent.kind, ConfluenceNodeKind::Page);
+                parent.id
+            })
             .or_else(|| space.homepage_id.clone())
             .ok_or_else(|| {
                 ConfluenceBackendError::Protocol("space homepage missing".to_string())
@@ -3425,7 +3575,11 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
         let id = next.to_string();
         *next += 1;
         let parent_page_id = request
-            .parent_page_id
+            .parent
+            .map(|parent| {
+                assert_eq!(parent.kind, ConfluenceNodeKind::Page);
+                parent.id
+            })
             .or_else(|| space.homepage_id.clone())
             .ok_or_else(|| {
                 ConfluenceBackendError::Protocol("space homepage missing".to_string())
@@ -3566,7 +3720,10 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
                 request.content_id,
                 request.title,
                 &space,
-                draft.parent_page_id,
+                draft.parent.map(|parent| {
+                    assert_eq!(parent.kind, ConfluenceNodeKind::Page);
+                    parent.id
+                }),
                 "current",
                 request.body,
             );
@@ -4485,9 +4642,34 @@ where
         agent_access_broker::build_identity(),
     )
     .unwrap();
-    let document = confluence_document(application.directory(), actions);
+    let mut document: toml::Value =
+        toml::from_str(&confluence_document(application.directory(), actions)).unwrap();
+    // Typed CLI calls discover the authenticated catalog first. Keep anonymous
+    // HTTP admission in this fixture to exercise its separate invocation path.
+    document["identity"] = toml::from_str(&format!(
+        r#"
+mode = "optional"
+authority = "toml"
+[[sources]]
+name = "cli-fixture"
+type = "static_principals"
+header = "Authorization"
+scheme = "Bearer"
+[[sources.principals]]
+principal = "confluence-cli"
+token_refs = [{}]
+"#,
+        secret_ref(
+            application.directory(),
+            "cli-identity-token.txt",
+            CONFLUENCE_CLI_TOKEN
+        )
+    ))
+    .unwrap();
+    document["policy"]["grants"][0]["subjects"] =
+        toml::Value::try_from(vec!["group:anonymous", "user:confluence-cli"]).unwrap();
     application
-        .config_document(document)
+        .config_document(toml::to_string(&document).unwrap())
         .provider_fixture("confluence", confluence_fixture(backend))
         .start()
         .await
@@ -4540,6 +4722,29 @@ fn toml_string(value: impl std::fmt::Display) -> String {
 fn secret_ref(directory: &FixtureDir, name: &str, contents: &str) -> String {
     let path = directory.secret_file(name, contents).unwrap();
     toml_string(format_args!("file:{}", path.display()))
+}
+
+const CONFLUENCE_CLI_TOKEN: &str = "confluence-cli-fixture-token";
+
+fn confluence_cli() -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_agent-access"));
+    let config = temp_path("cli-defaults.toml");
+    std::fs::write(&config, "").unwrap();
+    for (key, _) in std::env::vars_os() {
+        if key.to_string_lossy().starts_with("AGENT_ACCESS_") {
+            command.env_remove(key);
+        }
+    }
+    command.arg("--config").arg(config);
+    command.args([
+        "--token-value",
+        CONFLUENCE_CLI_TOKEN,
+        "--identity-header",
+        "Authorization",
+        "--identity-scheme",
+        "Bearer",
+    ]);
+    command
 }
 
 /// Every Confluence action the smokes call.
@@ -4693,6 +4898,8 @@ path = {audit}
 fn confluence_provider_config(max_results: u32) -> ConfluenceProviderConfig {
     ConfluenceProviderConfig {
         listing: Default::default(),
+        content_access: Default::default(),
+        content_search: Default::default(),
         tenant_host: "example.atlassian.net".to_string(),
         cloud_id: None,
         egress_proxy: None,

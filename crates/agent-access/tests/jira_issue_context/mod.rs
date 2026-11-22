@@ -104,31 +104,6 @@ pub(super) fn assert_context(result: &Value, disclose: bool) {
     assert!(result.get("epic").is_none());
 }
 
-fn assert_context_markdown(markdown: &str, disclose: bool) {
-    for text in [
-        "resolution-1",
-        "Resolved context",
-        "2026-10-23T12:30:00.000+0530",
-        "2026-10-30",
-        "## Components",
-        "component-2",
-        "## Fix versions",
-        "Release context",
-        "## Affected versions\n\nNone.",
-        "custom-done",
-        "Completed context",
-    ] {
-        assert!(markdown.contains(text), "missing {text} in {markdown}");
-    }
-    for section in ["## Parent", "## Subtasks"] {
-        assert_eq!(markdown.contains(section), disclose);
-    }
-    for secret in ["PARENT-42", "CHILD-42"] {
-        assert_eq!(markdown.contains(secret), disclose);
-    }
-    assert!(!markdown.to_lowercase().contains("epic children"));
-}
-
 fn context_backend() -> Arc<StubJiraBackend> {
     let mut backend = renamed_issue_backend("PROJ-1", "PROJ-1", "PROJ", "Context source");
     *backend.issue_view_context.lock().unwrap() = complete_context();
@@ -163,11 +138,10 @@ async fn context_crosses_typed_invoke_send_and_http_with_unchanged_credentials_a
                 "jira.issue.view",
                 "--input-json",
                 r#"{"issue":"PROJ-1"}"#,
-                "--read-content-format",
+                "--output-content-format",
                 "markdown",
             ],
         ] {
-            let normalized = args.contains(&"--read-content-format");
             let output = authenticated_jira_cli(&base_url)
                 .args(args)
                 .output()
@@ -176,7 +150,7 @@ async fn context_crosses_typed_invoke_send_and_http_with_unchanged_credentials_a
             let response: Value = serde_json::from_slice(&output.stdout).unwrap();
             assert_context(&response["result"], disclose);
             assert_eq!(response["result"].get("issueLinks").is_some(), disclose);
-            assert_eq!(response["result"].get("renderedBody").is_some(), normalized);
+            assert!(response["result"].get("renderedBody").is_none());
             assert_new_backend_operations(
                 &backend,
                 &mut cursor,
@@ -184,14 +158,14 @@ async fn context_crosses_typed_invoke_send_and_http_with_unchanged_credentials_a
             );
         }
         let request = temp_path("jira-issue-context-send.json");
-        std::fs::write(&request, json!({"version":"agent-access.send.v1","kind":"invoke","service":"jira","action":"issue.view","inputs":{"issue":"PROJ-1"},"responseFormat":"markdown"}).to_string()).unwrap();
+        std::fs::write(&request, json!({"version":"agent-access.send.v2","kind":"invoke","service":"jira","action":"issue.view","inputs":{"issue":"PROJ-1"},"outputContentFormat":"markdown"}).to_string()).unwrap();
         let output = authenticated_jira_cli(&base_url)
             .args(["send", "--request-file", request.to_str().unwrap()])
             .output()
             .unwrap();
         assert_success("Jira context Markdown", &output);
         let response: Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert_context_markdown(response["result"]["value"].as_str().unwrap(), disclose);
+        assert_context(&response["result"], disclose);
         std::fs::remove_file(request).unwrap();
         assert_new_backend_operations(
             &backend,

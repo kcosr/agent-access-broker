@@ -28,6 +28,9 @@ pub(in crate::tests) struct Connection<'a> {
     pub(in crate::tests) path: &'a str,
     /// The effective selection: the requested value, or the default when omitted.
     pub(in crate::tests) output_schemas: OutputSchemas,
+    pub(in crate::tests) include_text_copy: bool,
+    pub(in crate::tests) preferred_output_content_format:
+        Option<agent_access_provider::presentation::OutputContentFormat>,
 }
 
 fn capture(connection: &Connection<'_>, mut record: Value) {
@@ -42,6 +45,8 @@ fn capture(connection: &Connection<'_>, mut record: Value) {
     record["connection"] = json!(connection.id);
     record["view"] = json!(connection.path);
     record["outputSchemas"] = json!(connection.output_schemas);
+    record["includeTextCopy"] = json!(connection.include_text_copy);
+    record["preferredOutputContentFormat"] = json!(connection.preferred_output_content_format);
     let path = std::path::PathBuf::from(path);
     assert!(
         path.is_absolute(),
@@ -76,17 +81,26 @@ pub(in crate::tests) fn check_definition(output_schemas: OutputSchemas, tool: &V
 /// Checks and captures each listed tool definition.
 pub(in crate::tests) fn capture_tools(connection: &Connection<'_>, tools: &[Value]) {
     for tool in tools {
-        check_definition(connection.output_schemas, tool);
-        let mut record = json!({
-            "kind": "tool", "name": tool["name"],
-            "description": tool["description"], "inputSchema": tool["inputSchema"],
-            "outputSchemaAdvertised": tool.get("outputSchema").is_some(),
-        });
-        if let Some(schema) = tool.get("outputSchema") {
-            record["outputSchema"] = schema.clone();
-        }
-        capture(connection, record);
+        capture_definition(connection, tool, "tools/list");
     }
+}
+
+pub(in crate::tests) fn capture_projected_tool(connection: &Connection<'_>, tool: &Value) {
+    capture_definition(connection, tool, "runtime_projection");
+}
+
+fn capture_definition(connection: &Connection<'_>, tool: &Value, source: &str) {
+    check_definition(connection.output_schemas, tool);
+    let mut record = json!({
+        "kind": "tool", "name": tool["name"],
+        "description": tool["description"], "inputSchema": tool["inputSchema"],
+        "outputSchemaAdvertised": tool.get("outputSchema").is_some(),
+        "definitionSource": source,
+    });
+    if let Some(schema) = tool.get("outputSchema") {
+        record["outputSchema"] = schema.clone();
+    }
+    capture(connection, record);
 }
 
 /// Captures one `tools/call` JSON-RPC response and checks it against `tool`,
@@ -101,8 +115,17 @@ pub(in crate::tests) fn check_call(
         return;
     };
     let structured = result.get("structuredContent");
+    let content = result["content"]
+        .as_array()
+        .expect("tool result content array");
+    assert_eq!(
+        content.is_empty(),
+        !connection.include_text_copy,
+        "{name}: {result}"
+    );
     let is_error = result.get("isError").and_then(Value::as_bool) == Some(true);
-    let mut record = json!({"kind": "result", "name": name, "isError": is_error});
+    let mut record = json!({"kind": "result", "name": name, "isError": is_error,
+        "contentCount":content.len(), "resultWireBytes":serde_json::to_vec(result).unwrap().len()});
     if let Some(structured) = structured {
         record["structuredContent"] = structured.clone();
     }

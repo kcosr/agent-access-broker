@@ -1,5 +1,8 @@
 //! Exercise cancellation and current-protocol discovery through the actual CLI
 //! subprocess. The delayed HTTP response makes cancellation observable at EOF.
+#[path = "common/mcp_output.rs"]
+mod mcp_output;
+use agent_access_core::mcp::OutputSchemas;
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
@@ -15,20 +18,30 @@ struct Client {
     process: Child,
     stdin: Option<ChildStdin>,
     messages: mpsc::UnboundedReceiver<Value>,
+    tools: mcp_output::AdvertisedTools,
+    pending_calls: std::collections::BTreeMap<u64, String>,
 }
 
 impl Client {
     fn start(config: &Path) -> Self {
+        Self::start_with_text_copy(config, None)
+    }
+
+    fn start_with_text_copy(config: &Path, include_text_copy: Option<bool>) -> Self {
         let mut command = Command::new(env!("CARGO_BIN_EXE_agent-access"));
         for (name, _) in std::env::vars_os() {
             if name.to_string_lossy().starts_with("AGENT_ACCESS_") {
                 command.env_remove(name);
             }
         }
-        let mut process = command
+        command
             .arg("--config")
             .arg(config)
-            .args(["mcp", "serve"])
+            .args(["mcp", "serve", "--output-schemas", "on"]);
+        if let Some(include_text_copy) = include_text_copy {
+            command.arg(format!("--include-text-copy={include_text_copy}"));
+        }
+        let mut process = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -49,10 +62,19 @@ impl Client {
             process,
             stdin,
             messages,
+            tools: mcp_output::AdvertisedTools::new(Some(OutputSchemas::On), None)
+                .with_text_copy(include_text_copy.unwrap_or(true)),
+            pending_calls: Default::default(),
         }
     }
 
     fn send(&mut self, message: Value) {
+        if message["method"] == "tools/call" {
+            self.pending_calls.insert(
+                message["id"].as_u64().unwrap(),
+                message["params"]["name"].as_str().unwrap().to_owned(),
+            );
+        }
         let stdin = self.stdin.as_mut().unwrap();
         serde_json::to_writer(&mut *stdin, &message).unwrap();
         stdin.write_all(b"\n").unwrap();
@@ -64,6 +86,12 @@ impl Client {
             loop {
                 let message = self.messages.recv().await.expect("MCP stdout closed");
                 assert_eq!(message["jsonrpc"], "2.0");
+                if let Some(name) = message["id"]
+                    .as_u64()
+                    .and_then(|id| self.pending_calls.remove(&id))
+                {
+                    self.tools.check_call(&name, &message);
+                }
                 if message["id"] == id {
                     return message;
                 }
@@ -81,7 +109,11 @@ impl Client {
 
     async fn request(&mut self, id: u64, method: &str, params: Value) -> Value {
         self.send(json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}));
-        self.response(id).await
+        let response = self.response(id).await;
+        if method == "tools/list" {
+            self.tools.record_listing(&response);
+        }
+        response
     }
 
     async fn finish(mut self) {
@@ -116,15 +148,16 @@ async fn broker_fixture() -> MockServer {
     Mock::given(method("GET"))
         .and(path("/v1/spec/catalog"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "version":"agent-access.catalog.v2", "identity":{}, "routes":[],
-            "send":{"version":"agent-access.send.v1","catalogRequired":true},
+            "version":"agent-access.catalog.v3", "identity":{}, "routes":[],
+            "send":{"version":"agent-access.send.v2","catalogRequired":true},
             "services":[{
                 "service":"fake", "displayName":"Cancellation fixture", "surface":"invoke", "scopedMcpReady":true,
                 "scopeTypes":[], "actions":[{
                     "action":"echo", "scopedMcpName":"echo", "readOnly":true, "description":"Echo an input", "requiredScopeTypes":[],
                     "credentialModes":[], "inputSchema":{"type":"object"},
                     "io":{"type":"json"}, "responseKind":"response_envelope",
-                    "exitPolicy":"invoke_decision"
+                    "exitPolicy":"invoke_decision",
+                    "resultSchemas":{"success":{"type":"object","properties":{"message":{"type":"string"}}}}
                 }]
             }]
         })))
@@ -148,6 +181,15 @@ fn config(directory: &Path, broker: &MockServer) -> std::path::PathBuf {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cancelled_call_releases_handler_without_retry_and_keeps_stdio_usable() {
+    cancellation_lifecycle(None).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancelled_call_without_text_copy_releases_handler_and_keeps_stdio_usable() {
+    cancellation_lifecycle(Some(false)).await;
+}
+
+async fn cancellation_lifecycle(include_text_copy: Option<bool>) {
     let directory = tempfile::tempdir().unwrap();
     let destination = directory.path().join("response.json");
     std::fs::write(&destination, b"keep existing response").unwrap();
@@ -158,7 +200,8 @@ async fn cancelled_call_releases_handler_without_retry_and_keeps_stdio_usable() 
         .expect(1)
         .mount(&broker)
         .await;
-    let mut client = Client::start(&config(directory.path(), &broker));
+    let mut client =
+        Client::start_with_text_copy(&config(directory.path(), &broker), include_text_copy);
     let original_entries = directory_entries(directory.path());
     let initialized = client
         .request(

@@ -1732,7 +1732,7 @@ mod tests {
                 .as_str()
                 .ends_with("/job/payments/job/feature%252Ffoo")
         );
-        let selector = agent_access_provider::ResourceSelector::Namespace {
+        let selector = agent_access_provider::ScalarResourceSelector::Namespace {
             value: "team-ci/payments".into(),
         };
         assert!(selector.matches("team-ci/payments/build-api"));

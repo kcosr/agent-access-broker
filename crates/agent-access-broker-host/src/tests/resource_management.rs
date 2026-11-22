@@ -466,6 +466,7 @@ async fn runtime_catalog_and_resource_types_route_publish_registered_types() {
             "git_repository",
             "jira_project",
             "confluence_space",
+            "confluence_content",
             "cloudbees_ci_job",
             "fake_project",
             "teams_notification_destination",
@@ -789,6 +790,7 @@ async fn resource_attribute_fixture(fail_audit: bool) -> ResourceAttributeFixtur
     runtime
         .create_managed_resource(agent_access_core::CreateResourceRequest {
             id: Some("release".into()),
+            browser_url: None,
             display_name: Some("Release notifications".into()),
             resource_type: agent_access_teams::TEAMS_DESTINATION_RESOURCE.id().clone(),
             selector: ResourceSelector::Exact {
@@ -1524,6 +1526,7 @@ async fn resource_catalog_mutation_owner_completes_audit_after_waiter_cancellati
             let result =
                 runtime.create_managed_resource(agent_access_core::CreateResourceRequest {
                     id: Some("cancelled-repo".into()),
+                    browser_url: None,
                     display_name: Some("Committed after cancellation".into()),
                     resource_type: agent_access_provider::GIT_REPOSITORY_RESOURCE.id().clone(),
                     selector: ResourceSelector::Exact {
@@ -1570,4 +1573,393 @@ async fn resource_catalog_mutation_owner_completes_audit_after_waiter_cancellati
             .resource("cancelled-repo")
             .is_ok()
     );
+}
+
+#[tokio::test]
+async fn content_resource_storage_is_strict_canonical_and_available_without_a_configured_service() {
+    let fixture = managed_policy_admin_fixture().await;
+    let canonical = "https://dormant.example.test/wiki/content/page/123";
+    for (id, kind) in [("exact-page", "exact"), ("page-tree", "subtree")] {
+        let response = catalog_request(
+            &fixture.app,
+            &fixture.admin_token,
+            Method::POST,
+            "/v1/admin/policy/resources",
+            "content-resource-create",
+            Some(json!({
+                "id":id,"resourceType":"confluence_content", "displayName":"Authored label",
+                "selector":{"kind":kind,"value":canonical},"allowedExecutionContexts":["default"]
+            })),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_json(response).await;
+        assert_eq!(
+            body["result"]["record"]["selector"],
+            json!({"kind":kind,"value":canonical})
+        );
+    }
+    let response = catalog_request(
+        &fixture.app,
+        &fixture.admin_token,
+        Method::POST,
+        "/v1/admin/policy/resources",
+        "content-resource-duplicate",
+        Some(json!({
+            "id":"duplicate","resourceType":"confluence_content","displayName":"Different name",
+            "selector":{"kind":"exact","value":canonical},"allowedExecutionContexts":["default"]
+        })),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let response = catalog_request(
+        &fixture.app,
+        &fixture.admin_token,
+        Method::POST,
+        "/v1/admin/policy/resource-groups",
+        "content-resource-exclusion",
+        Some(json!({
+            "id":"content-group","name":"Page with excluded exact root",
+            "includedResourceIds":["page-tree"],"excludedResourceIds":["exact-page"]
+        })),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    for selector in [
+        json!({"kind":"all"}),
+        json!({"kind":"namespace","value":canonical}),
+        json!({"kind":"exact","value":"https://dormant.example.test/wiki/spaces/~Alex/pages/123"}),
+        json!({"kind":"subtree","value":"https://dormant.example.test/wiki/spaces/ENG/folder/456"}),
+        json!({"kind":"exact","value":"https://dormant.example.test/wiki/content/page/123/Title"}),
+        json!({"kind":"exact","value":"https://DORMANT.example.test/wiki/content/page/123"}),
+        json!({"kind":"exact","value":"https://dormant.example.test/wiki/content/page/0123"}),
+        json!({"kind":"exact","value":"https://dormant.example.test/wiki/content/folder/123"}),
+        json!({"kind":"subtree","value":"https://dormant.example.test/wiki/content/blog/123"}),
+    ] {
+        let response = catalog_request(
+            &fixture.app,
+            &fixture.admin_token,
+            Method::POST,
+            "/v1/admin/policy/resources",
+            "content-resource-invalid",
+            Some(json!({
+                "id":"invalid","resourceType":"confluence_content","selector":selector,
+                "enabled":false,"allowedExecutionContexts":["default"]
+            })),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{selector}");
+        let response = catalog_request(
+            &fixture.app,
+            &fixture.admin_token,
+            Method::PATCH,
+            "/v1/admin/policy/resources/exact-page",
+            "content-resource-patch-invalid",
+            Some(json!({
+                "expectedVersion":1,"selector":selector
+            })),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{selector}");
+    }
+    let resource = catalog_request(
+        &fixture.app,
+        &fixture.admin_token,
+        Method::GET,
+        "/v1/admin/policy/resources/exact-page",
+        "content-resource-unchanged",
+        None,
+    )
+    .await;
+    assert_eq!(response_json(resource).await["result"]["version"], 1);
+}
+
+#[tokio::test]
+async fn space_resource_key_and_all_edits_keep_versions_without_a_configured_service() {
+    let fixture = managed_policy_admin_fixture().await;
+    let created = catalog_request(
+        &fixture.app,
+        &fixture.admin_token,
+        Method::POST,
+        "/v1/admin/policy/resources",
+        "space-key-create",
+        Some(json!({
+            "id":"space-key", "resourceType":"confluence_space", "displayName":"Private space",
+            "selector":{"kind":"exact","value":"~Alex"},
+            "enabled":false, "allowedExecutionContexts":["default"]
+        })),
+    )
+    .await;
+    assert_eq!(created.status(), StatusCode::OK);
+    for (version, selector) in [
+        (1, json!({"kind":"exact","value":"Engineering"})),
+        (2, json!({"kind":"all"})),
+        (3, json!({"kind":"exact","value":"engineering"})),
+    ] {
+        let patched = catalog_request(
+            &fixture.app,
+            &fixture.admin_token,
+            Method::PATCH,
+            "/v1/admin/policy/resources/space-key",
+            "space-key-edit",
+            Some(json!({"expectedVersion":version,"selector":selector})),
+        )
+        .await;
+        assert_eq!(patched.status(), StatusCode::OK);
+        let record = response_json(patched).await["result"]["record"].clone();
+        assert_eq!(record["selector"], selector);
+        assert_eq!(record["version"], version + 1);
+        assert_eq!(record["displayName"], "Private space");
+        assert_eq!(record["enabled"], false);
+        assert_eq!(record["allowedExecutionContexts"], json!(["default"]));
+    }
+    let stale = catalog_request(
+        &fixture.app,
+        &fixture.admin_token,
+        Method::PATCH,
+        "/v1/admin/policy/resources/space-key",
+        "space-key-stale",
+        Some(json!({"expectedVersion":1,"selector":{"kind":"all"}})),
+    )
+    .await;
+    assert_eq!(stale.status(), StatusCode::CONFLICT);
+    let duplicate = catalog_request(
+        &fixture.app,
+        &fixture.admin_token,
+        Method::PATCH,
+        "/v1/admin/policy/resources/space-key",
+        "space-key-duplicate",
+        Some(json!({"expectedVersion":4,"selector":{"kind":"exact","value":"ENG"}})),
+    )
+    .await;
+    assert_eq!(duplicate.status(), StatusCode::BAD_REQUEST);
+    let resource = catalog_request(
+        &fixture.app,
+        &fixture.admin_token,
+        Method::GET,
+        "/v1/admin/policy/resources/space-key",
+        "space-key-after-conflict",
+        None,
+    )
+    .await;
+    let resource = response_json(resource).await;
+    assert_eq!(resource["result"]["version"], 4);
+    assert_eq!(resource["result"]["selector"]["value"], "engineering");
+}
+
+#[tokio::test]
+async fn legacy_content_rows_are_rejected_on_reload_and_startup_even_disabled_and_unused() {
+    let fixture = managed_policy_admin_fixture().await;
+    let runtime = fixture._broker.runtime();
+    let config = runtime.config().clone();
+    let store = runtime.managed_store().unwrap();
+    let connection = rusqlite::Connection::open(store.path()).unwrap();
+    let legacy = "https://dormant.example.test/wiki/spaces/ENG/pages/123";
+    connection.execute(
+        "INSERT INTO resources(resource_id,resource_type,selector_kind,selector_value,display_name,allowed_execution_contexts_json,enabled,version,created_at,created_by,updated_at,updated_by) VALUES ('legacy-content','confluence_content','exact',?1,NULL,'[\"default\"]',0,1,'2026-01-01','test','2026-01-01','test')",
+        [legacy],
+    ).unwrap();
+    let generation = fixture._broker.state().current().generation;
+    for enabled in [false, true] {
+        connection
+            .execute(
+                "UPDATE resources SET enabled = ?1 WHERE resource_id = 'legacy-content'",
+                [enabled],
+            )
+            .unwrap();
+        let outcome = fixture._broker.running().reload().await.unwrap();
+        assert!(!outcome.is_success(), "{outcome:?}");
+        assert_eq!(outcome.reason_code(), Some("config_admission_failed"));
+        assert!(
+            outcome.message().unwrap().contains("legacy-content"),
+            "{outcome:?}"
+        );
+        assert_eq!(fixture._broker.state().current().generation, generation);
+        let value: String = connection
+            .query_row(
+                "SELECT selector_value FROM resources WHERE resource_id = 'legacy-content'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(value, legacy, "rejected interim rows must not be rewritten");
+    }
+    connection
+        .execute(
+            "UPDATE resources SET enabled = 0 WHERE resource_id = 'legacy-content'",
+            [],
+        )
+        .unwrap();
+    drop((runtime, connection));
+    let ManagedPolicyAdminFixture {
+        _broker: broker,
+        app,
+        ..
+    } = fixture;
+    drop(app);
+    broker.stop().await;
+    let error = match TestBroker::try_start_with(TestBroker::config_builder(&config)).await {
+        Ok(_) => panic!("legacy disabled content resource was admitted at startup"),
+        Err(error) => format!("{error:#}"),
+    };
+    assert!(error.contains("legacy-content"), "{error}");
+}
+
+#[tokio::test]
+async fn resource_location_browser_normalization_requires_csrf_but_listing_does_not() {
+    let fixture = resource_attribute_fixture(false).await;
+    let login = fixture
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v1/auth/local/login")
+                .extension(ConnectInfo(
+                    "127.0.0.1:40111".parse::<SocketAddr>().unwrap(),
+                ))
+                .header(REQUEST_ID_HEADER, "location-login")
+                .header("Host", "localhost")
+                .header("Origin", "http://localhost")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    r#"{"principalId":"admin","password":"admin-password"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(login.status(), StatusCode::OK);
+    let cookie = login.headers()["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
+    let login = response_json(login).await;
+    let csrf = login["result"]["csrfToken"].as_str().unwrap();
+    for (method, path, with_csrf, status) in [
+        (
+            Method::GET,
+            "/v1/admin/policy/resource-locations",
+            false,
+            StatusCode::OK,
+        ),
+        (
+            Method::POST,
+            "/v1/admin/policy/resource-locations/normalize",
+            false,
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            Method::POST,
+            "/v1/admin/policy/resource-locations/normalize",
+            true,
+            StatusCode::BAD_REQUEST,
+        ),
+    ] {
+        let mut request = Request::builder()
+            .method(method.clone())
+            .uri(path)
+            .extension(ConnectInfo(
+                "127.0.0.1:40112".parse::<SocketAddr>().unwrap(),
+            ))
+            .header(REQUEST_ID_HEADER, "location-browser")
+            .header("Cookie", &cookie)
+            .header("Host", "localhost")
+            .header("Origin", "http://localhost")
+            .header("Content-Type", "application/json");
+        if with_csrf {
+            request = request.header("X-Agent-Access-CSRF", csrf);
+        }
+        let body = if method == Method::POST {
+            Body::from(json!({"service":"confluence","url":"https://example.atlassian.net/wiki/spaces/ENG/pages/123","coverage":"exact"}).to_string())
+        } else {
+            Body::empty()
+        };
+        let response = fixture
+            .app
+            .clone()
+            .oneshot(request.body(body).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), status);
+        let body = response_json(response).await;
+        if status == StatusCode::FORBIDDEN {
+            assert_eq!(body["reasonCode"], "csrf_invalid");
+        } else if status == StatusCode::BAD_REQUEST {
+            // No Confluence service is configured in this fixture: admission
+            // with CSRF reaches the ordinary capability check without a lookup.
+            assert_eq!(body["reasonCode"], "input_invalid");
+        }
+    }
+}
+
+#[tokio::test]
+async fn management_access_projection_preserves_entry_markers_and_bounds_the_whole_response() {
+    use crate::handlers::management::common::{
+        ManagementAccess, management_context, management_success_response,
+    };
+    let fixture = managed_policy_admin_fixture().await;
+    let state = AppState {
+        reloadable: fixture._broker.state(),
+    };
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "Authorization",
+        HeaderValue::from_str(&format!("Bearer {}", fixture.admin_token)).unwrap(),
+    );
+    headers.insert(
+        REQUEST_ID_HEADER,
+        HeaderValue::from_static("projection-bound"),
+    );
+    let context = management_context(
+        &state,
+        "127.0.0.1:43121".parse().unwrap(),
+        &headers,
+        "admin.policy.effective_access",
+        ManagementAccess::PolicyRead,
+    )
+    .await
+    .unwrap();
+    let mixed = json!({"policyGeneration":1,"access":[
+        {"service":"confluence","action":"page.view","executionContext":"default",
+         "scope":"location","resourceTypes":["confluence_content"],"domain":"page",
+         "enforcement":"request","containmentVerification":"at_invocation",
+         "projectionStatus":"too_complex","reasonCode":"resource_access_too_complex"},
+        {"service":"fake","action":"echo","executionContext":"default","scope":"resource",
+         "resourceType":"fake_project","clauses":[{"included":[{"kind":"exact","value":"TEST"}],"excluded":[]}]}
+    ]});
+    let response =
+        management_success_response(&context, "admin.policy.effective_access", None, &mixed).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response_json(response).await["result"], mixed);
+
+    // Each string fits individually. Their aggregate exceeds the bound; the
+    // response must not silently drop the second entry or convert either to All.
+    let chunk = "x".repeat(agent_access_core::RESOURCE_ACCESS_MAX_RESPONSE_BYTES / 2);
+    let aggregate = [&chunk, &chunk];
+    for operation in [
+        "admin.policy.effective_access",
+        "tokens.effective_access",
+        "admin.tokens.effective_access_principal_agent",
+        "tokens.options",
+        "admin.tokens.options_principal_agent",
+    ] {
+        let response = management_success_response(&context, operation, None, &aggregate).await;
+        assert_eq!(
+            response.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{operation}"
+        );
+        assert_eq!(response.headers()["cache-control"], "no-store");
+        let body = response_json(response).await;
+        assert_eq!(body["decision"], "error");
+        assert_eq!(body["reasonCode"], "resource_access_too_complex");
+        assert!(body["result"].is_null());
+        assert!(body.get("access").is_none());
+        assert!(body.to_string().len() < 2048);
+    }
 }

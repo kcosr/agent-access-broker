@@ -40,7 +40,7 @@ async fn generic_read_file_output_preserves_bounds_permissions_and_existing_dest
     let destination = temp.path().join("read.json");
     let inputs = json!({"controller":"team-ci","job":JOB,"buildNumber":42,"maxBytes":1024});
     let invoke_json = inputs.to_string();
-    let request = json!({"version":"agent-access.send.v1","kind":"invoke","service":"cloudbees_ci","action":"build.log.read","inputs":inputs,"output":{"type":"file","path":destination}}).to_string();
+    let request = json!({"version":"agent-access.send.v2","kind":"invoke","service":"cloudbees_ci","action":"build.log.read","inputs":inputs,"output":{"type":"file","path":destination}}).to_string();
     let run = |args: &[&str]| {
         Command::new(env!("CARGO_BIN_EXE_agent-access"))
             .arg("--config")
@@ -193,7 +193,7 @@ async fn generic_read_file_output_preserves_bounds_permissions_and_existing_dest
         serde_json::from_slice::<Value>(&std::fs::read(&destination).unwrap()).unwrap()["result"]["queueId"],
         17
     );
-    let mutation_request = json!({"version":"agent-access.send.v1","kind":"invoke","service":"cloudbees_ci","action":"build.trigger","inputs":{"controller":"team-ci","job":JOB},"output":{"type":"file","path":destination}}).to_string();
+    let mutation_request = json!({"version":"agent-access.send.v2","kind":"invoke","service":"cloudbees_ci","action":"build.trigger","inputs":{"controller":"team-ci","job":JOB},"output":{"type":"file","path":destination}}).to_string();
     let mutation = run(&["send", "--request-json", &mutation_request]);
     assert_success("save send trigger response", &mutation);
     assert_eq!(
@@ -341,7 +341,7 @@ async fn console_and_report_downloads_work_over_cli_send_http_and_stdio() {
 
         let output = temp.path().join(format!("{command}.send"));
         let request = temp.path().join(format!("{command}.json"));
-        std::fs::write(&request, serde_json::to_vec(&json!({"version":"agent-access.send.v1","kind":"invoke","responseMode":"stream","service":"cloudbees_ci","action":action,"inputs":inputs,"output":{"type":"file","path":output}})).unwrap()).unwrap();
+        std::fs::write(&request, serde_json::to_vec(&json!({"version":"agent-access.send.v2","kind":"invoke","responseMode":"stream","service":"cloudbees_ci","action":action,"inputs":inputs,"output":{"type":"file","path":output}})).unwrap()).unwrap();
         let result = Command::new(env!("CARGO_BIN_EXE_agent-access"))
             .arg("--config")
             .arg(&config_path)
@@ -426,7 +426,7 @@ async fn raw_download_destinations_are_checked_before_upstream_dispatch() {
     let preserved = temp.path().join("existing.log");
     std::fs::write(&preserved, b"preserve existing output").unwrap();
     let base_request = json!({
-        "version":"agent-access.send.v1", "kind":"invoke", "responseMode":"stream",
+        "version":"agent-access.send.v2", "kind":"invoke", "responseMode":"stream",
         "service":"cloudbees_ci", "action":"build.log.download",
         "inputs":{"controller":"team-ci", "job":JOB, "buildNumber":42}
     });
@@ -553,7 +553,7 @@ async fn throttled_controller_reaches_cli_stderr_and_stdio_mcp_text_as_the_broke
     std::fs::write(
         &send_request,
         serde_json::to_vec(&json!({
-            "version":"agent-access.send.v1","kind":"invoke","responseMode":"stream",
+            "version":"agent-access.send.v2","kind":"invoke","responseMode":"stream",
             "service":"cloudbees_ci","action":"build.log.download",
             "inputs":{"controller":"team-ci","job":JOB,"buildNumber":42},
             "output":{"type":"file","path":destination}
@@ -750,7 +750,7 @@ async fn domain_reasons_keep_their_wire_status_cli_exit_mcp_error_and_audit() {
         std::fs::write(
             &request,
             serde_json::to_vec(&json!({
-                "version":"agent-access.send.v1","kind":"invoke",
+                "version":"agent-access.send.v2","kind":"invoke",
                 "service":"cloudbees_ci","action":action,"inputs":inputs
             }))
             .unwrap(),
@@ -1201,6 +1201,8 @@ async fn large_log_head_returns_cursor_and_trigger_returns_queue_receipt() {
             "{broker_url}/v1/invoke/cloudbees_ci/build.log.read"
         ))
         .header("X-Agent-Access-Request-Id", "cloudbees-smoke-head")
+        // The continuation belongs to the same principal across transports.
+        .header("X-Agent-Access-Identity-Token", "cli-fixture-token")
         .json(&json!({"inputs":{
             "controller":"team-ci", "job":JOB, "buildNumber":42,
             "mode":"head", "maxBytes":1024
@@ -1535,7 +1537,7 @@ async fn json_send_downloads_artifact_to_declared_file() {
     std::fs::write(
         &request,
         serde_json::to_vec(&json!({
-        "version":"agent-access.send.v1", "kind":"invoke", "responseMode":"stream",
+        "version":"agent-access.send.v2", "kind":"invoke", "responseMode":"stream",
             "service":"cloudbees_ci", "action":"build.artifact.download",
             "inputs":{"controller":"team-ci","job":JOB,"buildNumber":42,
                       "artifactPath":ARTIFACT},
@@ -1945,7 +1947,7 @@ async fn stop(broker: RunningBroker) {
 /// Who may call the broker, and so who holds its CloudBees CI grants.
 #[derive(Clone, Copy)]
 enum Callers {
-    /// Anonymous callers.
+    /// Anonymous callers and the authenticated CLI fixture.
     Anonymous,
     /// Only the static principal `ci-agent`, presenting `token` in `header`
     /// with `scheme`.
@@ -1982,7 +1984,7 @@ struct Cloudbees<'a> {
 }
 
 impl<'a> Cloudbees<'a> {
-    /// Anonymous callers hold the job grant.
+    /// Anonymous callers and the authenticated CLI fixture hold the job grant.
     fn anonymous(controller: &'a MockServer) -> Self {
         Self {
             controller,
@@ -2010,15 +2012,27 @@ impl<'a> Cloudbees<'a> {
     /// broker listening at `public_url`.
     fn document(&self, directory: &FixtureDir, public_url: &str) -> String {
         let controller = self.controller.uri();
-        let (identity, subject) = match self.callers {
+        let (identity, subjects) = match self.callers {
             Callers::Anonymous => (
-                r#"
+                format!(
+                    r#"
 [identity]
-mode = "anonymous"
+mode = "optional"
 authority = "toml"
-"#
-                .to_string(),
-                "group:anonymous",
+
+[[identity.sources]]
+name = "cli"
+type = "static_principals"
+header = "X-Agent-Access-Identity-Token"
+scheme = "raw"
+
+[[identity.sources.principals]]
+principal = "cli-fixture"
+token_refs = [{token}]
+"#,
+                    token = secret_ref(directory, "cli-token", "cli-fixture-token"),
+                ),
+                r#"["group:anonymous", "user:cli-fixture"]"#,
             ),
             Callers::Principal {
                 header,
@@ -2045,7 +2059,7 @@ token_refs = [{token}]
                     scheme = toml_string(scheme),
                     token = secret_ref(directory, "principal-token", token),
                 ),
-                "user:ci-agent",
+                r#"["user:ci-agent"]"#,
             ),
         };
         let mut document = format!(
@@ -2092,7 +2106,7 @@ path = {audit}
             document.push_str(&format!(
                 r#"
 [[policy.grants]]
-subjects = [{subject}]
+subjects = {subjects}
 service = "cloudbees_ci"
 actions = [
     "build.artifact.list",
@@ -2111,7 +2125,6 @@ actions = [
 resources = {{ resource_ids = ["payments-job"] }}
 credential_mode = "service"
 "#,
-                subject = toml_string(subject),
             ));
         }
         if let Grants::JobAndFolder = self.grants {
@@ -2124,14 +2137,13 @@ selector = {{ kind = "namespace", value = "team-ci/payments" }}
 allowed_execution_contexts = ["default"]
 
 [[policy.grants]]
-subjects = [{subject}]
+subjects = {subjects}
 service = "cloudbees_ci"
 actions = ["job.view"]
 resources = {{ resource_ids = ["payments-folder"] }}
 credential_mode = "service"
 "#,
                 resource_type = CLOUDBEES_CI_JOB_RESOURCE.id().as_str(),
-                subject = toml_string(subject),
             ));
         }
         if self.http_mcp {
@@ -2162,7 +2174,16 @@ fn secret_ref(directory: &FixtureDir, name: &str, contents: &str) -> String {
 
 fn cli(broker_url: &str) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_agent-access"));
-    command.args(["--url", broker_url, "--no-token"]);
+    command.args([
+        "--url",
+        broker_url,
+        "--token-value",
+        "cli-fixture-token",
+        "--identity-header",
+        "X-Agent-Access-Identity-Token",
+        "--identity-scheme",
+        "raw",
+    ]);
     command
 }
 

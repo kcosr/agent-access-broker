@@ -280,6 +280,9 @@ pub struct ScopeRequestFixture {
     identity: InvocationIdentity,
     correlation: CorrelationContext,
     lookup_access: Option<LookupAccess>,
+    containment_evidence_level: crate::ContainmentEvidenceLevel,
+    containment_roots: Vec<crate::TypedResourceSelector>,
+    locator_state: Option<crate::ProviderState>,
 }
 
 impl ScopeRequestFixture {
@@ -292,6 +295,9 @@ impl ScopeRequestFixture {
             identity: InvocationIdentity::anonymous(),
             correlation: CorrelationContext::for_tests(),
             lookup_access: None,
+            containment_evidence_level: crate::ContainmentEvidenceLevel::ContainerOnly,
+            containment_roots: Vec::new(),
+            locator_state: None,
         }
     }
 
@@ -320,6 +326,29 @@ impl ScopeRequestFixture {
         self
     }
 
+    pub fn containment_evidence_level(mut self, level: crate::ContainmentEvidenceLevel) -> Self {
+        self.containment_evidence_level = level;
+        self
+    }
+    pub fn containment_roots(mut self, roots: Vec<crate::TypedResourceSelector>) -> Self {
+        self.containment_roots = roots;
+        self
+    }
+    pub fn locator_state(mut self, state: crate::ProviderState) -> Self {
+        self.locator_state = Some(state);
+        self
+    }
+    pub fn local_request(&self) -> crate::LocalScopeRequest<'_> {
+        crate::host::local_scope_request(crate::host::LocalScopeRequestParts {
+            service: &self.service,
+            action: &self.action,
+            inputs: &self.inputs,
+            execution_context: &self.execution_context,
+            identity: &self.identity,
+            correlation: &self.correlation,
+        })
+    }
+
     pub fn request(&self) -> ScopeRequest<'_> {
         scope_request(ScopeRequestParts {
             service: &self.service,
@@ -329,6 +358,9 @@ impl ScopeRequestFixture {
             identity: &self.identity,
             correlation: &self.correlation,
             lookup_access: self.lookup_access.as_ref(),
+            containment_evidence_level: self.containment_evidence_level,
+            containment_roots: &self.containment_roots,
+            locator_state: self.locator_state.as_ref(),
         })
     }
 }

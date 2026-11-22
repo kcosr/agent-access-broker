@@ -236,6 +236,32 @@ mod tests {
     }
 
     #[test]
+    fn deliberately_opaque_roots_and_typed_nonobject_results_keep_their_contract() {
+        let generic =
+            ActionDescriptor::new("passthrough", "Pass through", json!({"type":"object"}))
+                .result_schemas(ActionResultSchemas::new(json!({})).with_error(json!({})));
+        for value in [
+            json!({"opaque":[1]}),
+            json!([1]),
+            json!("text"),
+            json!(2),
+            json!(true),
+            Value::Null,
+        ] {
+            assert_result_conforms(&generic, &Ok(ProviderResult::new(value.clone())));
+            assert_result_conforms(
+                &generic,
+                &Err(ProviderError::error(ReasonCode::UpstreamFailed, "failed").with_result(value)),
+            );
+        }
+        let typed = ActionDescriptor::new("ids", "IDs", json!({"type":"object"})).result_schemas(
+            ActionResultSchemas::new(json!({"type":"array","items":{"type":"integer"}})),
+        );
+        assert_result_conforms(&typed, &Ok(ProviderResult::new(json!([1, 2]))));
+        assert!(check_result_conforms(&typed, &Ok(ProviderResult::new(json!(["bad"])))).is_err());
+    }
+
+    #[test]
     #[should_panic(expected = "declares no result schemas")]
     fn actions_without_schemas_cannot_be_asserted() {
         let action = ActionDescriptor::new("item.view", "View", json!({"type": "object"}));

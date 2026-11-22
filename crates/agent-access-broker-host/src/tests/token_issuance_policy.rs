@@ -168,6 +168,7 @@ impl Fixture {
                 .create_resource(
                     agent_access_core::CreateResourceRequest {
                         id: Some(resource.id),
+                        browser_url: None,
                         display_name: resource.display_name,
                         resource_type: resource.resource_type,
                         selector: resource.selector,

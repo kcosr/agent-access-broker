@@ -6,16 +6,13 @@
 //! them only for a connection whose [`crate::mcp::OutputSchemas`] selection
 //! advertises them.
 //!
-//! The result payload of an action is the union of complete object branches:
-//! its success schema with the optional `renderedBody` at each declared body
-//! owner, the whole-result Markdown export when the action offers it, its
-//! provider error schema (with the same rendered bodies) merged with the
-//! shared failure properties, and the shared failure schema. Each MCP
-//! projection wraps that payload in the delivery shapes its transport
-//! actually returns. Nothing composed here contains a `$ref`.
+//! The result payload is a union of selected-content success, provider error
+//! results before or after allowed-result presentation, and shared failures.
+//! Each MCP projection wraps that payload in its actual delivery shapes.
+//! Nothing composed here contains a `$ref`.
 use crate::ApiActionSpec;
 use crate::mcp::{HelperKind, ProjectionMode};
-use agent_access_provider::presentation::{inject_rendered_body_schema, markdown_result_schema};
+use agent_access_provider::presentation::{OUTPUT_CONTENT_FORMATS, inject_selected_content_schema};
 use agent_access_provider::{
     ActionIo, shared_failure_result_schema, with_shared_failure_properties,
 };
@@ -24,44 +21,34 @@ use serde_json::{Value, json};
 /// The largest composed MCP `outputSchema` of one tool, in compact JSON bytes.
 pub const MAX_OUTPUT_SCHEMA_BYTES: usize = 16_384;
 
-/// Rendered-body owner pointers relative to the result.
-fn body_owners(action: &ApiActionSpec) -> impl Iterator<Item = &str> {
-    action
-        .rendered_body_owners
-        .iter()
-        .filter_map(|pointer| pointer.strip_prefix("/result"))
-}
-
 /// The union every `result` of `action` follows, or `None` when the action
 /// declares no result schemas.
 pub fn result_payload_schema(action: &ApiActionSpec) -> Option<Value> {
     let schemas = action.result_schemas.as_ref()?;
-    let mut success = schemas.success.clone();
-    for owner in body_owners(action) {
-        // Descriptor validation proved every owner resolves in the success
-        // schema; an older catalog that does not is still described.
-        let _ = inject_rendered_body_schema(&mut success, owner);
-    }
-    let mut branches = vec![success];
-    if action
-        .response_formats
-        .iter()
-        .any(|format| format == "markdown")
-    {
-        branches.push(markdown_result_schema());
-    }
-    if let Some(error) = &schemas.error {
-        let mut error = error.clone();
-        for owner in body_owners(action) {
-            // Presentation also runs on allow-with-result errors, but an
-            // error result need not carry the body owners at all.
-            let _ = inject_rendered_body_schema(&mut error, owner);
+    let present = |schema: &Value| {
+        let mut schema = schema.clone();
+        for field in &action.body_fields {
+            // Descriptor validation proves success paths. Provider errors can
+            // omit success-only body owners and fields. A preference response
+            // may use a newly enabled native format after client discovery,
+            // so the schema covers all concrete format/value pairings.
+            let _ = inject_selected_content_schema(&mut schema, field, OUTPUT_CONTENT_FORMATS);
         }
-        branches.push(with_shared_failure_properties(&error));
+        schema
+    };
+    let mut branches = vec![present(&schemas.success)];
+    if let Some(error) = &schemas.error {
+        // Denials, ordinary errors and mutation receipts retain native fields.
+        // Allow-with-result errors without a receipt undergo presentation.
+        let raw = with_shared_failure_properties(error);
+        let selected = with_shared_failure_properties(&present(error));
+        branches.push(raw.clone());
+        if selected != raw {
+            branches.push(selected);
+        }
     }
     branches.push(shared_failure_result_schema());
     Some(json!({
-        "type": "object",
         "description": "The action payload on allow; retry, receipt or execution details on failure.",
         "anyOf": branches
     }))
@@ -106,12 +93,20 @@ fn http_failure_schema() -> Value {
         "description": "Tool or delivery failure without the action result; never repeat an operation only to recover its output.",
         "properties": {
             "error": {"type": "object", "properties": {"code": string(), "message": string()}, "required": ["message"]},
+            "agentRequestId": string(),
             "brokerRequestId": string(),
+            "service": string(),
+            "action": string(),
+            "status": {"type":"integer"},
+            "resultAvailable": {"type":"boolean"},
             "brokerOutcome": {"type": "object", "properties": {
+                "status": {"type":"integer"},
                 "decision": {"type": "string", "enum": DECISIONS},
+                "reasonCode": {"type":["string","null"]},
                 "mutationStatus": string()
             }},
             "execution": {"type": "object", "properties": {
+                "dispatched": {"type":"boolean"},
                 "completion": {"type": "string", "enum": ["completed", "unknown", "not_started"]}
             }},
             "retrySafe": {"type": "boolean"}
@@ -120,44 +115,48 @@ fn http_failure_schema() -> Value {
     })
 }
 
-/// A stdio receipt for a response saved through `outputPath`, or for a save
-/// that failed. A download receipt also keeps the metadata envelope, whose
-/// `result` is typed as `download_result`. Only the fields an agent acts on
-/// are typed; the object is open.
+/// A stdio error generated before dispatch or while reading a response.
+fn local_error_schema() -> Value {
+    json!({"type":"object", "properties": {
+        "error":{"type":"object","properties":{"message":string()},"required":["message"]}
+    }, "required":["error"]})
+}
+
+fn output_file_schema() -> Value {
+    json!({"type":"object", "properties": {
+        "status": {"type":"string","enum":["succeeded","failed"]},
+        "path":string(), "size":{"type":"integer"}, "sha256":string(),
+        "contentType":string(), "sensitive":{"type":"boolean"},
+        "destinationReplaced":{"type":"boolean"}, "error":string()
+    },"required":["status","path"]})
+}
+
+/// A local save receipt. Downloads preserve the metadata envelope as well.
 fn file_receipt_schema(download_result: Option<Value>) -> Value {
     let mut properties = json!({
-        "brokerRequestId": string(),
-        "decision": {"type": "string", "enum": DECISIONS},
-        "reasonCode": string(),
-        "operationStatus": {"type": "string", "enum": ["succeeded", "applied_unverified", "not_applied", "unknown"]},
-        "mutationStatus": string(),
-        "retrySafe": {"type": "boolean"},
-        "safeLocators": {"type": "object"},
-        "message": string(),
-        "output": {"type": "object", "properties": {
-            "status": {"type": "string", "enum": ["succeeded", "failed"]},
-            "path": string(),
-            "size": {"type": "integer"},
-            "sha256": string(),
-            "contentType": string(),
-            "error": string()
-        }, "required": ["status", "path"]}
+        "agentRequestId":string(), "brokerRequestId":string(),
+        "service":string(), "action":string(),
+        "decision":{"type":"string","enum":DECISIONS},
+        "reasonCode":string(),
+        "operationStatus":{"type":"string","enum":["succeeded","applied_unverified","not_applied","unknown"]},
+        "mutationStatus":string(), "retrySafe":{"type":"boolean"},
+        "verificationStage":string(), "safeLocators":{"type":"object"},
+        "message":string(), "output":output_file_schema(), "metadataOutput":output_file_schema()
     });
     let description = match download_result {
         Some(result) => {
-            properties["result"] = result;
-            "Local download receipt: output describes the saved file or the failed save; result holds the download metadata."
+            properties.as_object_mut().unwrap().extend(
+                envelope_schema(result)["properties"]
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            );
+            "Local download receipt; result holds the download metadata."
         }
-        None => {
-            "Local file receipt: output describes the saved response or the failed save; the result is not repeated."
-        }
+        None => "Local file receipt; output describes the saved response or failed save.",
     };
-    json!({
-        "type": "object",
-        "description": description,
-        "properties": properties,
-        "required": ["operationStatus"]
-    })
+    json!({"type":"object", "description":description, "properties":properties,
+        "required":["operationStatus"]})
 }
 
 fn branches(branches: Vec<Value>) -> Value {
@@ -178,10 +177,13 @@ pub fn action_output_schema(action: &ApiActionSpec, mode: ProjectionMode) -> Opt
         (ProjectionMode::Stdio, ActionIo::RawDownload { .. }) => branches(vec![
             file_receipt_schema(Some(payload.clone())),
             envelope_schema(payload),
+            local_error_schema(),
         ]),
-        (ProjectionMode::Stdio, _) => {
-            branches(vec![envelope_schema(payload), file_receipt_schema(None)])
-        }
+        (ProjectionMode::Stdio, _) => branches(vec![
+            envelope_schema(payload),
+            file_receipt_schema(None),
+            local_error_schema(),
+        ]),
     })
 }
 
@@ -231,16 +233,21 @@ pub fn helper_result_schema(helper: HelperKind) -> Value {
             "availability": availability_schema(),
             "coverageSemantics": {"type": "string", "enum": ["single_target"]},
             "access": {"type": "array", "items": {"type": "object", "properties": {
-                "scope": {"type": "string", "enum": ["resource", "unscoped"]},
+                "scope": {"type": "string", "enum": ["resource", "unscoped", "location"]},
                 "action": string(),
                 "resourceType": string(),
+                "resourceTypes": strings(),
+                "domain": string(),
+                "containmentVerification": {"type":"string", "const":"at_invocation"},
                 "enforcement": {"type": "string", "enum": ["request", "results", "command"]},
                 "coverage": {"type": "array", "items": {"type": "object", "properties": {
                     "selector": {"type": "object", "properties": {
-                        "kind": {"type": "string", "enum": ["exact", "namespace", "all"]},
+                        "kind": {"type": "string", "enum": ["exact", "namespace", "all", "subtree"]},
                         "value": string()
                     }, "required": ["kind"]},
                     "inputs": {"type": "object"},
+                    "resourceType": string(),
+                    "conditional": {"type":"boolean"},
                     "restricted": {"type": "boolean"}
                 }, "required": ["selector", "restricted"]}}
             }, "required": ["scope", "action"]}},
@@ -275,10 +282,14 @@ pub fn helper_result_schema(helper: HelperKind) -> Value {
                 "io": {"type": "object", "description": "Input and output kind: json, multipart_upload with its plan, or raw_download with its metadata header."},
                 "responseKind": string(),
                 "exitPolicy": string(),
-                "readContentFormats": strings(),
-                "responseFormats": strings(),
-                "renderedBodyOwners": strings(),
-                "optionalRenderedBodyOwnerPrefixes": strings(),
+                "outputContentFormats": strings(),
+                "nativeOutputContentFormat": string(),
+                "defaultOutputContentFormat": string(),
+                "bodyFields": {"type":"array", "items":{"type":"object", "properties":{
+                    "ownerPath":string(), "field":string(), "optional":{"type":"boolean"},
+                    "nullable":{"type":"boolean"}, "optionalOwnerPrefixes":strings(),
+                    "nullableOwnerPrefixes":strings(), "ownerEquals":{"type":"object","additionalProperties":string()}
+                },"required":["ownerPath","field","optional","nullable","optionalOwnerPrefixes","nullableOwnerPrefixes"]}},
                 "resultSchemas": {
                     "type": "object",
                     "description": "Provider payload schemas; present when this connection has no tool for the action.",
@@ -310,10 +321,18 @@ pub fn helper_result_schema(helper: HelperKind) -> Value {
             "credentialVerificationInputs": strings(),
             "credentialVerificationSupported": {"type": "boolean"},
             "scopeTypes": strings(),
-            "resourceScopes": {"type": "object", "additionalProperties": {"type": "object", "properties": {
-                "resourceType": string(),
-                "selectors": strings()
-            }, "required": ["resourceType", "selectors"]}},
+            "resourceScopes": {"type":"object", "additionalProperties":{"anyOf":[
+                {"type":"object","properties":{
+                    "matching":{"type":"string","const":"scalar"},
+                    "resourceType":string(),"selectors":strings()
+                },"required":["matching","resourceType","selectors"]},
+                {"type":"object","properties":{
+                    "matching":{"type":"string","const":"containment"},
+                    "domain":string(),"selectorsByType":{"type":"object","additionalProperties":strings()},
+                    "containerTypes":strings(),"targetKinds":strings(),"ancestorKinds":strings(),
+                    "effects":{"type":"array","items":{"type":"string","enum":["content","child_placement","subtree_impact"]}}
+                },"required":["matching","domain","selectorsByType","containerTypes","targetKinds","ancestorKinds","effects"]}
+            ]}},
             "actions": {"type": "array", "items": {
                 "type": "object",
                 "properties": action_capabilities_properties(),
@@ -338,6 +357,7 @@ pub fn helper_output_schema(helper: HelperKind, mode: ProjectionMode) -> Value {
             helper_schema,
             file_receipt_schema(None),
             envelope_schema(json!({"type": "object"})),
+            local_error_schema(),
         ]),
     }
 }

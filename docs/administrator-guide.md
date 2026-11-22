@@ -474,9 +474,26 @@ path described in [imported OAuth](imported-oauth.md).
 ## Create resources and grants
 
 Create resources before referencing them in grants or token restrictions. In
-**Admin > Catalog**, choose the resource type, exact/all/namespace selector,
+**Admin > Catalog**, choose the resource type and one of its supported
+exact/all/namespace/subtree selectors,
 execution contexts, and an identifiable label. Flat resource groups may include
 and exclude entries; inspect their current members before reuse.
+
+For Confluence content, paste a page, blog or folder browser URL; service and
+kind are inferred. New page location entries default to page-and-descendants;
+select page-only if descendants should not be included. **Change location** starts
+a new entry with the same default. Save normalizes and saves the entry, while
+Cancel discards the whole edit. Whole spaces retain separate By space
+key, From space URL and All spaces modes. A space URL shows the key to be saved;
+use By space key if its browser segment is an alias. Normalization is offline and
+reports `verification: "not_checked"`, without an administrator connection.
+Content identities bind site, kind and ID and follow external cross-space moves;
+subtrees cover current descendants. Existing resources can retain their identity
+while changing name, contexts or enabled state. Existence and upstream permissions
+are checked at invocation.
+Space grants remain broad when a narrower resource is added. See
+[content access](confluence-content-access.md) for supported URLs, exclusions,
+overlap and token restrictions.
 
 The example below grants the group read access to Jira project `ENG` from the
 `default` context. It assumes Jira and its credential connection are

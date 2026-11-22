@@ -227,6 +227,7 @@ async fn lookup_fixture(
             .runtime
             .create_managed_resource(CreateResourceRequest {
                 id: Some(format!("collection-{collection}")),
+                browser_url: None,
                 display_name: None,
                 resource_type: OAUTH_COLLECTION_RESOURCE.id().clone(),
                 selector: ResourceSelector::Exact {

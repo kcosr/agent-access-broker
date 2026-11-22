@@ -149,7 +149,7 @@ async fn cloudbees_plain_inputs_keep_stdio_invoke_send_and_categorized_denials()
             category,
             field,
         );
-        let request = json!({"version": "agent-access.send.v1", "kind": "invoke", "service": "cloudbees_ci", "action": "build.log.read", "inputs": inputs});
+        let request = json!({"version": "agent-access.send.v2", "kind": "invoke", "service": "cloudbees_ci", "action": "build.log.read", "inputs": inputs});
         let sent = command(&config)
             .args(["send", "--request-json", &request.to_string()])
             .output()
@@ -171,7 +171,7 @@ async fn cloudbees_plain_inputs_keep_stdio_invoke_send_and_categorized_denials()
         vec![
             "send",
             "--request-json",
-            r#"{"version":"agent-access.send.v1","kind":"invoke","service":"cloudbees_ci","action":"build.log.read"}"#,
+            r#"{"version":"agent-access.send.v2","kind":"invoke","service":"cloudbees_ci","action":"build.log.read"}"#,
         ],
     ] {
         let output = command(&config).args(args).output().unwrap();
@@ -205,7 +205,7 @@ async fn cloudbees_plain_inputs_keep_stdio_invoke_send_and_categorized_denials()
         .output()
         .unwrap();
     assert_success("plain input URL invoke", &invoked);
-    let sent = command(&config).args(["send", "--request-json", &json!({"version": "agent-access.send.v1", "kind": "invoke", "service": "cloudbees_ci", "action": "build.log.read", "inputs": inputs}).to_string()]).output().unwrap();
+    let sent = command(&config).args(["send", "--request-json", &json!({"version": "agent-access.send.v2", "kind": "invoke", "service": "cloudbees_ci", "action": "build.log.read", "inputs": inputs}).to_string()]).output().unwrap();
     assert_success("plain input URL send", &sent);
     let audit = broker.audit().unwrap();
     let records = audit.require_action("cloudbees_ci", "build.log.read");

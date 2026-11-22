@@ -70,6 +70,8 @@ impl JiraProviderConfig {
 #[serde(deny_unknown_fields)]
 pub struct JiraContentConfig {
     #[serde(default)]
+    pub preferred_output_format: Option<OutputContentFormat>,
+    #[serde(default)]
     pub comment_formats: Vec<String>,
     #[serde(default = "default_jira_body_max_bytes")]
     pub max_body_bytes: u64,
@@ -78,6 +80,7 @@ pub struct JiraContentConfig {
 impl Default for JiraContentConfig {
     fn default() -> Self {
         Self {
+            preferred_output_format: None,
             comment_formats: vec![],
             max_body_bytes: default_jira_body_max_bytes(),
         }
@@ -314,7 +317,12 @@ pub static JIRA_BACKEND: BackendRegistration = BackendRegistration::new(
     parse_backend_config::<JiraProviderConfig>,
 )
 .with_resource_types(&[&JIRA_PROJECT_RESOURCE])
-.with_domain_reasons(&[&custom_field::NOT_ALLOWED, &custom_field::REJECTED]);
+.with_domain_reasons(&[
+    &custom_field::NOT_ALLOWED,
+    &custom_field::REJECTED,
+    &transitions::UNAVAILABLE,
+    &transitions::REJECTED,
+]);
 
 impl BackendConfig for JiraProviderConfig {
     fn kind(&self) -> &'static str {

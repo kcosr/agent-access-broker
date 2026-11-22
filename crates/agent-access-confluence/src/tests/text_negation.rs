@@ -109,14 +109,20 @@ fn text_negation_keeps_positive_type_and_authorized_space_before_grouped_filters
     for (_, kind) in SEARCHES {
         for (scope, predicate) in [
             (
-                EffectiveSearchScope::Finite(BTreeSet::from(["ENG".to_string()])),
-                " AND space IN (ENG)",
+                FixtureSpaces::Finite(BTreeSet::from(["ENG".to_string()])),
+                " AND ((((space = \"ENG\"))))".to_string(),
             ),
             (
-                EffectiveSearchScope::AllExcept(BTreeSet::from(["PRIVATE".to_string()])),
-                " AND space NOT IN (PRIVATE)",
+                FixtureSpaces::AllExcept(BTreeSet::from(["PRIVATE".to_string()])),
+                format!(
+                    " AND ((((type = {}) AND NOT (space = \"PRIVATE\"))))",
+                    kind.cql_type()
+                ),
             ),
-            (EffectiveSearchScope::AllExcept(BTreeSet::new()), ""),
+            (
+                FixtureSpaces::AllExcept(BTreeSet::new()),
+                format!(" AND ((((type = {}))))", kind.cql_type()),
+            ),
         ] {
             for filter in [
                 "title !~ \"obsolete\"",
@@ -126,7 +132,7 @@ fn text_negation_keeps_positive_type_and_authorized_space_before_grouped_filters
                 "(title !~ \"obsolete\" AND space != ARCHIVE) OR (text !~ \"deprecated\" AND id NOT IN (12345))",
             ] {
                 let raw = format!("{filter} ORDER BY lastModified DESC");
-                let built = build_confluence_search_query_for_kind(
+                let built = build_fixture_search_query(
                     &ConfluenceSearchQueryInput::Cql { value: raw.clone() },
                     &scope,
                     &SearchLimitsConfig::default(),
@@ -173,11 +179,11 @@ fn text_negation_discovery_matches_field_support_and_keeps_text_mode_positive() 
                 .unwrap()
                 .contains(&json!("!~"))
         );
-        let built = build_confluence_search_query_for_kind(
+        let built = build_fixture_search_query(
             &ConfluenceSearchQueryInput::Text {
                 value: "obsolete".to_string(),
             },
-            &EffectiveSearchScope::AllExcept(BTreeSet::new()),
+            &FixtureSpaces::AllExcept(BTreeSet::new()),
             &SearchLimitsConfig::default(),
             kind,
         )
@@ -198,24 +204,29 @@ fn content(kind: ConfluenceSearchContentKind, space: &str, status: &str) -> Valu
 }
 
 #[tokio::test]
-async fn text_negation_preserves_whole_response_containment_and_hashed_diagnostics() {
+async fn text_negation_filters_denied_rows_and_preserves_hashed_diagnostics() {
     let filter = "title !~ \"obsolete\" AND (text !~ \"deprecated\" OR space = PRIVATE)";
     for (action, kind) in SEARCHES {
         for (scope, predicate) in [
             (
                 SearchAuthorizationScope::from_exact_values(vec!["ENG".into()]),
-                "space IN (ENG)",
+                "((((space = \"ENG\"))))".to_string(),
             ),
             (
                 SearchAuthorizationScope::excluding_exact_values(vec!["PRIVATE".into()]),
-                "space NOT IN (PRIVATE)",
+                format!(
+                    "((((type = {}) AND NOT (space = \"PRIVATE\"))))",
+                    kind.cql_type()
+                ),
             ),
         ] {
             for invalid in [None, Some(("PRIVATE", "current")), Some(("ENG", "draft"))] {
                 let server = MockServer::start().await;
                 let mut results = vec![content(kind, "ENG", "current")];
                 if let Some((space, status)) = invalid {
-                    results.push(content(kind, space, status));
+                    let mut denied = content(kind, space, status);
+                    denied["id"] = json!("98765");
+                    results.push(denied);
                 }
                 Mock::given(method("GET"))
                     .and(path("/wiki/rest/api/content/search"))
@@ -238,7 +249,7 @@ async fn text_negation_preserves_whole_response_containment_and_hashed_diagnosti
                 let inputs = json!({"query": {"type": "cql", "value": filter}});
                 assert!(provider.local_scopes(action, &inputs).unwrap()["space"].is_empty());
                 let result = provider
-                    .invoke_checked(
+                    .invoke_fixture(
                         InvocationBuilder::new("confluence", action)
                             .inputs(inputs)
                             .credential(credential())
@@ -246,9 +257,9 @@ async fn text_negation_preserves_whole_response_containment_and_hashed_diagnosti
                             .build(),
                     )
                     .await;
-                if invalid.is_some() {
+                if invalid.is_some_and(|(_, status)| status != "current") {
                     let error = result.unwrap_err();
-                    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
+                    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
                     assert!(error.result.is_none());
                     assert!(error.object_ids.is_none());
                 } else {

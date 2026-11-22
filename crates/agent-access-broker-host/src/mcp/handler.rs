@@ -72,6 +72,7 @@ impl Handler {
             &request.context,
             &request.view,
         );
+        mcp::apply_output_content_preference(&mut catalog, request.preferred_output_content_format);
         catalog
     }
     fn registry(request: &Admitted, catalog: &ApiCatalog) -> Result<ToolRegistry, ErrorData> {
@@ -146,6 +147,7 @@ impl Handler {
                     ) {
                         return Ok(PreparedDiscovery::Helper(Ok(output::message(
                             &error.to_string(),
+                            request.include_text_copy,
                         ))));
                     }
                     if *helper == mcp::HelperKind::ServicesDescribe {
@@ -162,18 +164,19 @@ impl Handler {
                         };
                         return Ok(match detail() {
                             Ok(service) => PreparedDiscovery::ServiceDetail(service),
-                            Err(message) => PreparedDiscovery::Helper(Ok(output::message(message))),
+                            Err(message) => PreparedDiscovery::Helper(Ok(output::message(
+                                message,
+                                request.include_text_copy,
+                            ))),
                         });
                     }
                     Ok(PreparedDiscovery::Helper(Ok(match self.helper(request, &catalog, &registry, helper.as_str(), arguments) {
-                        Ok(value) => output::result(value, false, limit).unwrap_or_else(|_| output::message(
-                            if *helper == mcp::HelperKind::ResourceAccessDescribe {
-                                "Resource access result exceeds MCP response limit; narrow action or resourceType filters, or check action availability for a known resource"
-                            } else {
-                                "Discovery result exceeds MCP response limit; use narrower discovery"
-                            },
+                        Ok(value) if *helper == mcp::HelperKind::ResourceAccessDescribe => output::resource_access_result(value, limit, request.include_text_copy),
+                        Ok(value) => output::result(value, false, limit, request.include_text_copy).unwrap_or_else(|_| output::message(
+                            "Discovery result exceeds MCP response limit; use narrower discovery", request.include_text_copy,
                         )),
-                        Err(message) => output::message(message),
+                        Err("resource_access_too_complex") if *helper == mcp::HelperKind::ResourceAccessDescribe => output::resource_access_too_complex(request.include_text_copy),
+                        Err(message) => output::message(message, request.include_text_copy),
                     })))
                 };
                 Some(prepare().unwrap_or_else(|error| PreparedDiscovery::Helper(Err(error))))
@@ -224,6 +227,7 @@ impl Handler {
                 request.context.as_str(),
                 &request.view,
                 request.output_schemas,
+                request.preferred_output_content_format,
                 bytes,
             ))
             .unwrap()
@@ -338,7 +342,18 @@ impl Handler {
                         .and_then(Value::as_str)
                         .map(str::to_owned),
                 })?;
-                serde_json::to_value(page).map_err(|_| "Cannot encode resource access discovery")
+                let bytes = crate::bounded_json::serialize(
+                    &page,
+                    agent_access_core::RESOURCE_ACCESS_MAX_RESPONSE_BYTES,
+                )
+                .map_err(|error| match error {
+                    crate::bounded_json::Error::TooLarge => "resource_access_too_complex",
+                    crate::bounded_json::Error::Serialization => {
+                        "Cannot encode resource access discovery"
+                    }
+                })?;
+                serde_json::from_slice(&bytes)
+                    .map_err(|_| "Cannot encode resource access discovery")
             }
             "actions_list" => {
                 let discovery = runtime
@@ -528,25 +543,40 @@ impl ServerHandler for Handler {
             } else {
                 error.to_string()
             };
-            return Ok(output::message(&message).into());
+            return Ok(output::message(&message, request.include_text_copy).into());
         }
         if !args.get("inputs").is_some_and(Value::is_object) {
-            return Ok(output::message("inputs is required and must be a JSON object").into());
+            return Ok(output::message(
+                "inputs is required and must be a JSON object",
+                request.include_text_copy,
+            )
+            .into());
         }
-        for (key, allowed) in [
-            ("readContentFormat", &action.read_content_formats),
-            ("responseFormat", &action.response_formats),
-        ] {
-            if let Some(v) = args.get(key)
-                && !v.as_str().is_some_and(|s| allowed.iter().any(|a| a == s))
-            {
-                return Ok(output::message("Unsupported response presentation option").into());
-            }
+        if let Some(value) = args.get("outputContentFormat")
+            && !value.as_str().is_some_and(|format| {
+                action
+                    .output_content_formats
+                    .iter()
+                    .any(|allowed| allowed.as_str() == format)
+            })
+        {
+            return Ok(output::message(
+                "Unsupported output content format",
+                request.include_text_copy,
+            )
+            .into());
         }
-        let invoke: InvokeRequest = match serde_json::from_value(Value::Object(args)) {
+        let mut invoke: InvokeRequest = match serde_json::from_value(Value::Object(args)) {
             Ok(v) => v,
-            Err(_) => return Ok(output::message("Invalid action input wrapper").into()),
+            Err(_) => {
+                return Ok(output::message(
+                    "Invalid action input wrapper",
+                    request.include_text_copy,
+                )
+                .into());
+            }
         };
+        invoke.preferred_output_content_format = request.preferred_output_content_format;
         let state = AppState {
             reloadable: self.endpoint.0.state.clone(),
         };
@@ -580,9 +610,11 @@ impl ServerHandler for Handler {
         let admission_action = action.action.clone();
         let Some(registration) = state.reloadable.admission_owners.register() else {
             *request.delivery_started.lock().unwrap() = Some(Instant::now());
-            return Ok(
-                output::message("Broker is shutting down before operation admission").into(),
-            );
+            return Ok(output::message(
+                "Broker is shutting down before operation admission",
+                request.include_text_copy,
+            )
+            .into());
         };
         let (send, mut receive) = tokio::sync::oneshot::channel();
         let (accepted, acknowledgement) = tokio::sync::oneshot::channel();
@@ -665,7 +697,7 @@ impl ServerHandler for Handler {
                     if !waiter_lifetime.initial_admission_is_complete() {
                         receiver_gone.cancel();
                         *request.delivery_started.lock().unwrap() = Some(Instant::now());
-                        return Ok(output::message("Broker operation admission deadline exceeded").into());
+                        return Ok(output::message("Broker operation admission deadline exceeded", request.include_text_copy).into());
                     }
                     None
                 }
@@ -686,7 +718,11 @@ impl ServerHandler for Handler {
             Ok(Err(response)) => Err(response),
             Err(_) => {
                 *request.delivery_started.lock().unwrap() = Some(Instant::now());
-                return Ok(output::message("Broker operation admission failed").into());
+                return Ok(output::message(
+                    "Broker operation admission failed",
+                    request.include_text_copy,
+                )
+                .into());
             }
         };
         drop(receiver_guard);
@@ -700,9 +736,13 @@ impl ServerHandler for Handler {
                     .map_err(|_| ErrorData::internal_error("Broker admission failed", None))?;
                 let value=serde_json::from_slice(&bytes).unwrap_or_else(|_|json!({"error":{"message":"Broker admission failed"},"status":status.as_u16()}));
                 *request.delivery_started.lock().unwrap() = Some(Instant::now());
-                return Ok(output::admission_failure(value, limit)
-                    .unwrap_or_else(|_| output::message("Broker admission failed"))
-                    .into());
+                return Ok(
+                    output::admission_failure(value, limit, request.include_text_copy)
+                        .unwrap_or_else(|_| {
+                            output::message("Broker admission failed", request.include_text_copy)
+                        })
+                        .into(),
+                );
             }
         };
         // Explicit cancellation is authenticated and registered at HTTP ingress,
@@ -726,7 +766,13 @@ impl ServerHandler for Handler {
         let response = owner
             .await
             .map_err(|_| ErrorData::internal_error("Broker operation supervisor failed", None))?;
-        let result = output::broker(response, &control, limit, &action.sensitive_output_pointers);
+        let result = output::broker(
+            response,
+            &control,
+            limit,
+            &action.sensitive_output_pointers,
+            request.include_text_copy,
+        );
         *request.delivery_started.lock().unwrap() = Some(Instant::now());
         Ok(result.into())
     }

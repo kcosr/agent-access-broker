@@ -692,27 +692,27 @@ as JSON Schema, when an upload locator is not an input, when a sensitive output
 is not a JSON pointer into `/result`, when an action resolves its scope by
 lookup without declaring one, when a raw-download action declares a response
 presentation, when an action's result schemas leave the authoring profile,
-exceed their size budget or do not resolve a presentation body owner, or when a
+exceed their size budget or do not resolve a declared body field, or when a
 scope binds an unregistered resource type or offers a selector that type does
 not support.
 
-An action's descriptor also carries its response presentation: the embedded
-upstream bodies that `readContentFormat` normalizes (an owner path and a body
-codec each) and, optionally, a whole-result Markdown renderer for
-`responseFormat = "markdown"`. The presentation engine in
-`agent-access-provider` applies them under one shared render budget and bounds
-the serialized result; each backend supplies its codecs and templates, and the
-rich-content format renderers live in `agent-access-content`. The catalog's
-advertised read and response formats derive from the same presentation.
+An action's presentation descriptor declares each rich-text field's owner path,
+terminal field, presence rules and codec, plus supported output formats and one
+native format. Service metadata carries an optional output preference. The
+`agent-access-provider` presentation engine resolves one concrete format from
+the admitted request/action before provider lookup, then validates and replaces
+the declared fields under shared source, render and serialized-result budgets.
+`agent-access-content` supplies the bounded codecs. Discovery derives format
+capabilities and `bodyFields` from the same descriptor.
 
 An action may also declare result schemas: the provider's success and failure
 `result` payloads before presentation and the envelope, as action-wide
 supersets across configurations and inputs. Core owns composition
-(`output_schema.rs`): it adds the presentation's `renderedBody` companions and
-whole-result Markdown, the shared failure fields and each transport's delivery
-shapes, producing the MCP `outputSchema` of every tool (advertised to MCP
-connections that select it), the catalog's `resultSchemas` and typed OpenAPI
-invoke responses from the one catalog entry.
+(`output_schema.rs`): it replaces the declared body fields with selected
+`{format,value}` schemas, preserves their presence and owner-predicate rules,
+and adds shared failure fields and each transport's delivery shapes. This
+produces MCP `outputSchema` (advertised to connections that select it) and typed
+OpenAPI invoke responses from the catalog's raw provider `resultSchemas`.
 Production never validates results against these schemas; test-support builds
 check every invocation strictly (see
 [result schema conformance](testing.md#result-schema-conformance)).
@@ -819,8 +819,9 @@ metadata. When a concealed `scope_unresolved` result repeats that value under
 fixed independently of the requested locator and must never encode resource
 existence, ownership of a particular object, or an authorization outcome.
 
-- **Jira** (`jira`) — twenty-five actions: `project.list`, `project.view`, `issue_type.list`, `issue.view`, `issue.create`,
-  `issue.child.create`, `issue.update`, `issue.custom_field.set`, `issue.parent.set`,
+- **Jira** (`jira`) — twenty-seven actions: `project.list`, `project.view`, `issue_type.list`, `issue.view`, `issue.create`,
+  `issue.child.create`, `issue.update`, `issue.custom_field.set`,
+  `issue.transition.list`, `issue.transition.apply`, `issue.parent.set`,
   `issue.dependency.add`, `search`,
   `comment.list`, `comment.view`, `comment.add`, `comment.reply`, `comment.update`,
   `comment.delete`, `comment.property.list`, `comment.property.get`,
@@ -851,6 +852,10 @@ existence, ownership of a particular object, or an authorization outcome.
   Jira validates the field's type, context and editability. The provider-global
   allowlist defaults to empty and is checked after authorization; field values
   are neither returned nor audited.
+  [Workflow transitions](providers-jira.md#issue-workflow-transitions) use the
+  execution credential to discover issue-specific choices and apply one selected
+  transition by immutable issue ID, with resolution as the only submitted field.
+  Current-state and destination guards are non-atomic; readback is a later observation.
   `issue.view` can include one chronological page of full comment bodies through
   `includeComments`; `comment.list` returns metadata by default and full bodies
   only with `includeBodies`. Both use the dedicated collection endpoint and
@@ -859,13 +864,10 @@ existence, ownership of a particular object, or an authorization outcome.
   a full-body list requires `comment.view` in the list's mode. These optional
   reads preserve existing action and token restrictions. Each page reflects its
   own authorized visibility; there is no multi-page snapshot.
-  Jira normalized reads cover eight actions whose
-  results declare ADF advertise `readContentFormats = [native, markdown, text]`:
-  `issue.view`, `issue.create`, `issue.update`, `comment.list`, `comment.view`, `comment.add`,
-  `comment.reply`, and `comment.update`. Eleven non-streaming retrieval actions
-  advertise `responseFormats = [json, markdown]`: `project.list`, `project.view`, `issue_type.list`, `issue.view`, `search`,
-  `comment.list`, `comment.view`, `comment.property.list`,
-  `comment.property.get`, `attachment.list`, and `verify`.
+  Eight Jira body actions advertise `outputContentFormats = [markdown, text, adf]`:
+  `issue.view`, `issue.create`, `issue.update`, `comment.list`, `comment.view`,
+  `comment.add`, `comment.reply`, and `comment.update`. ADF is the declared native
+  format; Markdown is preferred unless a service/client preference overrides it.
 - **Confluence** (`confluence`) — space listing, page, blog, attachment,
   verification, and comment actions. The separately granted, read-only
   `space.list` enumerates current spaces with the selected execution credential,
@@ -879,8 +881,9 @@ existence, ownership of a particular object, or an authorization outcome.
   comment actions are split into `page.footer_comment.*`,
   `page.inline_comment.*`, `blog.footer_comment.*`, and
   `blog.inline_comment.*`, including list, view, add where supported, update,
-  delete, and reply flows. Policy scope is the containing `space`. Current content
-  actions remain current-only. Draft actions authorize their containing space,
+  delete, and reply flows. Typed location scopes compose space, exact page/blog,
+  and page/folder subtree resources. Current content actions remain current-only.
+  Draft actions reauthorize their current location,
   using signed broker draft handles after create/stage. Page search
   remains page-only and blog search is a separate action that injects
   `type = blogpost`. Page and page-draft creation optionally place content below
@@ -889,8 +892,9 @@ existence, ownership of a particular object, or an authorization outcome.
   support `before`, `after`, and `append` placement, and verify the parent and
   direct-child order by readback. Create actions resolve
   the target space directly from inputs. Update actions are optimistic-concurrency.
-  Search, blog search, attachment and comment list actions are cursor-paginated
-  with broker-signed continuation tokens that relay Confluence's cursor. Space
+  Search and blog search use confidential cursors bound to complete current
+  authority; owner-bound attachment and comment lists reauthorize each page.
+  See [content access](confluence-content-access.md). Space
   listing uses bounded single-attempt requests and shared request/body budgets;
   its confidential continuation preserves original expiry and binds current
   authority, inputs, and route configuration on every resume. See
@@ -899,16 +903,13 @@ existence, ownership of a particular object, or an authorization outcome.
   explicit `contentFormat`. Markdown and
   plain text are converted to constrained storage HTML; native storage remains
   a string, and current page create/update also retain native
-  `atlas_doc_format` JSON when enabled. Twenty-six Confluence actions whose
-  results declare storage or ADF bodies advertise embedded `native`,
-  `markdown`, and `text`: current page/blog view, page/blog draft view, every
-  page/blog footer/inline comment list/view/reply-list read, footer-comment
-  adds, footer/inline comment updates, and footer/inline reply adds. Twenty-seven
-  non-streaming retrieval actions advertise whole-result `json` and `markdown`:
-  space list, current page/blog view/search/verify, page/blog draft view/verify, current and
-  draft attachment lists, and every page/blog footer/inline comment
-  list/view/reply-list read. Body-free search and attachment results remain
-  body-free, and formatting performs no additional provider call.
+  `atlas_doc_format` JSON when enabled. Twenty-six Confluence action families
+  declare returned rich bodies: page/blog/draft views, body-bearing comment and
+  reply collections, single comment views, and supported comment/reply writes.
+  Each returned body is one tagged value. Configured-out page/comment bodies are
+  omitted, while existing blog/draft storage read support is retained. Markdown
+  and text use available ADF before storage; exact native output uses only that
+  source. Body-free searches and attachment results remain body-free.
 - **GitLab REST** (`gitlab`) — repository-scoped project, issue, merge-request,
   review discussion, current/historical diff, branch, protected branch, file,
   REST commit, CI pipeline, and CI job actions.
@@ -924,22 +925,12 @@ existence, ownership of a particular object, or an authorization outcome.
   `contentFormat`. Native
   Markdown is preserved before attribution; `plain_text` is deterministically
   escaped so CommonMark and GitLab-specific syntax remains literal.
-  GitLab actions whose results declare issue/MR descriptions or note/
-  discussion-note bodies advertise embedded `native`, `markdown`, and `text`:
-  issue view/search/create/update and note list/add/update; merge-request
-  view/search/create/update and note list/add/update; discussion
-  list/add/inline-add/view/resolve/reopen and discussion-note add/update; and
-  draft-note list/view/add/update. Non-streaming GitLab
-  retrievals advertise whole-result `json` and `markdown`: project view; issue
-  view/search/note list; merge-request view/search/note list/discussion
-  list/view, reviewer/commit/pipeline lists, current structured diffs and diff
-  version list/view and draft-note list/view;
-  branch and protected-branch list/view; protected-branch verify; file view;
-  commit list/view; pipeline list/view; and job list/view. Raw file and job-trace
-  downloads, raw current-MR diff, and all mutations remain ineligible for
-  whole-result Markdown. Review positions preserve the exact diff SHA triplet,
-  paths, lines/range, and historical association rather than synthesizing a
-  current-line mapping.
+  GitLab's 28 body-capable actions advertise Markdown and text: issue and MR
+  view/search/create/update; issue/MR notes; MR discussions and their nested notes;
+  and draft notes. Markdown is the native format and preserves exact source bytes.
+  Text uses bounded conversion. No rich body is inferred from snippets, files,
+  commits, jobs or unrelated fields. Review positions preserve the exact diff
+  SHA triplet, paths, lines/range and historical association.
   Direct inline and positioned draft writes require a fresh expected head and
   complete non-null diff SHA triplet, derive native anchors from strict
   coordinates, and fail closed on stale or unprovable positions. Replies target
@@ -1042,24 +1033,41 @@ people on OAuth beside service accounts' classic and service-account tokens.
 All three Atlassian profiles are route-bound, so a Git gateway never presents
 one.
 
-Response presentation is common invoke metadata, not provider input. JSON and
-multipart `InvokeRequest` envelopes may carry top-level `readContentFormat`
-(`native`, `markdown`, or `text`) and `responseFormat` (`json` or `markdown`)
-beside `inputs`. Omission is identical to `native` plus `json`. The request is a
-closed object, and neither field is forwarded upstream. A non-native embedded
-format cannot be combined with whole-result Markdown. Unsupported
-action/format combinations fail with `response_format_unsupported` before
-authorization, credential selection, or provider execution.
+Output content selection is common invoke metadata, not provider input. JSON and
+multipart requests accept optional `outputContentFormat` for strict selection
+and `preferredOutputContentFormat` for a soft client preference. Both use only
+`markdown`, `text`, `adf` or `storage`; null and malformed values are rejected.
+The Broker chooses exact selection first, otherwise the first present request
+preference, service preference, then Markdown. An unsupported preference selects
+the action's native format without trying lower tiers. Unsupported exact formats
+fail with `response_format_unsupported` after identity/token and action admission
+but before policy, credentials or provider lookup. Body-free actions ignore valid
+preferences. Configured format support can therefore be distinguished from a
+later policy denial without an action grant; it never exposes source content.
 
-Embedded formatting preserves the native field and adds `renderedBody` beside
-its owning result entity. Whole-result formatting receives the already-produced
-result, performs no additional fetch or pagination, and replaces `result` with
-`{ "format": "markdown", "value": "..." }` inside the normal response
-envelope. Its typed templates include every meaningful present field in stable
-order and never expose raw ADF or Confluence storage HTML. GitLab embedded
-Markdown is byte-for-byte native; its text renderer and whole-result composer
-parse under fixed bounds, suppress active raw HTML, and close body structures
-before rendering subsequent result metadata.
+Finalization uses the same pinned descriptor and format to replace each declared
+body with `{format,value}`. ADF is an object; the other values are strings. The
+ordinary JSON envelope and surrounding metadata remain structured on every
+interface. Optional/null/empty source rules are explicit in `bodyFields`.
+Confluence validates every fetched configured source before discarding unselected
+ones. A malformed or absent source, conversion failure or exhausted budget never
+causes a second format selection or upstream request.
+
+Client preferences use `defaults.preferred_output_content_format` and its
+environment equivalent. Service content sections use `preferred_output_format`.
+HTTP MCP takes the per-request preference from its literal endpoint query;
+stdio may set a process preference. Action details report the effective preference
+without altering the canonical service-default catalog. CLI invocation uses one
+fresh catalog/version check; final authority and preference resolution stay in
+the Broker. Catalog v3 and send v2 describe this contract.
+
+Body-bearing native mutations attach a nonserialized completed-operation receipt.
+If presentation or final-size validation fails after verified completion, the
+Broker returns that compact `applied`/non-retryable result with the original error
+code and a fixed instruction not to repeat the operation. CLI/send/stdio also
+retain completion in a payload-free `response_content_invalid` receipt if a
+received successful body violates its declared shape. Ordinary errors, downloads
+and existing compact receipts preserve their separate contracts.
 
 ## Request lifecycle
 
@@ -1739,12 +1747,18 @@ candidate evaluation. A candidate is a grant subject that matches the identity
 stitched: a single authored grant and concrete subject candidate must authorize
 the service, the action, and the entire resolved scope set on its own.
 
-**Resource matching.** Resources have typed exact, namespace, or all selectors.
+**Resource matching.** Resources declare supported exact, namespace, all or
+subtree selectors; each type validates its own canonical grammar.
 GitLab REST and Git HTTP use the same canonical repository names and resource
-entries. Jira uses projects, Confluence uses spaces, and CloudBees CI uses
+entries. Jira uses projects, Confluence uses spaces and typed content locations,
+and CloudBees CI uses
 controller-alias/full-job-name resources. CloudBees job selectors use exact,
-strict descendant namespace, or all. No issue/page policy
-scopes are supported. An all or namespace entry covers matching upstream objects
+strict descendant namespace, or all. Confluence containment scopes compose
+space and content selectors using current evidence; subtree is not a namespace
+string match. Authored content identity binds only site, kind and immutable ID,
+with exact/subtree coverage separate. Current container and ancestor observations
+are runtime evidence, so a content grant follows an external cross-space move
+without implying a space grant. Jira issue scopes are not supported. An all or namespace entry covers matching upstream objects
 without catalog registration.
 
 A grant unions its direct selections and selected groups' inclusions, retains
@@ -1774,8 +1788,11 @@ overrides a user grant.
 `credential_mode`, the request is denied as `ServiceActionDenied` with reason
 "ambiguous credential mode precedence". Static config validation independently
 rejects duplicate same-subject grants and overlapping containment-scope grants
-with differing modes, except lookup-backed wildcard-vs-finite overlaps that can
-be resolved after authoritative metadata lookup. A command import's
+with differing modes when overlap is proved. Conditional intersections, including
+finite Confluence space versus an unpinned content root and lookup-backed
+wildcard-vs-finite overlaps, may publish and require authoritative runtime
+resolution. Identical content roots and same-root exact/subtree mixed-mode
+overlaps remain statically rejectable. A command import's
 command-enforced actions are exempt from both: every grant of their top band is
 passed with its own credential mode, so mixed modes are not ambiguous.
 
@@ -1795,8 +1812,9 @@ entries, and context-ineligible entries never create unrestricted access.
 
 Jira and Confluence search planning compiles each eligible grant's inclusion
 minus exclusion boundary before combining grants under the existing precedence
-and credential rules. Project and space scopes can be finite values or all
-except finite exclusions. Token restrictions intersect the result. This is not
+and credential rules. Scalar project/space scopes can be finite values or all
+except finite exclusions. Confluence content search additionally retains exact
+page/blog and subtree predicates across the winning boundary union. Token restrictions intersect the result. This is not
 a global subtraction across grants: another eligible grant can restore access
 excluded by the first grant.
 
@@ -1831,9 +1849,10 @@ explicit authorized `projects` or an additional filter such as `updated >= -7d`.
 Nested `AND`/`OR` groups containing only those clauses follow the same rule.
 This guard does not implement Jira's complete query-bound analysis; other
 nonempty filters retain Jira's endpoint-specific validation. Confluence emits
-the fixed positive page/blog content-type predicate first, then any policy
-space predicate, then the grouped caller filter, including with unrestricted
-all-space access.
+the fixed positive page/blog content-type predicate first, then complete typed
+authority constraints, then the grouped caller filter. Result checks use current
+location evidence and discard valid denied candidates before release. Missing
+required evidence fails closed.
 Empty text-mode queries remain invalid. Malformed syntax, unsupported grammar,
 and query complexity limits use
 `input_invalid` with safe syntax guidance; authorization and returned-resource
@@ -2639,7 +2658,7 @@ raw draft handles, page/blog body content, caller-supplied title mismatch
 values, attachment filenames, attachment content hashes, and raw download URLs.
 
 Native rich bodies, review summaries, patches, native line codes,
-`renderedBody` values, whole-result Markdown, arbitrary comment-property
+selected rich-text values, arbitrary comment-property
 values, and pagination tokens are likewise excluded from
 audit, tracing, logs, errors, and object identifiers. Audit may record bounded
 format names, byte counts, and stable conversion outcomes without receiving the

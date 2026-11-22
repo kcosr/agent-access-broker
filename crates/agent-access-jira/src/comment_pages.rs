@@ -59,10 +59,8 @@ pub(super) fn project(
             // invalid upstream content cannot disappear behind pagination.
             validate_returned_comment_body(comment, config.content.max_body_bytes)?;
             let body_bytes = if let Some(body) = &comment.body {
-                render_adf_bounded_with_budget(
+                validate_adf_bounded_with_budget(
                     body,
-                    ReadContentFormat::Native,
-                    config.content.max_body_bytes,
                     config.content.max_body_bytes,
                     &mut RenderBudget::default(),
                 )
@@ -93,14 +91,8 @@ pub(super) fn project(
             if let Some(body) = &comment.body {
                 // This budget may already contain the issue description and custom
                 // fields. Native output must honor the same combined complexity cap.
-                render_adf_bounded_with_budget(
-                    body,
-                    ReadContentFormat::Native,
-                    config.content.max_body_bytes,
-                    config.content.max_body_bytes,
-                    budget,
-                )
-                .map_err(|_| invalid_page())?;
+                validate_adf_bounded_with_budget(body, config.content.max_body_bytes, budget)
+                    .map_err(|_| invalid_page())?;
             }
             comments.push(comment_result(comment));
         } else {

@@ -51,10 +51,17 @@ actions and exposes typed wrappers for supported services.
   do not reintroduce singular grant `subject` config, API, CLI JSON, or store
   shapes unless an approved interface change explicitly changes the contract.
 - Grants and token resource restrictions reference typed resource entries and
-  resource groups. Do not restore freeform policy scope strings, Jira issue or
-  Confluence page scopes, or generic HTTP services. Group exclusions apply
+  resource groups. Do not restore freeform policy scope strings, Jira issue scopes, or generic HTTP services. Confluence content
+  uses the registered exact/subtree containment type, not freeform page scopes. Group exclusions apply
   across selections within one grant/token boundary, including when their
   resource entry is disabled or context-ineligible; they are not global denies.
+  Optional resource `browserUrl` is navigation metadata: validate it through the
+  type's stable selector projection and offline normalizer against the same
+  selector. Never use it for authorization, silently retarget it, or include the
+  original URL/title in audit snapshots. Keep URL edits separate from target
+  replacement and preserve omission/null semantics on resource PATCH.
+  Token choices use `AgentTokenResourceOption`, not full resource definitions,
+  so authored exclusions never disclose administrative browser URLs or titles.
   Resource types may opt out with `supportsExclusions: false`: validate every
   excluded group membership at catalog validation and publication, including
   unused groups. Never silently drop an unsupported exclusion. Imported-type
@@ -108,15 +115,21 @@ actions and exposes typed wrappers for supported services.
   Strict tests (`assert_result_conforms`) and the test-support runtime check,
   which aborts the test process, require every emitted field to be declared;
   advertised objects stay open. Never change a delivered payload to satisfy a
-  schema. Core (`output_schema.rs`) alone composes rendered bodies, Markdown,
-  shared failure fields, envelopes, MCP `outputSchema`, catalog `resultSchemas`
-  and OpenAPI responses; import adapters supply wrapper schemas with open
-  upstream leaves.
+  schema. Catalog `resultSchemas` retain these raw provider schemas. Core
+  (`output_schema.rs`) composes selected `{format,value}` bodies at `bodyFields`,
+  shared failure fields, envelopes, MCP `outputSchema` and OpenAPI responses.
+  Preserve field and owner absence/null rules and `ownerEquals` conditions;
+  nonmatching owners retain their native field schemas. Composed body schemas
+  cover all four concrete format/value pairings across supported configurations;
+  current `outputContentFormats` still constrains exact requests. Import adapters supply
+  wrapper schemas with open upstream leaves.
 - MCP output-schema advertisement is a per-connection registry dimension
   (`mcp::OutputSchemas`) beside transport mode and view, off by default with no
   Broker setting: HTTP `outputSchemas=on|off` evaluated per request by the one
-  strict endpoint query parser (no session state; cursors bind it), stdio
-  `mcp serve --output-schemas on|off`. Off composes no schema and omits
+  strict endpoint query parser alongside content preference and text-copy
+  controls (no session state; cursors bind schema selection and content preference,
+  not text-copy selection), stdio `mcp serve --output-schemas on|off`.
+  Off composes no schema and omits
   `outputSchema`, `mcpTool.outputSchema` and `resultSchemas` from MCP
   projections; results, the caller catalog, OpenAPI and non-MCP CLI details
   never depend on it. Both describe paths share `ToolRegistry::describe_action`.
@@ -196,7 +209,7 @@ actions and exposes typed wrappers for supported services.
   before provider dispatch, including downloads, and preserve unverified mutation
   outcomes in compact receipts without exposing catalog-marked secrets.
   `--output` is a destination and
-  `--output-format` is representation; preserve dedicated raw-download actions
+  `--output-content-format` selects declared body representation within JSON; preserve dedicated raw-download actions
   and receipt metadata. Generic `invoke --output` selects JSON versus raw bytes
   from one fresh caller catalog; it must not retry after stale discovery.
   Downloads preserve explicit mutation outcomes on local/transfer failure, and
@@ -214,6 +227,36 @@ actions and exposes typed wrappers for supported services.
   the same change when behavior, commands, config, architecture, security
   posture, provider semantics, operational workflows, or repository layout
   changes.
+
+## Output content contracts
+
+Ordinary invocation results stay JSON. Return one selected `{format,value}` at
+each declared rich-text field; retain metadata, absence/null rules and binary
+contracts. Exact `outputContentFormat` is strict. Resolve a soft preference from
+request/connection, service, then Markdown against the admitted descriptor;
+an unsupported preference uses the declared native format without checking lower
+tiers. Pin that selection through finalization. Never fall back after missing or
+malformed source data, conversion failure or exhausted budgets, and never fetch
+additional sources to satisfy a format.
+
+Keep the four concrete format/value pairings, `bodyFields`, catalog/send versions,
+CLI and MCP projections aligned. Validate successful selected content only at
+declared fields; preference output may use a newly enabled native source after
+catalog discovery. Preserve explicit provider-authored completed mutation receipts
+when presentation fails. Client validation errors withhold invalid content, keep
+known completion and do not replay an invocation. Provider content preferences
+use `preferred_output_format`; client defaults use `preferred_output_content_format`.
+
+MCP `includeTextCopy` defaults to true; false emits top-level `content: []`,
+retaining complete `structuredContent`, `isError` and `_meta` on every tool-result
+path. Keep readable messages represented in structured errors too. Construct
+results without allocating an omitted copy and count actual emitted wire bytes;
+preserve provider/body and resource-access caps. Never remove nested imported
+`result.upstreamMcp.content` or add client-detection fallback. HTTP owns this
+setting per admitted request, independently of session identity and discovery
+cursors; stdio owns `--include-text-copy` for the process. Keep strict composable
+HTTP query parsing and trusted-username admission audits. This is transport
+presentation, separate from output-content selection and tool arguments.
 
 ## Invocation admission and discovery
 
@@ -673,6 +716,10 @@ stdio MCP subprocess; keep those file, receipt and transport boundaries covered.
   the third-party types and macros supported signatures name. The SDK resolves
   no secrets, loads no TLS files and reads no process environment.
   `docs/provider-sdk.md` documents its supported surface for provider authors.
+  `containment.rs` owns typed locations, whole-operation obligations, boundary
+  proofs and opaque invocation authority; `scope.rs` keeps scalar and containment
+  contracts distinct. Providers report current evidence, while the host selects
+  grants and credentials. Never convert subtree authority to scalar scopes.
 - `crates/agent-access-core`: shared config, policy, identity, envelope, and
   runtime, host secret-reference resolution, and host network construction
   (`network.rs`: outbound TLS trust, egress proxy selection and the per-caller
@@ -713,12 +760,21 @@ stdio MCP subprocess; keep those file, receipt and transport boundaries covered.
   definitions, bounded import schemas) and the opaque
   `ImportedAdapterRegistration`. Crates that use backend-contract items import
   them from `agent_access_provider` directly, not through core.
+  `runtime/containment.rs` owns complete-operation grant matching, collection
+  bands, token intersections and bounded location previews;
+  `runtime/resource_access.rs` owns caller disclosure and registered references.
+  Keep protected exclusions and competing roots out of ordinary agent projections.
+  `managed_store/confluence_content_resources.sql` (migration 038) adds stored
+  subtree selectors without changing existing membership or encrypted attributes.
+  `managed_store/resource_browser_urls.sql` (migration 039) adds nullable
+  navigation URLs; prior resource identities and policy revisions are preserved.
 - `crates/agent-access-content`: rich-content formats (ADF, Confluence storage,
   GitLab Markdown) rendering and conversion, plus attribution footers.
 - `crates/agent-access-jira`: the Jira backend (`project_list.rs` live project collection,
   `project_view.rs` authorized project details and searchable-field discovery,
   `backend.rs` wire seam and HTTP client, `custom_fields.rs` issue-view custom-field projection and validation,
   `custom_field.rs` acknowledgement-only writes to one operator-allowlisted custom field,
+  `transitions.rs` issue-specific discovery and single workflow transitions,
   `issue_view_context.rs` standard context and guarded hierarchy projection,
   `jql.rs` search and JQL parser, `config.rs`, `present.rs`). Detailed context,
   embedded hierarchy and general custom-field projection belong only to `JiraIssueView`; search
@@ -731,6 +787,11 @@ stdio MCP subprocess; keep those file, receipt and transport boundaries covered.
   and send exactly one fields entry. Jira owns type/context/editability rules.
   Return a value-free acknowledgement without reading the field. Preserve write
   uncertainty receipts; never audit field values or raw Jira validation errors.
+  Transition discovery and apply use the selected execution credential and the
+  confirmed immutable issue ID. Apply rechecks its own credential's transition
+  availability and destination; only resolution is a supported submitted field.
+  Preserve independent grants, non-atomic guard semantics and no replay after
+  uncertain writes. Readback is a later observation, not an atomic state proof.
   Preserve exact schema allowlisting, null/empty sentinels, explicit unsupported
   or withheld statuses, and shared ADF budgets without raw JSON passthrough. Its
   project discovery uses the selected execution credential after authorization,
@@ -743,12 +804,22 @@ stdio MCP subprocess; keep those file, receipt and transport boundaries covered.
   Its `test-support` feature serves the production provider with its gateway
   route at a stub origin, for host tests of OAuth connections.
 - `crates/agent-access-confluence`: the Confluence backend (`space_list.rs` live space collection, `backend.rs` wire
-  seam and HTTP client, `cql.rs` search and CQL parser, `continuation.rs`
+  seam and HTTP client, `hierarchy_backend.rs` strict current metadata,
+  `content_access.rs` offline URL entry and current location proofs,
+  `content_search.rs` bounded result-filtered search, `cql.rs` caller CQL parser
+  and `cql/containment.rs` trusted authority composition, `continuation.rs`
   page-token and draft-handle families, `config.rs`, `present.rs`), with the
   same `test-support` provider fixture as Jira.
   Space keys preserve exact upstream case, including ordinary keys with mixed
   case, a leading digit, or one character; keep the shared catalog, input, CQL,
   and response validator aligned. Never normalize keys for authorization.
+  Content policy identities bind site/kind/ID in `/wiki/content/{kind}/{ID}`;
+  current space and ancestor containers are observed evidence. Keep action browser
+  URL key-or-alias consistency separate from offline resource normalization. Pure
+  scalar-container search may retain indexed rows only after checking every
+  winning-grant/token inclusion and exclusion; content participation requires
+  fresh candidate proof. Preserve exact failed-root audit provenance without
+  exposing upstream root values or substituting unrelated configured IDs.
 - `crates/agent-access-gitlab`: the GitLab backend (`backend.rs` wire seam,
   pagination headers, and HTTP client, `access.rs` the credential each request
   presents: a static token, or delegated access pinned to the instance before
@@ -1018,6 +1089,9 @@ stdio MCP subprocess; keep those file, receipt and transport boundaries covered.
 - `docs/providers-confluence.md`: Confluence live spaces, page, blog, draft, comment,
   attachment, CQL, URL locator, and attribution behavior, and OAuth
   connections with each action's Atlassian scopes.
+- `docs/confluence-content-access.md`: offline URL entry, exact/subtree resources,
+  precedence and exclusions, whole-operation authorization, current evidence,
+  search/discovery, limits, and upgrade/qualification requirements.
 - `docs/providers-cloudbees-ci.md`: CloudBees CI job resources and
   job/build/Pipeline/test reads, log/report/artifact downloads, queue inspection,
   and trigger actions.

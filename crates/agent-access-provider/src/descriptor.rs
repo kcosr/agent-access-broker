@@ -6,7 +6,7 @@
 //! of keeping parallel per-service tables.
 
 use crate::attribution::AttributionCapability;
-use crate::presentation::ActionPresentation;
+use crate::presentation::{ActionPresentation, OutputContentFormat};
 use crate::{
     ActionCapabilities, ActionResultSchemas, ResourceScopeCapabilities, ServiceCapabilities,
     UpstreamAuthority, UpstreamResourceOwnership,
@@ -44,11 +44,15 @@ pub struct ServiceDescriptor {
     pub credentials: CredentialDescriptor,
     /// Largest embedded upstream body the broker renders for this service.
     pub presentation_body_limit: Option<u64>,
+    /// Soft service preference for declared rich-content output fields.
+    pub preferred_output_content_format: Option<OutputContentFormat>,
     /// The upstream instance this service's credentials act on, from its
     /// configuration. A credential connection's consumers must agree on it,
     /// and an OAuth dialect checks it against a registration; a service that
     /// declares none can share a credential connection with no other service.
     pub upstream_authority: Option<UpstreamAuthority>,
+    /// Pure management URL-entry capability; never ordinary agent instance metadata.
+    pub location_entry: Option<crate::LocationEntryCapability>,
 }
 
 #[non_exhaustive]
@@ -110,8 +114,10 @@ pub struct ActionDescriptor {
     /// Handles issued by this action must survive restarts and reloads, so
     /// the broker must hold a stable signing key.
     pub requires_stable_signing_key: bool,
-    /// Read-content normalization and whole-result Markdown the action
-    /// supports; `None` means JSON results only.
+    /// Validate a local signed scope locator before lookup material is acquired.
+    pub requires_scope_locator_validation: bool,
+    /// Declared rich-content fields and their concrete output formats;
+    /// `None` means the result has no selected body fields.
     pub presentation: Option<ActionPresentation>,
     /// The provider payload schemas the host composes into advertised output
     /// schemas; `None` publishes none. See [`Self::result_schemas`].
@@ -366,9 +372,17 @@ impl ActionDescriptor {
             audit_inputs: Vec::new(),
             attribution: None,
             requires_stable_signing_key: false,
+            requires_scope_locator_validation: false,
             presentation: None,
             result_schemas: None,
         }
+    }
+
+    /// Enables the synchronous local locator hook for a native containment
+    /// action. The host must validate it before acquiring lookup material.
+    pub fn scope_locator_validation(mut self) -> Self {
+        self.requires_scope_locator_validation = true;
+        self
     }
 
     /// Request private attributes from one authorized exact resource at dispatch.
@@ -523,8 +537,8 @@ impl ActionDescriptor {
 
     /// Declares the schemas of the action's provider payloads: its success
     /// `result` and, optionally, its provider errors' `result`. The host
-    /// composes them with the presentation's rendered bodies and Markdown
-    /// export, the shared failure details and the Broker envelope into the
+    /// composes them with the presentation's selected content fields,
+    /// the shared failure details and the Broker envelope into the
     /// action's advertised MCP output schema, catalog entry and OpenAPI
     /// response. [`ServiceDescriptor::validate`] checks them against the
     /// authoring profile [`ActionResultSchemas`] describes.
@@ -618,7 +632,9 @@ impl ServiceDescriptor {
             actions: Vec::new(),
             credentials: CredentialDescriptor::default(),
             presentation_body_limit: None,
+            preferred_output_content_format: None,
             upstream_authority: None,
+            location_entry: None,
         }
     }
 
@@ -636,6 +652,11 @@ impl ServiceDescriptor {
         self
     }
 
+    pub fn with_location_entry(mut self, capability: crate::LocationEntryCapability) -> Self {
+        self.location_entry = Some(capability);
+        self
+    }
+
     pub fn with_actions(mut self, actions: Vec<ActionDescriptor>) -> Self {
         self.actions = actions;
         self
@@ -649,6 +670,12 @@ impl ServiceDescriptor {
     /// Largest embedded upstream body the broker renders for this service.
     pub fn with_presentation_body_limit(mut self, bytes: u64) -> Self {
         self.presentation_body_limit = Some(bytes);
+        self
+    }
+
+    /// Selects a soft preference without changing an action's supported formats.
+    pub fn with_preferred_output_content_format(mut self, format: OutputContentFormat) -> Self {
+        self.preferred_output_content_format = Some(format);
         self
     }
 
@@ -779,6 +806,36 @@ impl ServiceDescriptor {
                 "service {service} needs a delegated connection description of at most 512 bytes"
             ));
         }
+        if let Some(location) = &self.location_entry
+            && (!location.validate()
+                || self.upstream_authority.as_ref().is_none_or(|authority| {
+                    !crate::location::is_canonical_https_dns_origin(authority.origin())
+                        || !authority.instance_path().is_empty()
+                })
+                || !matches!(self.surface, ServiceSurface::Invoke))
+        {
+            errors.push(format!("service {service} location entry requires valid metadata and an HTTPS DNS origin without port or instance path"));
+        }
+        if !matches!(self.surface, ServiceSurface::Invoke)
+            && self
+                .resource_scopes
+                .values()
+                .any(|scope| scope.as_containment().is_some())
+        {
+            errors.push(format!(
+                "service {service} gateways cannot declare containment scopes"
+            ));
+        }
+        for (scope, binding) in &self.resource_scopes {
+            if let Some(contract) = binding.as_containment()
+                && (contract.validate_shape().is_err()
+                    || self.upstream_authority.as_ref().is_none_or(|authority| {
+                        !crate::location::is_canonical_https_dns_origin(authority.origin())
+                    }))
+            {
+                errors.push(format!("service {service} scope {scope} requires a valid containment declaration and canonical HTTPS site origin"));
+            }
+        }
         let mut profiles = BTreeSet::new();
         for profile in &self.credentials.profiles {
             // One declaration per name: lookups by name return the first,
@@ -824,6 +881,31 @@ impl ServiceDescriptor {
                     "{service}.{name} references undeclared resource scope {scope}"
                 ));
             }
+            let containment = action
+                .resource_scope
+                .as_ref()
+                .and_then(|scope| self.resource_scopes.get(scope))
+                .and_then(ResourceScopeCapabilities::as_containment);
+            if containment.is_some()
+                && (action.requires_resource_attributes
+                    || !matches!(
+                        action.scoped_mcp_name_source,
+                        ScopedMcpNameSource::CanonicalAction
+                    ))
+            {
+                errors.push(format!("{service}.{name} containment requires a native action without private resource attributes"));
+            }
+            if action.requires_scope_locator_validation
+                && (containment.is_none()
+                    || action.lookup != LookupRequirement::ScopeResolution
+                    || action.native_search.is_some()
+                    || !matches!(
+                        action.scoped_mcp_name_source,
+                        ScopedMcpNameSource::CanonicalAction
+                    ))
+            {
+                errors.push(format!("{service}.{name} local scope locator validation requires a native containment lookup action"));
+            }
             if action.requires_resource_attributes
                 && (action.resource_scope.is_none() || action.native_search.is_some())
             {
@@ -849,7 +931,7 @@ impl ServiceDescriptor {
                     || !matches!(action.io, ActionIo::Json)
                     || action.requires_resource_attributes
                     || !collection
-                    || binding.is_none_or(|binding| &binding.resource_type != listing_of)
+                    || binding.is_none_or(|binding| !binding.accepts_resource_type(listing_of))
                 {
                     errors.push(format!(
                         "{service}.{name} listingOf requires a read-only JSON collection of its own scoped resource type without private resource attributes"
@@ -925,18 +1007,25 @@ impl ServiceDescriptor {
                 ));
             }
             if let Some(schemas) = &action.result_schemas {
-                let owners = action
+                let body_fields = action
                     .presentation
-                    .iter()
-                    .flat_map(|presentation| presentation.embedded_bodies())
-                    .map(crate::presentation::EmbeddedBody::owner_pointer)
-                    .collect::<Vec<_>>();
+                    .map(|presentation| presentation.body_fields())
+                    .unwrap_or_default();
                 crate::result_schema::validate_action_result_schemas(
                     &format!("{service}.{name}"),
                     schemas,
-                    &owners,
+                    &body_fields,
                     &mut errors,
                 );
+            }
+            if action
+                .presentation
+                .as_ref()
+                .is_some_and(|presentation| presentation.validate().is_err())
+            {
+                errors.push(format!(
+                    "{service}.{name} declares an invalid response presentation"
+                ));
             }
             if action.presentation.is_some() && matches!(action.io, ActionIo::RawDownload { .. }) {
                 errors.push(format!(
@@ -1033,22 +1122,46 @@ impl ServiceDescriptor {
     pub fn validate_resource_types(&self, registry: &crate::ResourceTypeRegistry) -> Vec<String> {
         let mut errors = Vec::new();
         for (scope, binding) in &self.resource_scopes {
-            let Some(resource_type) = registry.get(&binding.resource_type) else {
-                errors.push(format!(
-                    "service {} scope {scope} uses unregistered resource type {}",
-                    self.service, binding.resource_type
-                ));
-                continue;
-            };
-            let supported = resource_type.selector_kinds();
-            for selector in &binding.selectors {
-                if !supported.contains(&selector.as_str()) {
-                    errors.push(format!(
-                        "service {} scope {scope} offers selector {selector} that resource type {} does not support",
-                        self.service, binding.resource_type
-                    ));
+            match binding {
+                ResourceScopeCapabilities::Scalar {
+                    resource_type,
+                    selectors,
+                } => {
+                    let Some(descriptor) = registry.get(resource_type) else {
+                        errors.push(format!("service {} scope {scope} uses unregistered resource type {resource_type}", self.service));
+                        continue;
+                    };
+                    for selector in selectors {
+                        if selector == "subtree"
+                            || !descriptor.selector_kinds().contains(&selector.as_str())
+                        {
+                            errors.push(format!("service {} scalar scope {scope} offers unsupported selector {selector} for resource type {resource_type}", self.service));
+                        }
+                    }
+                }
+                ResourceScopeCapabilities::Containment(contract) => {
+                    if contract.validate(registry).is_err() {
+                        errors.push(format!(
+                            "service {} scope {scope} has an invalid containment contract",
+                            self.service
+                        ));
+                    }
                 }
             }
+        }
+        if let Some(location) = &self.location_entry
+            && (registry
+                .get(location.normalizer())
+                .is_none_or(|descriptor| !descriptor.has_location_normalizer())
+                || location
+                    .resource_types()
+                    .iter()
+                    .any(|resource_type| registry.get(resource_type).is_none()))
+        {
+            errors.push(format!(
+                "service {} location entry references an unregistered normalizer or resource type",
+                self.service
+            ));
         }
         errors
     }
@@ -1205,15 +1318,17 @@ mod tests {
             surface: ServiceSurface::Invoke,
             resource_scopes: BTreeMap::from([(
                 "project".to_string(),
-                ResourceScopeCapabilities {
-                    resource_type: ResourceType::new("example_project").unwrap(),
-                    selectors: vec!["exact".to_string()],
-                },
+                ResourceScopeCapabilities::new(
+                    ResourceType::new("example_project").unwrap(),
+                    vec!["exact".to_string()],
+                ),
             )]),
             actions,
             credentials: CredentialDescriptor::without_execution_credential(),
             presentation_body_limit: None,
+            preferred_output_content_format: None,
             upstream_authority: None,
+            location_entry: None,
         }
     }
 
@@ -1631,28 +1746,36 @@ mod tests {
     fn result_schemas_are_validated_against_the_profile_and_presentation() {
         use crate::presentation::{
             ActionPresentation, BodyPathSegment, EmbeddedBody, EmbeddedBodyCodec,
-            ReadContentFormat, RenderBudget, RenderError, RenderedBody,
+            OutputContentFormat, RenderBudget, RenderError, SelectedContent,
         };
         struct Codec;
         impl EmbeddedBodyCodec for Codec {
-            fn render(
+            fn supported_formats(&self) -> &'static [OutputContentFormat] {
+                &[OutputContentFormat::Text]
+            }
+            fn select(
                 &self,
-                _owner: &serde_json::Map<String, Value>,
-                _format: ReadContentFormat,
+                _source: &Value,
+                _format: OutputContentFormat,
                 _max_body_bytes: u64,
                 _budget: &mut RenderBudget,
-            ) -> Result<Option<RenderedBody>, RenderError> {
+            ) -> Result<Option<SelectedContent>, RenderError> {
                 Ok(None)
             }
         }
         static CODEC: Codec = Codec;
         static BODIES: [EmbeddedBody; 1] = [EmbeddedBody::new(
             &[BodyPathSegment::Field("comments"), BodyPathSegment::Each],
+            "body",
             &CODEC,
         )];
         let presented = |schemas| {
             action("item.view")
-                .presentation(Some(ActionPresentation::new(&BODIES, None)))
+                .presentation(Some(ActionPresentation::new(
+                    &BODIES,
+                    &[OutputContentFormat::Text],
+                    OutputContentFormat::Text,
+                )))
                 .result_schemas(schemas)
         };
         let comments = json!({"type": "object", "properties": {"comments": {
@@ -1668,14 +1791,14 @@ mod tests {
                 json!({"type": "object"})
             ))]),
             [
-                "example.item.view success result schema does not resolve rendered body owner /comments/*"
+                "example.item.view success result schema does not resolve body field /result/comments/*/body"
             ]
         );
         // The error schema need not carry the owner.
         assert_eq!(
             errors(vec![presented(
                 ActionResultSchemas::new(json!({"type": "object", "properties": {"comments": {
-                    "type": "array", "items": {"type": "object"}
+                    "type": "array", "items": {"type": "object", "properties":{"body":{"type":"string"}}}
                 }}}))
                 .with_error(json!({"type": "object", "properties": {"code": {"type": "string"}}}))
             )]),
@@ -1701,13 +1824,18 @@ mod tests {
         let mut unscoped_lookup = action("item.view").lookup(LookupRequirement::ScopeResolution);
         unscoped_lookup.resource_scope = None;
         let presented_download = action("item.download").raw_download().presentation(Some(
-            crate::presentation::ActionPresentation::new(&[], None),
+            crate::presentation::ActionPresentation::new(
+                &[],
+                &[OutputContentFormat::Text],
+                OutputContentFormat::Text,
+            ),
         ));
         let malformed_pointer = action("item.token").sensitive_output("/result/~2");
         assert_eq!(
             errors(vec![unscoped_lookup, presented_download, malformed_pointer,]),
             [
                 "example.item.view resolves its resource scope by lookup but declares no resource scope",
+                "example.item.download declares an invalid response presentation",
                 "example.item.download streams its result and cannot declare a response presentation",
                 "example.item.token sensitive output /result/~2 is not a JSON pointer",
             ]

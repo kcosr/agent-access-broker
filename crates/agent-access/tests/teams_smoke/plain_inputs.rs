@@ -194,7 +194,7 @@ async fn teams_plain_inputs_project_and_preserve_relationship_denials_across_tra
         let invoked = run(&f.agent_config, &["invoke", "teams.notification.send", "--input-file", input_file.to_str().unwrap()]);
         assert_eq!(invoked.status.code(), Some(3));
         let invoked: Value = serde_json::from_slice(&invoked.stdout).unwrap();
-        let request = json!({"version": "agent-access.send.v1", "kind": "invoke", "service": "teams", "action": "notification.send", "inputs": inputs});
+        let request = json!({"version": "agent-access.send.v2", "kind": "invoke", "service": "teams", "action": "notification.send", "inputs": inputs});
         let request_file = f.broker.directory().secret_file(format!("invalid-send-{index}.json"), request.to_string()).unwrap();
         let sent = run(&f.agent_config, &["send", "--request-file", request_file.to_str().unwrap()]);
         assert_eq!(sent.status.code(), Some(3));
@@ -226,7 +226,7 @@ async fn teams_plain_inputs_project_and_preserve_relationship_denials_across_tra
     );
     let send_validator = jsonschema::validator_for(&send).unwrap();
     for inputs in [None, Some(json!({}))] {
-        let mut request = json!({"version": "agent-access.send.v1", "kind": "invoke", "service": "teams", "action": "notification.send"});
+        let mut request = json!({"version": "agent-access.send.v2", "kind": "invoke", "service": "teams", "action": "notification.send"});
         let mut command = command(&f.agent_config);
         command.args(["invoke", "teams.notification.send"]);
         if let Some(inputs) = inputs {
@@ -329,7 +329,7 @@ async fn teams_plain_content_extensions_execute_and_are_forwarded_unchanged() {
         )
         .await;
         assert_eq!(called["result"]["isError"], false, "{called}");
-        let request = json!({"version": "agent-access.send.v1", "kind": "invoke", "service": "teams", "action": "notification.send", "inputs": inputs});
+        let request = json!({"version": "agent-access.send.v2", "kind": "invoke", "service": "teams", "action": "notification.send", "inputs": inputs});
         let request_file = f
             .broker
             .directory()

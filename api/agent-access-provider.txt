@@ -154,18 +154,35 @@ impl core::marker::Unpin for agent_access_provider::host::HookContext
 impl core::marker::UnsafeUnpin for agent_access_provider::host::HookContext
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::host::HookContext
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::host::HookContext
+pub struct agent_access_provider::host::LocalScopeRequestParts<'a>
+pub agent_access_provider::host::LocalScopeRequestParts::action: &'a str
+pub agent_access_provider::host::LocalScopeRequestParts::correlation: &'a agent_access_provider::CorrelationContext
+pub agent_access_provider::host::LocalScopeRequestParts::execution_context: &'a str
+pub agent_access_provider::host::LocalScopeRequestParts::identity: &'a agent_access_provider::InvocationIdentity
+pub agent_access_provider::host::LocalScopeRequestParts::inputs: &'a serde_json::value::Value
+pub agent_access_provider::host::LocalScopeRequestParts::service: &'a str
+impl<'a> core::marker::Freeze for agent_access_provider::host::LocalScopeRequestParts<'a>
+impl<'a> core::marker::Send for agent_access_provider::host::LocalScopeRequestParts<'a>
+impl<'a> core::marker::Sync for agent_access_provider::host::LocalScopeRequestParts<'a>
+impl<'a> core::marker::Unpin for agent_access_provider::host::LocalScopeRequestParts<'a>
+impl<'a> core::marker::UnsafeUnpin for agent_access_provider::host::LocalScopeRequestParts<'a>
+impl<'a> core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::host::LocalScopeRequestParts<'a>
+impl<'a> core::panic::unwind_safe::UnwindSafe for agent_access_provider::host::LocalScopeRequestParts<'a>
 pub struct agent_access_provider::host::ScopeRequestParts<'a>
 pub agent_access_provider::host::ScopeRequestParts::action: &'a str
+pub agent_access_provider::host::ScopeRequestParts::containment_evidence_level: agent_access_provider::ContainmentEvidenceLevel
+pub agent_access_provider::host::ScopeRequestParts::containment_roots: &'a [agent_access_provider::TypedResourceSelector]
 pub agent_access_provider::host::ScopeRequestParts::correlation: &'a agent_access_provider::CorrelationContext
 pub agent_access_provider::host::ScopeRequestParts::execution_context: &'a str
 pub agent_access_provider::host::ScopeRequestParts::identity: &'a agent_access_provider::InvocationIdentity
 pub agent_access_provider::host::ScopeRequestParts::inputs: &'a serde_json::value::Value
+pub agent_access_provider::host::ScopeRequestParts::locator_state: core::option::Option<&'a agent_access_provider::ProviderState>
 pub agent_access_provider::host::ScopeRequestParts::lookup_access: core::option::Option<&'a agent_access_provider::LookupAccess>
 pub agent_access_provider::host::ScopeRequestParts::service: &'a str
+impl core::fmt::Debug for agent_access_provider::host::ScopeRequestParts<'_>
+pub fn agent_access_provider::host::ScopeRequestParts<'_>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl<'a> core::clone::Clone for agent_access_provider::host::ScopeRequestParts<'a>
 pub fn agent_access_provider::host::ScopeRequestParts<'a>::clone(&self) -> agent_access_provider::host::ScopeRequestParts<'a>
-impl<'a> core::fmt::Debug for agent_access_provider::host::ScopeRequestParts<'a>
-pub fn agent_access_provider::host::ScopeRequestParts<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl<'a> core::marker::Copy for agent_access_provider::host::ScopeRequestParts<'a>
 impl<'a> core::marker::Freeze for agent_access_provider::host::ScopeRequestParts<'a>
 impl<'a> core::marker::Send for agent_access_provider::host::ScopeRequestParts<'a>
@@ -215,6 +232,8 @@ pub fn agent_access_provider::host::basic_credential(alloc::string::String, allo
 pub fn agent_access_provider::host::bearer_credential(alloc::string::String) -> agent_access_provider::ExecutionCredential
 pub fn agent_access_provider::host::build_context<'a>(&'a agent_access_provider::ProviderLimits, &'a dyn agent_access_provider::host::UpstreamClientFactory, agent_access_provider::ProviderAttributionConfig, core::option::Option<alloc::sync::Arc<dyn agent_access_provider::StableSigningKey>>) -> agent_access_provider::BuildContext<'a>
 pub fn agent_access_provider::host::configure_client_profile(reqwest::async_impl::client::ClientBuilder, agent_access_provider::ClientProfile, &agent_access_provider::ProviderLimits) -> reqwest::async_impl::client::ClientBuilder
+pub fn agent_access_provider::host::containment_authorization(&str, agent_access_provider::ContainmentScopeCapabilities, agent_access_provider::ContainmentEvidence, &agent_access_provider::ResourceTypeRegistry, agent_access_provider::ContainmentEvidenceLevel, alloc::string::String) -> core::result::Result<agent_access_provider::ContainmentAuthorization, agent_access_provider::ContainmentError>
+pub fn agent_access_provider::host::containment_collection_authorization(&str, agent_access_provider::ContainmentScopeCapabilities, alloc::vec::Vec<agent_access_provider::ContainmentBoundary>, core::option::Option<agent_access_provider::ContainmentBoundary>, &agent_access_provider::ResourceTypeRegistry, agent_access_provider::ContainmentEvidenceLevel, alloc::string::String) -> core::result::Result<agent_access_provider::ContainmentCollectionAuthorization, agent_access_provider::ContainmentError>
 pub fn agent_access_provider::host::credential_with_profile(agent_access_provider::ExecutionCredential, impl core::convert::Into<alloc::string::String>) -> agent_access_provider::ExecutionCredential
 pub fn agent_access_provider::host::delegated_binding_id([u8; 32]) -> agent_access_provider::DelegatedBindingId
 pub fn agent_access_provider::host::delegated_credential(alloc::sync::Arc<dyn agent_access_provider::DelegatedLease>) -> agent_access_provider::DelegatedCredential
@@ -225,12 +244,14 @@ pub fn agent_access_provider::host::gateway_body_stream(agent_access_provider::G
 pub fn agent_access_provider::host::gateway_request_head<'a>(&'a http::method::Method, &'a str, &'a http::header::map::HeaderMap) -> agent_access_provider::GatewayRequestHead<'a>
 pub fn agent_access_provider::host::hook_context(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, agent_access_provider::HookPhase, &'static [&'static agent_access_provider::ProviderReasonDefinition]) -> agent_access_provider::host::HookContext
 pub fn agent_access_provider::host::invocation(agent_access_provider::AdmittedRequest, alloc::vec::Vec<agent_access_provider::BrokerBodyPart>, agent_access_provider::ResourceAttributes, core::option::Option<agent_access_provider::ProviderState>) -> agent_access_provider::ProviderInvocation
+pub fn agent_access_provider::host::local_scope_request(agent_access_provider::host::LocalScopeRequestParts<'_>) -> agent_access_provider::LocalScopeRequest<'_>
 pub fn agent_access_provider::host::port_failure(agent_access_provider::host::HostPort, agent_access_provider::ProviderError) -> agent_access_provider::ProviderError
 pub fn agent_access_provider::host::provider_finalization_context(core::option::Option<tokio::time::instant::Instant>) -> agent_access_provider::ProviderFinalizationContext
 pub fn agent_access_provider::host::scope_request(agent_access_provider::host::ScopeRequestParts<'_>) -> agent_access_provider::ScopeRequest<'_>
 pub fn agent_access_provider::host::service_signing_key(alloc::sync::Arc<dyn agent_access_provider::StableSigningKey>, &str) -> alloc::sync::Arc<dyn agent_access_provider::StableSigningKey>
 pub fn agent_access_provider::host::spooled_body_file(std::path::PathBuf, u64, alloc::string::String) -> agent_access_provider::BrokerBodyPartFile
 pub fn agent_access_provider::host::spooled_body_part(alloc::string::String, core::option::Option<alloc::string::String>, core::option::Option<alloc::string::String>, std::path::PathBuf, u64, alloc::string::String) -> agent_access_provider::BrokerBodyPart
+pub fn agent_access_provider::host::strip_scope_locator_details(agent_access_provider::ProviderError) -> agent_access_provider::ProviderError
 pub fn agent_access_provider::host::token_as_basic(impl core::convert::Into<alloc::string::String>) -> agent_access_provider::CredentialPlacement
 pub async fn agent_access_provider::host::with_correlation_context<F>(agent_access_provider::CorrelationContext, F) -> <F as core::future::future::Future>::Output where F: core::future::future::Future
 pub async fn agent_access_provider::host::with_hook_context<F: core::future::future::Future>(agent_access_provider::host::HookContext, F) -> <F as core::future::future::Future>::Output
@@ -240,7 +261,9 @@ pub mod agent_access_provider::presentation
 #[non_exhaustive] pub enum agent_access_provider::presentation::BodyPathSegment
 pub agent_access_provider::presentation::BodyPathSegment::Each
 pub agent_access_provider::presentation::BodyPathSegment::Field(&'static str)
+pub agent_access_provider::presentation::BodyPathSegment::NullableField(&'static str)
 pub agent_access_provider::presentation::BodyPathSegment::OptionalField(&'static str)
+pub agent_access_provider::presentation::BodyPathSegment::OptionalNullableField(&'static str)
 impl core::clone::Clone for agent_access_provider::presentation::BodyPathSegment
 pub fn agent_access_provider::presentation::BodyPathSegment::clone(&self) -> agent_access_provider::presentation::BodyPathSegment
 impl core::cmp::Eq for agent_access_provider::presentation::BodyPathSegment
@@ -257,34 +280,39 @@ impl core::marker::Unpin for agent_access_provider::presentation::BodyPathSegmen
 impl core::marker::UnsafeUnpin for agent_access_provider::presentation::BodyPathSegment
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::presentation::BodyPathSegment
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::presentation::BodyPathSegment
-pub enum agent_access_provider::presentation::ReadContentFormat
-pub agent_access_provider::presentation::ReadContentFormat::Markdown
-pub agent_access_provider::presentation::ReadContentFormat::Native
-pub agent_access_provider::presentation::ReadContentFormat::Text
-impl agent_access_provider::presentation::ReadContentFormat
-pub fn agent_access_provider::presentation::ReadContentFormat::as_str(self) -> &'static str
-impl core::clone::Clone for agent_access_provider::presentation::ReadContentFormat
-pub fn agent_access_provider::presentation::ReadContentFormat::clone(&self) -> agent_access_provider::presentation::ReadContentFormat
-impl core::cmp::Eq for agent_access_provider::presentation::ReadContentFormat
-impl core::cmp::PartialEq for agent_access_provider::presentation::ReadContentFormat
-pub fn agent_access_provider::presentation::ReadContentFormat::eq(&self, &agent_access_provider::presentation::ReadContentFormat) -> bool
-impl core::default::Default for agent_access_provider::presentation::ReadContentFormat
-pub fn agent_access_provider::presentation::ReadContentFormat::default() -> agent_access_provider::presentation::ReadContentFormat
-impl core::fmt::Debug for agent_access_provider::presentation::ReadContentFormat
-pub fn agent_access_provider::presentation::ReadContentFormat::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for agent_access_provider::presentation::ReadContentFormat
-impl core::marker::StructuralPartialEq for agent_access_provider::presentation::ReadContentFormat
-impl serde_core::ser::Serialize for agent_access_provider::presentation::ReadContentFormat
-pub fn agent_access_provider::presentation::ReadContentFormat::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
-impl<'de> serde_core::de::Deserialize<'de> for agent_access_provider::presentation::ReadContentFormat
-pub fn agent_access_provider::presentation::ReadContentFormat::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
-impl core::marker::Freeze for agent_access_provider::presentation::ReadContentFormat
-impl core::marker::Send for agent_access_provider::presentation::ReadContentFormat
-impl core::marker::Sync for agent_access_provider::presentation::ReadContentFormat
-impl core::marker::Unpin for agent_access_provider::presentation::ReadContentFormat
-impl core::marker::UnsafeUnpin for agent_access_provider::presentation::ReadContentFormat
-impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::presentation::ReadContentFormat
-impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::presentation::ReadContentFormat
+#[non_exhaustive] pub enum agent_access_provider::presentation::OutputContentFormat
+pub agent_access_provider::presentation::OutputContentFormat::Adf
+pub agent_access_provider::presentation::OutputContentFormat::Markdown
+pub agent_access_provider::presentation::OutputContentFormat::Storage
+pub agent_access_provider::presentation::OutputContentFormat::Text
+impl agent_access_provider::presentation::OutputContentFormat
+pub const fn agent_access_provider::presentation::OutputContentFormat::as_str(self) -> &'static str
+impl core::clone::Clone for agent_access_provider::presentation::OutputContentFormat
+pub fn agent_access_provider::presentation::OutputContentFormat::clone(&self) -> agent_access_provider::presentation::OutputContentFormat
+impl core::cmp::Eq for agent_access_provider::presentation::OutputContentFormat
+impl core::cmp::Ord for agent_access_provider::presentation::OutputContentFormat
+pub fn agent_access_provider::presentation::OutputContentFormat::cmp(&self, &agent_access_provider::presentation::OutputContentFormat) -> core::cmp::Ordering
+impl core::cmp::PartialEq for agent_access_provider::presentation::OutputContentFormat
+pub fn agent_access_provider::presentation::OutputContentFormat::eq(&self, &agent_access_provider::presentation::OutputContentFormat) -> bool
+impl core::cmp::PartialOrd for agent_access_provider::presentation::OutputContentFormat
+pub fn agent_access_provider::presentation::OutputContentFormat::partial_cmp(&self, &agent_access_provider::presentation::OutputContentFormat) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for agent_access_provider::presentation::OutputContentFormat
+pub fn agent_access_provider::presentation::OutputContentFormat::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for agent_access_provider::presentation::OutputContentFormat
+pub fn agent_access_provider::presentation::OutputContentFormat::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for agent_access_provider::presentation::OutputContentFormat
+impl core::marker::StructuralPartialEq for agent_access_provider::presentation::OutputContentFormat
+impl serde_core::ser::Serialize for agent_access_provider::presentation::OutputContentFormat
+pub fn agent_access_provider::presentation::OutputContentFormat::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for agent_access_provider::presentation::OutputContentFormat
+pub fn agent_access_provider::presentation::OutputContentFormat::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for agent_access_provider::presentation::OutputContentFormat
+impl core::marker::Send for agent_access_provider::presentation::OutputContentFormat
+impl core::marker::Sync for agent_access_provider::presentation::OutputContentFormat
+impl core::marker::Unpin for agent_access_provider::presentation::OutputContentFormat
+impl core::marker::UnsafeUnpin for agent_access_provider::presentation::OutputContentFormat
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::presentation::OutputContentFormat
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::presentation::OutputContentFormat
 #[non_exhaustive] pub enum agent_access_provider::presentation::RenderBudgetExhausted
 pub agent_access_provider::presentation::RenderBudgetExhausted::Nodes
 pub agent_access_provider::presentation::RenderBudgetExhausted::WorkUnits
@@ -307,39 +335,14 @@ impl core::marker::Unpin for agent_access_provider::presentation::RenderBudgetEx
 impl core::marker::UnsafeUnpin for agent_access_provider::presentation::RenderBudgetExhausted
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::presentation::RenderBudgetExhausted
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::presentation::RenderBudgetExhausted
-#[non_exhaustive] pub enum agent_access_provider::presentation::ResponseFormat
-pub agent_access_provider::presentation::ResponseFormat::Json
-pub agent_access_provider::presentation::ResponseFormat::Markdown
-impl agent_access_provider::presentation::ResponseFormat
-pub fn agent_access_provider::presentation::ResponseFormat::as_str(self) -> &'static str
-impl core::clone::Clone for agent_access_provider::presentation::ResponseFormat
-pub fn agent_access_provider::presentation::ResponseFormat::clone(&self) -> agent_access_provider::presentation::ResponseFormat
-impl core::cmp::Eq for agent_access_provider::presentation::ResponseFormat
-impl core::cmp::PartialEq for agent_access_provider::presentation::ResponseFormat
-pub fn agent_access_provider::presentation::ResponseFormat::eq(&self, &agent_access_provider::presentation::ResponseFormat) -> bool
-impl core::default::Default for agent_access_provider::presentation::ResponseFormat
-pub fn agent_access_provider::presentation::ResponseFormat::default() -> agent_access_provider::presentation::ResponseFormat
-impl core::fmt::Debug for agent_access_provider::presentation::ResponseFormat
-pub fn agent_access_provider::presentation::ResponseFormat::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for agent_access_provider::presentation::ResponseFormat
-impl core::marker::StructuralPartialEq for agent_access_provider::presentation::ResponseFormat
-impl serde_core::ser::Serialize for agent_access_provider::presentation::ResponseFormat
-pub fn agent_access_provider::presentation::ResponseFormat::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
-impl<'de> serde_core::de::Deserialize<'de> for agent_access_provider::presentation::ResponseFormat
-pub fn agent_access_provider::presentation::ResponseFormat::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
-impl core::marker::Freeze for agent_access_provider::presentation::ResponseFormat
-impl core::marker::Send for agent_access_provider::presentation::ResponseFormat
-impl core::marker::Sync for agent_access_provider::presentation::ResponseFormat
-impl core::marker::Unpin for agent_access_provider::presentation::ResponseFormat
-impl core::marker::UnsafeUnpin for agent_access_provider::presentation::ResponseFormat
-impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::presentation::ResponseFormat
-impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::presentation::ResponseFormat
 #[non_exhaustive] pub struct agent_access_provider::presentation::ActionPresentation
 impl agent_access_provider::presentation::ActionPresentation
-pub fn agent_access_provider::presentation::ActionPresentation::capabilities(&self) -> agent_access_provider::presentation::ResponseCapabilities
+pub fn agent_access_provider::presentation::ActionPresentation::body_fields(&self) -> alloc::vec::Vec<agent_access_provider::presentation::BodyField>
 pub const fn agent_access_provider::presentation::ActionPresentation::embedded_bodies(&self) -> &'static [agent_access_provider::presentation::EmbeddedBody]
-pub const fn agent_access_provider::presentation::ActionPresentation::new(&'static [agent_access_provider::presentation::EmbeddedBody], core::option::Option<&'static dyn agent_access_provider::presentation::WholeResultRenderer>) -> Self
-pub const fn agent_access_provider::presentation::ActionPresentation::whole(&self) -> core::option::Option<&'static dyn agent_access_provider::presentation::WholeResultRenderer>
+pub const fn agent_access_provider::presentation::ActionPresentation::native_output_content_format(&self) -> agent_access_provider::presentation::OutputContentFormat
+pub const fn agent_access_provider::presentation::ActionPresentation::new(&'static [agent_access_provider::presentation::EmbeddedBody], &'static [agent_access_provider::presentation::OutputContentFormat], agent_access_provider::presentation::OutputContentFormat) -> Self
+pub const fn agent_access_provider::presentation::ActionPresentation::output_content_formats(&self) -> &'static [agent_access_provider::presentation::OutputContentFormat]
+pub fn agent_access_provider::presentation::ActionPresentation::validate(&self) -> core::result::Result<(), agent_access_provider::presentation::RenderError>
 impl core::clone::Clone for agent_access_provider::presentation::ActionPresentation
 pub fn agent_access_provider::presentation::ActionPresentation::clone(&self) -> agent_access_provider::presentation::ActionPresentation
 impl core::cmp::PartialEq for agent_access_provider::presentation::ActionPresentation
@@ -354,13 +357,52 @@ impl core::marker::Unpin for agent_access_provider::presentation::ActionPresenta
 impl core::marker::UnsafeUnpin for agent_access_provider::presentation::ActionPresentation
 impl !core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::presentation::ActionPresentation
 impl !core::panic::unwind_safe::UnwindSafe for agent_access_provider::presentation::ActionPresentation
+#[non_exhaustive] pub struct agent_access_provider::presentation::BodyField
+pub agent_access_provider::presentation::BodyField::field: alloc::string::String
+pub agent_access_provider::presentation::BodyField::nullable: bool
+pub agent_access_provider::presentation::BodyField::nullable_owner_prefixes: alloc::vec::Vec<alloc::string::String>
+pub agent_access_provider::presentation::BodyField::optional: bool
+pub agent_access_provider::presentation::BodyField::optional_owner_prefixes: alloc::vec::Vec<alloc::string::String>
+pub agent_access_provider::presentation::BodyField::owner_equals: core::option::Option<alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::string::String>>
+pub agent_access_provider::presentation::BodyField::owner_path: alloc::string::String
+impl agent_access_provider::presentation::BodyField
+pub fn agent_access_provider::presentation::BodyField::new(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn agent_access_provider::presentation::BodyField::nullable(self) -> Self
+pub fn agent_access_provider::presentation::BodyField::optional(self) -> Self
+pub fn agent_access_provider::presentation::BodyField::with_nullable_owner_prefixes(self, alloc::vec::Vec<alloc::string::String>) -> Self
+pub fn agent_access_provider::presentation::BodyField::with_optional_owner_prefixes(self, alloc::vec::Vec<alloc::string::String>) -> Self
+pub fn agent_access_provider::presentation::BodyField::with_owner_equals(self, alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::string::String>) -> Self
+impl core::clone::Clone for agent_access_provider::presentation::BodyField
+pub fn agent_access_provider::presentation::BodyField::clone(&self) -> agent_access_provider::presentation::BodyField
+impl core::cmp::Eq for agent_access_provider::presentation::BodyField
+impl core::cmp::PartialEq for agent_access_provider::presentation::BodyField
+pub fn agent_access_provider::presentation::BodyField::eq(&self, &agent_access_provider::presentation::BodyField) -> bool
+impl core::fmt::Debug for agent_access_provider::presentation::BodyField
+pub fn agent_access_provider::presentation::BodyField::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for agent_access_provider::presentation::BodyField
+impl serde_core::ser::Serialize for agent_access_provider::presentation::BodyField
+pub fn agent_access_provider::presentation::BodyField::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for agent_access_provider::presentation::BodyField
+pub fn agent_access_provider::presentation::BodyField::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for agent_access_provider::presentation::BodyField
+impl core::marker::Send for agent_access_provider::presentation::BodyField
+impl core::marker::Sync for agent_access_provider::presentation::BodyField
+impl core::marker::Unpin for agent_access_provider::presentation::BodyField
+impl core::marker::UnsafeUnpin for agent_access_provider::presentation::BodyField
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::presentation::BodyField
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::presentation::BodyField
 #[non_exhaustive] pub struct agent_access_provider::presentation::EmbeddedBody
 impl agent_access_provider::presentation::EmbeddedBody
+pub fn agent_access_provider::presentation::EmbeddedBody::body_field(&self) -> agent_access_provider::presentation::BodyField
 pub const fn agent_access_provider::presentation::EmbeddedBody::codec(&self) -> &'static dyn agent_access_provider::presentation::EmbeddedBodyCodec
-pub const fn agent_access_provider::presentation::EmbeddedBody::new(&'static [agent_access_provider::presentation::BodyPathSegment], &'static dyn agent_access_provider::presentation::EmbeddedBodyCodec) -> Self
-pub fn agent_access_provider::presentation::EmbeddedBody::owner_optional_prefixes(&self) -> alloc::vec::Vec<alloc::string::String>
+pub const fn agent_access_provider::presentation::EmbeddedBody::field(&self) -> &'static str
+pub const fn agent_access_provider::presentation::EmbeddedBody::is_nullable(&self) -> bool
+pub const fn agent_access_provider::presentation::EmbeddedBody::is_optional(&self) -> bool
+pub const fn agent_access_provider::presentation::EmbeddedBody::new(&'static [agent_access_provider::presentation::BodyPathSegment], &'static str, &'static dyn agent_access_provider::presentation::EmbeddedBodyCodec) -> Self
+pub const fn agent_access_provider::presentation::EmbeddedBody::nullable(self) -> Self
+pub const fn agent_access_provider::presentation::EmbeddedBody::optional(self) -> Self
+pub const fn agent_access_provider::presentation::EmbeddedBody::owner_equals(self, &'static [(&'static str, &'static str)]) -> Self
 pub const fn agent_access_provider::presentation::EmbeddedBody::owner_path(&self) -> &'static [agent_access_provider::presentation::BodyPathSegment]
-pub fn agent_access_provider::presentation::EmbeddedBody::owner_pointer(&self) -> alloc::string::String
 impl core::clone::Clone for agent_access_provider::presentation::EmbeddedBody
 pub fn agent_access_provider::presentation::EmbeddedBody::clone(&self) -> agent_access_provider::presentation::EmbeddedBody
 impl core::cmp::PartialEq for agent_access_provider::presentation::EmbeddedBody
@@ -375,42 +417,6 @@ impl core::marker::Unpin for agent_access_provider::presentation::EmbeddedBody
 impl core::marker::UnsafeUnpin for agent_access_provider::presentation::EmbeddedBody
 impl !core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::presentation::EmbeddedBody
 impl !core::panic::unwind_safe::UnwindSafe for agent_access_provider::presentation::EmbeddedBody
-pub struct agent_access_provider::presentation::MarkdownWriter
-impl agent_access_provider::presentation::MarkdownWriter
-pub fn agent_access_provider::presentation::MarkdownWriter::finish(self) -> alloc::string::String
-pub fn agent_access_provider::presentation::MarkdownWriter::is_empty(&self) -> bool
-pub fn agent_access_provider::presentation::MarkdownWriter::len(&self) -> usize
-pub fn agent_access_provider::presentation::MarkdownWriter::new(u64) -> Self
-pub fn agent_access_provider::presentation::MarkdownWriter::normalize_terminal_lf(&mut self) -> core::result::Result<(), agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::MarkdownWriter::push(&mut self, &str) -> core::result::Result<(), agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::MarkdownWriter::push_code(&mut self, &str) -> core::result::Result<(), agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::MarkdownWriter::push_escaped(&mut self, &str) -> core::result::Result<(), agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::MarkdownWriter::push_heading_text(&mut self, &str) -> core::result::Result<(), agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::MarkdownWriter::push_url(&mut self, &str) -> core::result::Result<(), agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::MarkdownWriter::remaining(&self) -> u64
-impl core::marker::Freeze for agent_access_provider::presentation::MarkdownWriter
-impl core::marker::Send for agent_access_provider::presentation::MarkdownWriter
-impl core::marker::Sync for agent_access_provider::presentation::MarkdownWriter
-impl core::marker::Unpin for agent_access_provider::presentation::MarkdownWriter
-impl core::marker::UnsafeUnpin for agent_access_provider::presentation::MarkdownWriter
-impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::presentation::MarkdownWriter
-impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::presentation::MarkdownWriter
-pub struct agent_access_provider::presentation::PresentationBudget
-pub agent_access_provider::presentation::PresentationBudget::rich_content: agent_access_provider::presentation::RenderBudget
-impl agent_access_provider::presentation::PresentationBudget
-pub fn agent_access_provider::presentation::PresentationBudget::charge_fenced_literal_work(&mut self, usize) -> core::result::Result<(), agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::PresentationBudget::charge_rendered(&mut self, usize) -> core::result::Result<(), agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::PresentationBudget::charge_work(&mut self, usize) -> core::result::Result<(), agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::PresentationBudget::new(u64) -> Self
-impl core::fmt::Debug for agent_access_provider::presentation::PresentationBudget
-pub fn agent_access_provider::presentation::PresentationBudget::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Freeze for agent_access_provider::presentation::PresentationBudget
-impl core::marker::Send for agent_access_provider::presentation::PresentationBudget
-impl core::marker::Sync for agent_access_provider::presentation::PresentationBudget
-impl core::marker::Unpin for agent_access_provider::presentation::PresentationBudget
-impl core::marker::UnsafeUnpin for agent_access_provider::presentation::PresentationBudget
-impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::presentation::PresentationBudget
-impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::presentation::PresentationBudget
 pub struct agent_access_provider::presentation::RenderBudget
 impl agent_access_provider::presentation::RenderBudget
 pub fn agent_access_provider::presentation::RenderBudget::charge_node(&mut self) -> core::result::Result<(), agent_access_provider::presentation::RenderBudgetExhausted>
@@ -429,17 +435,6 @@ impl core::marker::Unpin for agent_access_provider::presentation::RenderBudget
 impl core::marker::UnsafeUnpin for agent_access_provider::presentation::RenderBudget
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::presentation::RenderBudget
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::presentation::RenderBudget
-#[non_exhaustive] pub struct agent_access_provider::presentation::RenderContext
-pub agent_access_provider::presentation::RenderContext::budget: agent_access_provider::presentation::PresentationBudget
-pub agent_access_provider::presentation::RenderContext::max_body_bytes: u64
-pub agent_access_provider::presentation::RenderContext::out: agent_access_provider::presentation::MarkdownWriter
-impl core::marker::Freeze for agent_access_provider::presentation::RenderContext
-impl core::marker::Send for agent_access_provider::presentation::RenderContext
-impl core::marker::Sync for agent_access_provider::presentation::RenderContext
-impl core::marker::Unpin for agent_access_provider::presentation::RenderContext
-impl core::marker::UnsafeUnpin for agent_access_provider::presentation::RenderContext
-impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::presentation::RenderContext
-impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::presentation::RenderContext
 pub struct agent_access_provider::presentation::RenderError
 impl core::clone::Clone for agent_access_provider::presentation::RenderError
 pub fn agent_access_provider::presentation::RenderError::clone(&self) -> agent_access_provider::presentation::RenderError
@@ -460,35 +455,32 @@ impl core::marker::Unpin for agent_access_provider::presentation::RenderError
 impl core::marker::UnsafeUnpin for agent_access_provider::presentation::RenderError
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::presentation::RenderError
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::presentation::RenderError
-#[non_exhaustive] pub struct agent_access_provider::presentation::RenderedBody
-pub agent_access_provider::presentation::RenderedBody::format: agent_access_provider::presentation::ReadContentFormat
-pub agent_access_provider::presentation::RenderedBody::value: alloc::string::String
-impl agent_access_provider::presentation::RenderedBody
-pub fn agent_access_provider::presentation::RenderedBody::new(agent_access_provider::presentation::ReadContentFormat, impl core::convert::Into<alloc::string::String>) -> Self
-impl core::clone::Clone for agent_access_provider::presentation::RenderedBody
-pub fn agent_access_provider::presentation::RenderedBody::clone(&self) -> agent_access_provider::presentation::RenderedBody
-impl core::cmp::Eq for agent_access_provider::presentation::RenderedBody
-impl core::cmp::PartialEq for agent_access_provider::presentation::RenderedBody
-pub fn agent_access_provider::presentation::RenderedBody::eq(&self, &agent_access_provider::presentation::RenderedBody) -> bool
-impl core::fmt::Debug for agent_access_provider::presentation::RenderedBody
-pub fn agent_access_provider::presentation::RenderedBody::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::StructuralPartialEq for agent_access_provider::presentation::RenderedBody
-impl serde_core::ser::Serialize for agent_access_provider::presentation::RenderedBody
-pub fn agent_access_provider::presentation::RenderedBody::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
-impl core::marker::Freeze for agent_access_provider::presentation::RenderedBody
-impl core::marker::Send for agent_access_provider::presentation::RenderedBody
-impl core::marker::Sync for agent_access_provider::presentation::RenderedBody
-impl core::marker::Unpin for agent_access_provider::presentation::RenderedBody
-impl core::marker::UnsafeUnpin for agent_access_provider::presentation::RenderedBody
-impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::presentation::RenderedBody
-impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::presentation::RenderedBody
+pub struct agent_access_provider::presentation::ResolvedPresentation
+impl agent_access_provider::presentation::ResolvedPresentation
+pub const fn agent_access_provider::presentation::ResolvedPresentation::output_content_format(&self) -> core::option::Option<agent_access_provider::presentation::OutputContentFormat>
+pub const fn agent_access_provider::presentation::ResolvedPresentation::presentation(&self) -> core::option::Option<&agent_access_provider::presentation::ActionPresentation>
+impl core::clone::Clone for agent_access_provider::presentation::ResolvedPresentation
+pub fn agent_access_provider::presentation::ResolvedPresentation::clone(&self) -> agent_access_provider::presentation::ResolvedPresentation
+impl core::cmp::PartialEq for agent_access_provider::presentation::ResolvedPresentation
+pub fn agent_access_provider::presentation::ResolvedPresentation::eq(&self, &agent_access_provider::presentation::ResolvedPresentation) -> bool
+impl core::fmt::Debug for agent_access_provider::presentation::ResolvedPresentation
+pub fn agent_access_provider::presentation::ResolvedPresentation::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for agent_access_provider::presentation::ResolvedPresentation
+impl core::marker::StructuralPartialEq for agent_access_provider::presentation::ResolvedPresentation
+impl core::marker::Freeze for agent_access_provider::presentation::ResolvedPresentation
+impl core::marker::Send for agent_access_provider::presentation::ResolvedPresentation
+impl core::marker::Sync for agent_access_provider::presentation::ResolvedPresentation
+impl core::marker::Unpin for agent_access_provider::presentation::ResolvedPresentation
+impl core::marker::UnsafeUnpin for agent_access_provider::presentation::ResolvedPresentation
+impl !core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::presentation::ResolvedPresentation
+impl !core::panic::unwind_safe::UnwindSafe for agent_access_provider::presentation::ResolvedPresentation
 #[non_exhaustive] pub struct agent_access_provider::presentation::ResponseCapabilities
-pub agent_access_provider::presentation::ResponseCapabilities::read_content_formats: core::option::Option<&'static [&'static str]>
-pub agent_access_provider::presentation::ResponseCapabilities::response_formats: core::option::Option<&'static [&'static str]>
+pub agent_access_provider::presentation::ResponseCapabilities::default_output_content_format: core::option::Option<agent_access_provider::presentation::OutputContentFormat>
+pub agent_access_provider::presentation::ResponseCapabilities::native_output_content_format: core::option::Option<agent_access_provider::presentation::OutputContentFormat>
+pub agent_access_provider::presentation::ResponseCapabilities::output_content_formats: core::option::Option<&'static [agent_access_provider::presentation::OutputContentFormat]>
 impl agent_access_provider::presentation::ResponseCapabilities
-pub const fn agent_access_provider::presentation::ResponseCapabilities::new(core::option::Option<&'static [&'static str]>, core::option::Option<&'static [&'static str]>) -> Self
-pub fn agent_access_provider::presentation::ResponseCapabilities::supports_markdown_response(self) -> bool
-pub fn agent_access_provider::presentation::ResponseCapabilities::supports_read_content(self) -> bool
+pub const fn agent_access_provider::presentation::ResponseCapabilities::new(core::option::Option<&'static [agent_access_provider::presentation::OutputContentFormat]>, core::option::Option<agent_access_provider::presentation::OutputContentFormat>, core::option::Option<agent_access_provider::presentation::OutputContentFormat>) -> Self
+pub fn agent_access_provider::presentation::ResponseCapabilities::supports_output_content(self) -> bool
 impl core::clone::Clone for agent_access_provider::presentation::ResponseCapabilities
 pub fn agent_access_provider::presentation::ResponseCapabilities::clone(&self) -> agent_access_provider::presentation::ResponseCapabilities
 impl core::cmp::Eq for agent_access_provider::presentation::ResponseCapabilities
@@ -506,10 +498,10 @@ impl core::marker::UnsafeUnpin for agent_access_provider::presentation::Response
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::presentation::ResponseCapabilities
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::presentation::ResponseCapabilities
 #[non_exhaustive] pub struct agent_access_provider::presentation::ResponseOptions
-pub agent_access_provider::presentation::ResponseOptions::read_content_format: agent_access_provider::presentation::ReadContentFormat
-pub agent_access_provider::presentation::ResponseOptions::response_format: agent_access_provider::presentation::ResponseFormat
+pub agent_access_provider::presentation::ResponseOptions::output_content_format: core::option::Option<agent_access_provider::presentation::OutputContentFormat>
+pub agent_access_provider::presentation::ResponseOptions::preferred_output_content_format: core::option::Option<agent_access_provider::presentation::OutputContentFormat>
 impl agent_access_provider::presentation::ResponseOptions
-pub const fn agent_access_provider::presentation::ResponseOptions::new(agent_access_provider::presentation::ReadContentFormat, agent_access_provider::presentation::ResponseFormat) -> Self
+pub const fn agent_access_provider::presentation::ResponseOptions::new(core::option::Option<agent_access_provider::presentation::OutputContentFormat>, core::option::Option<agent_access_provider::presentation::OutputContentFormat>) -> Self
 impl core::clone::Clone for agent_access_provider::presentation::ResponseOptions
 pub fn agent_access_provider::presentation::ResponseOptions::clone(&self) -> agent_access_provider::presentation::ResponseOptions
 impl core::cmp::Eq for agent_access_provider::presentation::ResponseOptions
@@ -532,61 +524,65 @@ impl core::marker::Unpin for agent_access_provider::presentation::ResponseOption
 impl core::marker::UnsafeUnpin for agent_access_provider::presentation::ResponseOptions
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::presentation::ResponseOptions
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::presentation::ResponseOptions
-pub struct agent_access_provider::presentation::UnresolvedBodyOwner
-impl core::clone::Clone for agent_access_provider::presentation::UnresolvedBodyOwner
-pub fn agent_access_provider::presentation::UnresolvedBodyOwner::clone(&self) -> agent_access_provider::presentation::UnresolvedBodyOwner
-impl core::cmp::Eq for agent_access_provider::presentation::UnresolvedBodyOwner
-impl core::cmp::PartialEq for agent_access_provider::presentation::UnresolvedBodyOwner
-pub fn agent_access_provider::presentation::UnresolvedBodyOwner::eq(&self, &agent_access_provider::presentation::UnresolvedBodyOwner) -> bool
-impl core::error::Error for agent_access_provider::presentation::UnresolvedBodyOwner
-impl core::fmt::Debug for agent_access_provider::presentation::UnresolvedBodyOwner
-pub fn agent_access_provider::presentation::UnresolvedBodyOwner::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::fmt::Display for agent_access_provider::presentation::UnresolvedBodyOwner
-pub fn agent_access_provider::presentation::UnresolvedBodyOwner::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for agent_access_provider::presentation::UnresolvedBodyOwner
-impl core::marker::StructuralPartialEq for agent_access_provider::presentation::UnresolvedBodyOwner
-impl core::marker::Freeze for agent_access_provider::presentation::UnresolvedBodyOwner
-impl core::marker::Send for agent_access_provider::presentation::UnresolvedBodyOwner
-impl core::marker::Sync for agent_access_provider::presentation::UnresolvedBodyOwner
-impl core::marker::Unpin for agent_access_provider::presentation::UnresolvedBodyOwner
-impl core::marker::UnsafeUnpin for agent_access_provider::presentation::UnresolvedBodyOwner
-impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::presentation::UnresolvedBodyOwner
-impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::presentation::UnresolvedBodyOwner
-pub const agent_access_provider::presentation::MAX_PRESENTATION_WORK_UNITS: usize
-pub const agent_access_provider::presentation::READ_CONTENT_FORMATS: &[&str]
+pub struct agent_access_provider::presentation::SelectedContent
+impl agent_access_provider::presentation::SelectedContent
+pub fn agent_access_provider::presentation::SelectedContent::adf(serde_json::map::Map<alloc::string::String, serde_json::value::Value>) -> Self
+pub const fn agent_access_provider::presentation::SelectedContent::format(&self) -> agent_access_provider::presentation::OutputContentFormat
+pub fn agent_access_provider::presentation::SelectedContent::into_value(self) -> serde_json::value::Value
+pub fn agent_access_provider::presentation::SelectedContent::markdown(impl core::convert::Into<alloc::string::String>) -> Self
+pub fn agent_access_provider::presentation::SelectedContent::storage(impl core::convert::Into<alloc::string::String>) -> Self
+pub fn agent_access_provider::presentation::SelectedContent::text(impl core::convert::Into<alloc::string::String>) -> Self
+pub const fn agent_access_provider::presentation::SelectedContent::value(&self) -> &serde_json::value::Value
+impl core::clone::Clone for agent_access_provider::presentation::SelectedContent
+pub fn agent_access_provider::presentation::SelectedContent::clone(&self) -> agent_access_provider::presentation::SelectedContent
+impl core::cmp::Eq for agent_access_provider::presentation::SelectedContent
+impl core::cmp::PartialEq for agent_access_provider::presentation::SelectedContent
+pub fn agent_access_provider::presentation::SelectedContent::eq(&self, &agent_access_provider::presentation::SelectedContent) -> bool
+impl core::fmt::Debug for agent_access_provider::presentation::SelectedContent
+pub fn agent_access_provider::presentation::SelectedContent::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for agent_access_provider::presentation::SelectedContent
+impl serde_core::ser::Serialize for agent_access_provider::presentation::SelectedContent
+pub fn agent_access_provider::presentation::SelectedContent::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for agent_access_provider::presentation::SelectedContent
+impl core::marker::Send for agent_access_provider::presentation::SelectedContent
+impl core::marker::Sync for agent_access_provider::presentation::SelectedContent
+impl core::marker::Unpin for agent_access_provider::presentation::SelectedContent
+impl core::marker::UnsafeUnpin for agent_access_provider::presentation::SelectedContent
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::presentation::SelectedContent
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::presentation::SelectedContent
+#[non_exhaustive] pub struct agent_access_provider::presentation::UnresolvedBodyField
+impl core::clone::Clone for agent_access_provider::presentation::UnresolvedBodyField
+pub fn agent_access_provider::presentation::UnresolvedBodyField::clone(&self) -> agent_access_provider::presentation::UnresolvedBodyField
+impl core::cmp::Eq for agent_access_provider::presentation::UnresolvedBodyField
+impl core::cmp::PartialEq for agent_access_provider::presentation::UnresolvedBodyField
+pub fn agent_access_provider::presentation::UnresolvedBodyField::eq(&self, &agent_access_provider::presentation::UnresolvedBodyField) -> bool
+impl core::error::Error for agent_access_provider::presentation::UnresolvedBodyField
+impl core::fmt::Debug for agent_access_provider::presentation::UnresolvedBodyField
+pub fn agent_access_provider::presentation::UnresolvedBodyField::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for agent_access_provider::presentation::UnresolvedBodyField
+pub fn agent_access_provider::presentation::UnresolvedBodyField::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for agent_access_provider::presentation::UnresolvedBodyField
+impl core::marker::StructuralPartialEq for agent_access_provider::presentation::UnresolvedBodyField
+impl core::marker::Freeze for agent_access_provider::presentation::UnresolvedBodyField
+impl core::marker::Send for agent_access_provider::presentation::UnresolvedBodyField
+impl core::marker::Sync for agent_access_provider::presentation::UnresolvedBodyField
+impl core::marker::Unpin for agent_access_provider::presentation::UnresolvedBodyField
+impl core::marker::UnsafeUnpin for agent_access_provider::presentation::UnresolvedBodyField
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::presentation::UnresolvedBodyField
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::presentation::UnresolvedBodyField
+pub const agent_access_provider::presentation::OUTPUT_CONTENT_FORMATS: &[agent_access_provider::presentation::OutputContentFormat]
 pub const agent_access_provider::presentation::RENDER_FAILURE_MESSAGE: &str
-pub const agent_access_provider::presentation::RESPONSE_FORMATS: &[&str]
 pub trait agent_access_provider::presentation::EmbeddedBodyCodec: core::marker::Sync
-pub fn agent_access_provider::presentation::EmbeddedBodyCodec::render(&self, &serde_json::map::Map<alloc::string::String, serde_json::value::Value>, agent_access_provider::presentation::ReadContentFormat, u64, &mut agent_access_provider::presentation::RenderBudget) -> core::result::Result<core::option::Option<agent_access_provider::presentation::RenderedBody>, agent_access_provider::presentation::RenderError>
-pub trait agent_access_provider::presentation::WholeResultRenderer: core::marker::Sync
-pub fn agent_access_provider::presentation::WholeResultRenderer::render(&self, &serde_json::value::Value, &mut agent_access_provider::presentation::RenderContext) -> core::result::Result<(), agent_access_provider::presentation::RenderError>
-impl<F> agent_access_provider::presentation::WholeResultRenderer for F where F: core::ops::function::Fn(&serde_json::value::Value, &mut agent_access_provider::presentation::RenderContext) -> core::result::Result<(), agent_access_provider::presentation::RenderError> + core::marker::Sync
-pub fn F::render(&self, &serde_json::value::Value, &mut agent_access_provider::presentation::RenderContext) -> core::result::Result<(), agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::array(&serde_json::value::Value) -> core::result::Result<&[serde_json::value::Value], agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::as_object(&serde_json::value::Value) -> core::result::Result<&serde_json::map::Map<alloc::string::String, serde_json::value::Value>, agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::code_fields(&mut agent_access_provider::presentation::MarkdownWriter, &[(&str, core::option::Option<&str>)]) -> core::result::Result<(), agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::code_span(&str) -> alloc::string::String
+pub fn agent_access_provider::presentation::EmbeddedBodyCodec::select(&self, &serde_json::value::Value, agent_access_provider::presentation::OutputContentFormat, u64, &mut agent_access_provider::presentation::RenderBudget) -> core::result::Result<core::option::Option<agent_access_provider::presentation::SelectedContent>, agent_access_provider::presentation::RenderError>
+pub fn agent_access_provider::presentation::EmbeddedBodyCodec::supported_formats(&self) -> &'static [agent_access_provider::presentation::OutputContentFormat]
 pub fn agent_access_provider::presentation::enforce_serialized_bound(&serde_json::value::Value, u64) -> core::result::Result<(), agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::escaped(&str) -> alloc::string::String
-pub fn agent_access_provider::presentation::fence_for(&str, char) -> alloc::string::String
-pub fn agent_access_provider::presentation::field(&mut agent_access_provider::presentation::MarkdownWriter, &str, &str) -> core::result::Result<(), agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::field_code(&mut agent_access_provider::presentation::MarkdownWriter, &str, &str) -> core::result::Result<(), agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::field_raw(&mut agent_access_provider::presentation::MarkdownWriter, &str, &str) -> core::result::Result<(), agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::field_url(&mut agent_access_provider::presentation::MarkdownWriter, &str, &str) -> core::result::Result<(), agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::fields(&mut agent_access_provider::presentation::MarkdownWriter, &[(&str, core::option::Option<&str>)]) -> core::result::Result<(), agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::inject_rendered_body_schema(&mut serde_json::value::Value, &str) -> core::result::Result<(), agent_access_provider::presentation::UnresolvedBodyOwner>
-pub fn agent_access_provider::presentation::markdown_result_schema() -> serde_json::value::Value
-pub fn agent_access_provider::presentation::normalize_fenced_text_literal(&str) -> alloc::string::String
-pub fn agent_access_provider::presentation::optional_display(&serde_json::map::Map<alloc::string::String, serde_json::value::Value>, &str) -> core::result::Result<core::option::Option<alloc::string::String>, agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::optional_scalar<'a>(&'a serde_json::map::Map<alloc::string::String, serde_json::value::Value>, &str) -> core::result::Result<core::option::Option<&'a str>, agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::present_result(core::option::Option<&agent_access_provider::presentation::ActionPresentation>, &mut serde_json::value::Value, agent_access_provider::presentation::ResponseOptions, u64, u64) -> core::result::Result<(), agent_access_provider::ProviderError>
-pub fn agent_access_provider::presentation::required<'a>(&'a serde_json::map::Map<alloc::string::String, serde_json::value::Value>, &str) -> core::result::Result<&'a serde_json::value::Value, agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::required_scalar<'a>(&'a serde_json::map::Map<alloc::string::String, serde_json::value::Value>, &str) -> core::result::Result<&'a str, agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::response_capabilities(core::option::Option<&agent_access_provider::presentation::ActionPresentation>) -> agent_access_provider::presentation::ResponseCapabilities
-pub fn agent_access_provider::presentation::safe_autolink(&str) -> core::option::Option<alloc::string::String>
-pub fn agent_access_provider::presentation::scalar(&serde_json::value::Value) -> core::result::Result<&str, agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::serialize_json_pretty_bounded(&serde_json::value::Value, u64) -> core::result::Result<alloc::string::String, agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::validate_response_options(core::option::Option<&agent_access_provider::presentation::ActionPresentation>, agent_access_provider::presentation::ResponseOptions) -> core::result::Result<(), agent_access_provider::ProviderError>
+pub fn agent_access_provider::presentation::inject_selected_content_schema(&mut serde_json::value::Value, &agent_access_provider::presentation::BodyField, &[agent_access_provider::presentation::OutputContentFormat]) -> core::result::Result<(), agent_access_provider::presentation::UnresolvedBodyField>
+pub fn agent_access_provider::presentation::present_result(&agent_access_provider::presentation::ResolvedPresentation, &mut serde_json::value::Value, u64, u64) -> core::result::Result<(), agent_access_provider::ProviderError>
+pub fn agent_access_provider::presentation::resolve_response_options(core::option::Option<agent_access_provider::presentation::ActionPresentation>, core::option::Option<agent_access_provider::presentation::OutputContentFormat>, agent_access_provider::presentation::ResponseOptions) -> core::result::Result<agent_access_provider::presentation::ResolvedPresentation, agent_access_provider::ProviderError>
+pub fn agent_access_provider::presentation::response_capabilities(core::option::Option<&agent_access_provider::presentation::ActionPresentation>, core::option::Option<agent_access_provider::presentation::OutputContentFormat>) -> agent_access_provider::presentation::ResponseCapabilities
+pub fn agent_access_provider::presentation::selected_content_schema(&[agent_access_provider::presentation::OutputContentFormat]) -> serde_json::value::Value
+pub fn agent_access_provider::presentation::validate_body_fields(&[agent_access_provider::presentation::BodyField]) -> core::result::Result<(), agent_access_provider::presentation::RenderError>
+pub fn agent_access_provider::presentation::validate_selected_content(&serde_json::value::Value, &[agent_access_provider::presentation::BodyField], core::option::Option<agent_access_provider::presentation::OutputContentFormat>) -> core::result::Result<(), agent_access_provider::presentation::RenderError>
 pub macro agent_access_provider::module_metadata!
 #[non_exhaustive] pub enum agent_access_provider::ActionIo
 pub agent_access_provider::ActionIo::Json
@@ -661,6 +657,8 @@ impl core::marker::UnsafeUnpin for agent_access_provider::AttributionVerb
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::AttributionVerb
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::AttributionVerb
 #[non_exhaustive] pub enum agent_access_provider::AuthorityMismatch
+pub agent_access_provider::AuthorityMismatch::NotContainment
+pub agent_access_provider::AuthorityMismatch::NotContainmentCollection
 pub agent_access_provider::AuthorityMismatch::NotResources
 pub agent_access_provider::AuthorityMismatch::NotSearch
 impl agent_access_provider::AuthorityMismatch
@@ -735,6 +733,134 @@ impl core::marker::Unpin for agent_access_provider::ClientProfile
 impl core::marker::UnsafeUnpin for agent_access_provider::ClientProfile
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ClientProfile
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ClientProfile
+#[non_exhaustive] pub enum agent_access_provider::ContainmentEffect
+pub agent_access_provider::ContainmentEffect::ChildPlacement
+pub agent_access_provider::ContainmentEffect::Content
+pub agent_access_provider::ContainmentEffect::SubtreeImpact
+impl core::clone::Clone for agent_access_provider::ContainmentEffect
+pub fn agent_access_provider::ContainmentEffect::clone(&self) -> agent_access_provider::ContainmentEffect
+impl core::cmp::Eq for agent_access_provider::ContainmentEffect
+impl core::cmp::Ord for agent_access_provider::ContainmentEffect
+pub fn agent_access_provider::ContainmentEffect::cmp(&self, &agent_access_provider::ContainmentEffect) -> core::cmp::Ordering
+impl core::cmp::PartialEq for agent_access_provider::ContainmentEffect
+pub fn agent_access_provider::ContainmentEffect::eq(&self, &agent_access_provider::ContainmentEffect) -> bool
+impl core::cmp::PartialOrd for agent_access_provider::ContainmentEffect
+pub fn agent_access_provider::ContainmentEffect::partial_cmp(&self, &agent_access_provider::ContainmentEffect) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for agent_access_provider::ContainmentEffect
+pub fn agent_access_provider::ContainmentEffect::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for agent_access_provider::ContainmentEffect
+impl core::marker::StructuralPartialEq for agent_access_provider::ContainmentEffect
+impl serde_core::ser::Serialize for agent_access_provider::ContainmentEffect
+pub fn agent_access_provider::ContainmentEffect::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for agent_access_provider::ContainmentEffect
+pub fn agent_access_provider::ContainmentEffect::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for agent_access_provider::ContainmentEffect
+impl core::marker::Send for agent_access_provider::ContainmentEffect
+impl core::marker::Sync for agent_access_provider::ContainmentEffect
+impl core::marker::Unpin for agent_access_provider::ContainmentEffect
+impl core::marker::UnsafeUnpin for agent_access_provider::ContainmentEffect
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ContainmentEffect
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ContainmentEffect
+#[non_exhaustive] pub enum agent_access_provider::ContainmentError
+pub agent_access_provider::ContainmentError::BudgetExceeded
+pub agent_access_provider::ContainmentError::ChangedLocation
+pub agent_access_provider::ContainmentError::InsufficientEvidence
+pub agent_access_provider::ContainmentError::InvalidContract
+pub agent_access_provider::ContainmentError::InvalidEvidence
+pub agent_access_provider::ContainmentError::InvalidSelector
+pub agent_access_provider::ContainmentError::UnresolvedRelation
+impl core::clone::Clone for agent_access_provider::ContainmentError
+pub fn agent_access_provider::ContainmentError::clone(&self) -> agent_access_provider::ContainmentError
+impl core::cmp::Eq for agent_access_provider::ContainmentError
+impl core::cmp::PartialEq for agent_access_provider::ContainmentError
+pub fn agent_access_provider::ContainmentError::eq(&self, &agent_access_provider::ContainmentError) -> bool
+impl core::convert::From<agent_access_provider::ContainmentError> for agent_access_provider::ProviderError
+pub fn agent_access_provider::ProviderError::from(agent_access_provider::ContainmentError) -> Self
+impl core::error::Error for agent_access_provider::ContainmentError
+impl core::fmt::Debug for agent_access_provider::ContainmentError
+pub fn agent_access_provider::ContainmentError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for agent_access_provider::ContainmentError
+pub fn agent_access_provider::ContainmentError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for agent_access_provider::ContainmentError
+impl core::marker::StructuralPartialEq for agent_access_provider::ContainmentError
+impl core::marker::Freeze for agent_access_provider::ContainmentError
+impl core::marker::Send for agent_access_provider::ContainmentError
+impl core::marker::Sync for agent_access_provider::ContainmentError
+impl core::marker::Unpin for agent_access_provider::ContainmentError
+impl core::marker::UnsafeUnpin for agent_access_provider::ContainmentError
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ContainmentError
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ContainmentError
+#[non_exhaustive] pub enum agent_access_provider::ContainmentEvidenceLevel
+pub agent_access_provider::ContainmentEvidenceLevel::CompleteLineage
+pub agent_access_provider::ContainmentEvidenceLevel::ContainerOnly
+impl core::clone::Clone for agent_access_provider::ContainmentEvidenceLevel
+pub fn agent_access_provider::ContainmentEvidenceLevel::clone(&self) -> agent_access_provider::ContainmentEvidenceLevel
+impl core::cmp::Eq for agent_access_provider::ContainmentEvidenceLevel
+impl core::cmp::Ord for agent_access_provider::ContainmentEvidenceLevel
+pub fn agent_access_provider::ContainmentEvidenceLevel::cmp(&self, &agent_access_provider::ContainmentEvidenceLevel) -> core::cmp::Ordering
+impl core::cmp::PartialEq for agent_access_provider::ContainmentEvidenceLevel
+pub fn agent_access_provider::ContainmentEvidenceLevel::eq(&self, &agent_access_provider::ContainmentEvidenceLevel) -> bool
+impl core::cmp::PartialOrd for agent_access_provider::ContainmentEvidenceLevel
+pub fn agent_access_provider::ContainmentEvidenceLevel::partial_cmp(&self, &agent_access_provider::ContainmentEvidenceLevel) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for agent_access_provider::ContainmentEvidenceLevel
+pub fn agent_access_provider::ContainmentEvidenceLevel::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for agent_access_provider::ContainmentEvidenceLevel
+impl core::marker::StructuralPartialEq for agent_access_provider::ContainmentEvidenceLevel
+impl serde_core::ser::Serialize for agent_access_provider::ContainmentEvidenceLevel
+pub fn agent_access_provider::ContainmentEvidenceLevel::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for agent_access_provider::ContainmentEvidenceLevel
+pub fn agent_access_provider::ContainmentEvidenceLevel::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for agent_access_provider::ContainmentEvidenceLevel
+impl core::marker::Send for agent_access_provider::ContainmentEvidenceLevel
+impl core::marker::Sync for agent_access_provider::ContainmentEvidenceLevel
+impl core::marker::Unpin for agent_access_provider::ContainmentEvidenceLevel
+impl core::marker::UnsafeUnpin for agent_access_provider::ContainmentEvidenceLevel
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ContainmentEvidenceLevel
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ContainmentEvidenceLevel
+#[non_exhaustive] pub enum agent_access_provider::ContainmentObligation
+pub agent_access_provider::ContainmentObligation::ChildPlacement(agent_access_provider::ContentLocation)
+pub agent_access_provider::ContainmentObligation::Content(agent_access_provider::ContentLocation)
+pub agent_access_provider::ContainmentObligation::SubtreeImpact
+pub agent_access_provider::ContainmentObligation::SubtreeImpact::current: agent_access_provider::ContentLocation
+pub agent_access_provider::ContainmentObligation::SubtreeImpact::proposed: agent_access_provider::ContentLocation
+impl agent_access_provider::ContainmentObligation
+pub fn agent_access_provider::ContainmentObligation::effect(&self) -> agent_access_provider::ContainmentEffect
+pub fn agent_access_provider::ContainmentObligation::target(&self) -> &agent_access_provider::ContainmentIdentity
+impl core::clone::Clone for agent_access_provider::ContainmentObligation
+pub fn agent_access_provider::ContainmentObligation::clone(&self) -> agent_access_provider::ContainmentObligation
+impl core::cmp::Eq for agent_access_provider::ContainmentObligation
+impl core::cmp::PartialEq for agent_access_provider::ContainmentObligation
+pub fn agent_access_provider::ContainmentObligation::eq(&self, &agent_access_provider::ContainmentObligation) -> bool
+impl core::fmt::Debug for agent_access_provider::ContainmentObligation
+pub fn agent_access_provider::ContainmentObligation::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for agent_access_provider::ContainmentObligation
+impl core::marker::Freeze for agent_access_provider::ContainmentObligation
+impl core::marker::Send for agent_access_provider::ContainmentObligation
+impl core::marker::Sync for agent_access_provider::ContainmentObligation
+impl core::marker::Unpin for agent_access_provider::ContainmentObligation
+impl core::marker::UnsafeUnpin for agent_access_provider::ContainmentObligation
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ContainmentObligation
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ContainmentObligation
+#[non_exhaustive] pub enum agent_access_provider::ContainmentProvenance
+pub agent_access_provider::ContainmentProvenance::Observed
+pub agent_access_provider::ContainmentProvenance::Proposed
+pub agent_access_provider::ContainmentProvenance::SignedLocator
+impl core::clone::Clone for agent_access_provider::ContainmentProvenance
+pub fn agent_access_provider::ContainmentProvenance::clone(&self) -> agent_access_provider::ContainmentProvenance
+impl core::cmp::Eq for agent_access_provider::ContainmentProvenance
+impl core::cmp::PartialEq for agent_access_provider::ContainmentProvenance
+pub fn agent_access_provider::ContainmentProvenance::eq(&self, &agent_access_provider::ContainmentProvenance) -> bool
+impl core::fmt::Debug for agent_access_provider::ContainmentProvenance
+pub fn agent_access_provider::ContainmentProvenance::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for agent_access_provider::ContainmentProvenance
+impl core::marker::StructuralPartialEq for agent_access_provider::ContainmentProvenance
+impl core::marker::Freeze for agent_access_provider::ContainmentProvenance
+impl core::marker::Send for agent_access_provider::ContainmentProvenance
+impl core::marker::Sync for agent_access_provider::ContainmentProvenance
+impl core::marker::Unpin for agent_access_provider::ContainmentProvenance
+impl core::marker::UnsafeUnpin for agent_access_provider::ContainmentProvenance
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ContainmentProvenance
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ContainmentProvenance
 #[non_exhaustive] pub enum agent_access_provider::ContinuationError
 pub agent_access_provider::ContinuationError::DurableKeyUnavailable
 pub agent_access_provider::ContinuationError::Expired
@@ -1155,6 +1281,7 @@ impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::HeaderEncod
 pub agent_access_provider::HookPhase::BodyAdmission
 pub agent_access_provider::HookPhase::CredentialVerification
 pub agent_access_provider::HookPhase::Invocation
+pub agent_access_provider::HookPhase::ScopeLocatorValidation
 pub agent_access_provider::HookPhase::ScopeResolution
 impl agent_access_provider::HookPhase
 pub fn agent_access_provider::HookPhase::as_str(self) -> &'static str
@@ -1178,9 +1305,13 @@ impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::HookPhas
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::HookPhase
 #[non_exhaustive] pub enum agent_access_provider::InvocationAuthority
 pub agent_access_provider::InvocationAuthority::ActionOnly
+pub agent_access_provider::InvocationAuthority::Containment(agent_access_provider::ContainmentAuthorization)
+pub agent_access_provider::InvocationAuthority::ContainmentCollection(agent_access_provider::ContainmentCollectionAuthorization)
 pub agent_access_provider::InvocationAuthority::Resources(agent_access_provider::ResourceScopes)
 pub agent_access_provider::InvocationAuthority::Search(agent_access_provider::SearchAuthorization)
 impl agent_access_provider::InvocationAuthority
+pub fn agent_access_provider::InvocationAuthority::containment(&self) -> core::option::Option<&agent_access_provider::ContainmentAuthorization>
+pub fn agent_access_provider::InvocationAuthority::containment_collection(&self) -> core::option::Option<&agent_access_provider::ContainmentCollectionAuthorization>
 pub fn agent_access_provider::InvocationAuthority::resources(&self) -> core::option::Option<&agent_access_provider::ResourceScopes>
 pub fn agent_access_provider::InvocationAuthority::search(&self) -> core::option::Option<&agent_access_provider::SearchAuthorization>
 impl core::clone::Clone for agent_access_provider::InvocationAuthority
@@ -1246,6 +1377,7 @@ impl core::marker::UnsafeUnpin for agent_access_provider::LookupRequirement
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::LookupRequirement
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::LookupRequirement
 #[non_exhaustive] pub enum agent_access_provider::MutationStatus
+pub agent_access_provider::MutationStatus::Applied
 pub agent_access_provider::MutationStatus::AppliedUnverified
 pub agent_access_provider::MutationStatus::NotApplied
 pub agent_access_provider::MutationStatus::Unknown
@@ -1465,6 +1597,30 @@ impl core::marker::Unpin for agent_access_provider::OAuthTokenType
 impl core::marker::UnsafeUnpin for agent_access_provider::OAuthTokenType
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::OAuthTokenType
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::OAuthTokenType
+#[non_exhaustive] pub enum agent_access_provider::OfflineContainmentProof
+pub agent_access_provider::OfflineContainmentProof::Conditional
+pub agent_access_provider::OfflineContainmentProof::Covered
+pub agent_access_provider::OfflineContainmentProof::Empty
+impl core::clone::Clone for agent_access_provider::OfflineContainmentProof
+pub fn agent_access_provider::OfflineContainmentProof::clone(&self) -> agent_access_provider::OfflineContainmentProof
+impl core::cmp::Eq for agent_access_provider::OfflineContainmentProof
+impl core::cmp::PartialEq for agent_access_provider::OfflineContainmentProof
+pub fn agent_access_provider::OfflineContainmentProof::eq(&self, &agent_access_provider::OfflineContainmentProof) -> bool
+impl core::fmt::Debug for agent_access_provider::OfflineContainmentProof
+pub fn agent_access_provider::OfflineContainmentProof::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for agent_access_provider::OfflineContainmentProof
+impl core::marker::StructuralPartialEq for agent_access_provider::OfflineContainmentProof
+impl serde_core::ser::Serialize for agent_access_provider::OfflineContainmentProof
+pub fn agent_access_provider::OfflineContainmentProof::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for agent_access_provider::OfflineContainmentProof
+pub fn agent_access_provider::OfflineContainmentProof::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for agent_access_provider::OfflineContainmentProof
+impl core::marker::Send for agent_access_provider::OfflineContainmentProof
+impl core::marker::Sync for agent_access_provider::OfflineContainmentProof
+impl core::marker::Unpin for agent_access_provider::OfflineContainmentProof
+impl core::marker::UnsafeUnpin for agent_access_provider::OfflineContainmentProof
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::OfflineContainmentProof
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::OfflineContainmentProof
 pub enum agent_access_provider::ProviderFailureStatus
 pub agent_access_provider::ProviderFailureStatus::BadGateway
 pub agent_access_provider::ProviderFailureStatus::BadRequest
@@ -1651,6 +1807,7 @@ pub agent_access_provider::ReasonCode::RateLimited
 pub agent_access_provider::ReasonCode::ReloadInProgress
 pub agent_access_provider::ReasonCode::RequestIdInvalid
 pub agent_access_provider::ReasonCode::RequestIdMissing
+pub agent_access_provider::ReasonCode::ResourceAccessTooComplex
 pub agent_access_provider::ReasonCode::ResourceGroupNotFound
 pub agent_access_provider::ReasonCode::ResourceInUse
 pub agent_access_provider::ReasonCode::ResourceNotFound
@@ -1737,16 +1894,47 @@ impl core::marker::Unpin for agent_access_provider::RefreshReplay
 impl core::marker::UnsafeUnpin for agent_access_provider::RefreshReplay
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::RefreshReplay
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::RefreshReplay
+#[non_exhaustive] pub enum agent_access_provider::ResourceScopeCapabilities
+pub agent_access_provider::ResourceScopeCapabilities::Containment(agent_access_provider::ContainmentScopeCapabilities)
+pub agent_access_provider::ResourceScopeCapabilities::Scalar
+pub agent_access_provider::ResourceScopeCapabilities::Scalar::resource_type: agent_access_provider::ResourceType
+pub agent_access_provider::ResourceScopeCapabilities::Scalar::selectors: alloc::vec::Vec<alloc::string::String>
+impl agent_access_provider::ResourceScopeCapabilities
+pub fn agent_access_provider::ResourceScopeCapabilities::accepts_resource_type(&self, &agent_access_provider::ResourceType) -> bool
+pub fn agent_access_provider::ResourceScopeCapabilities::as_containment(&self) -> core::option::Option<&agent_access_provider::ContainmentScopeCapabilities>
+pub fn agent_access_provider::ResourceScopeCapabilities::as_scalar(&self) -> core::option::Option<(&agent_access_provider::ResourceType, &[alloc::string::String])>
+pub fn agent_access_provider::ResourceScopeCapabilities::containment(agent_access_provider::ContainmentScopeCapabilities) -> Self
+pub fn agent_access_provider::ResourceScopeCapabilities::new(agent_access_provider::ResourceType, alloc::vec::Vec<alloc::string::String>) -> Self
+pub fn agent_access_provider::ResourceScopeCapabilities::resource_types(&self) -> alloc::vec::Vec<&agent_access_provider::ResourceType>
+impl core::clone::Clone for agent_access_provider::ResourceScopeCapabilities
+pub fn agent_access_provider::ResourceScopeCapabilities::clone(&self) -> agent_access_provider::ResourceScopeCapabilities
+impl core::cmp::PartialEq for agent_access_provider::ResourceScopeCapabilities
+pub fn agent_access_provider::ResourceScopeCapabilities::eq(&self, &agent_access_provider::ResourceScopeCapabilities) -> bool
+impl core::fmt::Debug for agent_access_provider::ResourceScopeCapabilities
+pub fn agent_access_provider::ResourceScopeCapabilities::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for agent_access_provider::ResourceScopeCapabilities
+impl serde_core::ser::Serialize for agent_access_provider::ResourceScopeCapabilities
+pub fn agent_access_provider::ResourceScopeCapabilities::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for agent_access_provider::ResourceScopeCapabilities
+pub fn agent_access_provider::ResourceScopeCapabilities::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for agent_access_provider::ResourceScopeCapabilities
+impl core::marker::Send for agent_access_provider::ResourceScopeCapabilities
+impl core::marker::Sync for agent_access_provider::ResourceScopeCapabilities
+impl core::marker::Unpin for agent_access_provider::ResourceScopeCapabilities
+impl core::marker::UnsafeUnpin for agent_access_provider::ResourceScopeCapabilities
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ResourceScopeCapabilities
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ResourceScopeCapabilities
 #[non_exhaustive] pub enum agent_access_provider::ResourceSelector
 pub agent_access_provider::ResourceSelector::All
 pub agent_access_provider::ResourceSelector::Exact
 pub agent_access_provider::ResourceSelector::Exact::value: alloc::string::String
 pub agent_access_provider::ResourceSelector::Namespace
 pub agent_access_provider::ResourceSelector::Namespace::value: alloc::string::String
+pub agent_access_provider::ResourceSelector::Subtree
+pub agent_access_provider::ResourceSelector::Subtree::value: alloc::string::String
 impl agent_access_provider::ResourceSelector
-pub fn agent_access_provider::ResourceSelector::contains(&self, &Self) -> bool
-pub fn agent_access_provider::ResourceSelector::intersection(&self, &Self) -> core::option::Option<Self>
-pub fn agent_access_provider::ResourceSelector::matches(&self, &str) -> bool
+pub fn agent_access_provider::ResourceSelector::kind(&self) -> &'static str
+pub fn agent_access_provider::ResourceSelector::value(&self) -> core::option::Option<&str>
 impl core::clone::Clone for agent_access_provider::ResourceSelector
 pub fn agent_access_provider::ResourceSelector::clone(&self) -> agent_access_provider::ResourceSelector
 impl core::cmp::Eq for agent_access_provider::ResourceSelector
@@ -1756,6 +1944,16 @@ impl core::cmp::PartialEq for agent_access_provider::ResourceSelector
 pub fn agent_access_provider::ResourceSelector::eq(&self, &agent_access_provider::ResourceSelector) -> bool
 impl core::cmp::PartialOrd for agent_access_provider::ResourceSelector
 pub fn agent_access_provider::ResourceSelector::partial_cmp(&self, &agent_access_provider::ResourceSelector) -> core::option::Option<core::cmp::Ordering>
+impl core::convert::From<&agent_access_provider::ScalarResourceSelector> for agent_access_provider::ResourceSelector
+pub fn agent_access_provider::ResourceSelector::from(&agent_access_provider::ScalarResourceSelector) -> Self
+impl core::convert::From<agent_access_provider::ScalarResourceSelector> for agent_access_provider::ResourceSelector
+pub fn agent_access_provider::ResourceSelector::from(agent_access_provider::ScalarResourceSelector) -> Self
+impl core::convert::TryFrom<&agent_access_provider::ResourceSelector> for agent_access_provider::ScalarResourceSelector
+pub type agent_access_provider::ScalarResourceSelector::Error = agent_access_provider::NonScalarResourceSelector
+pub fn agent_access_provider::ScalarResourceSelector::try_from(&agent_access_provider::ResourceSelector) -> core::result::Result<Self, Self::Error>
+impl core::convert::TryFrom<agent_access_provider::ResourceSelector> for agent_access_provider::ScalarResourceSelector
+pub type agent_access_provider::ScalarResourceSelector::Error = agent_access_provider::NonScalarResourceSelector
+pub fn agent_access_provider::ScalarResourceSelector::try_from(agent_access_provider::ResourceSelector) -> core::result::Result<Self, Self::Error>
 impl core::fmt::Debug for agent_access_provider::ResourceSelector
 pub fn agent_access_provider::ResourceSelector::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::hash::Hash for agent_access_provider::ResourceSelector
@@ -1791,6 +1989,65 @@ impl core::marker::Unpin for agent_access_provider::RevocationOutcome
 impl core::marker::UnsafeUnpin for agent_access_provider::RevocationOutcome
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::RevocationOutcome
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::RevocationOutcome
+#[non_exhaustive] pub enum agent_access_provider::ScalarResourceSelector
+pub agent_access_provider::ScalarResourceSelector::All
+pub agent_access_provider::ScalarResourceSelector::Exact
+pub agent_access_provider::ScalarResourceSelector::Exact::value: alloc::string::String
+pub agent_access_provider::ScalarResourceSelector::Namespace
+pub agent_access_provider::ScalarResourceSelector::Namespace::value: alloc::string::String
+impl agent_access_provider::ScalarResourceSelector
+pub fn agent_access_provider::ScalarResourceSelector::contains(&self, &Self) -> bool
+pub fn agent_access_provider::ScalarResourceSelector::intersection(&self, &Self) -> core::option::Option<Self>
+pub fn agent_access_provider::ScalarResourceSelector::matches(&self, &str) -> bool
+impl core::clone::Clone for agent_access_provider::ScalarResourceSelector
+pub fn agent_access_provider::ScalarResourceSelector::clone(&self) -> agent_access_provider::ScalarResourceSelector
+impl core::cmp::Eq for agent_access_provider::ScalarResourceSelector
+impl core::cmp::Ord for agent_access_provider::ScalarResourceSelector
+pub fn agent_access_provider::ScalarResourceSelector::cmp(&self, &agent_access_provider::ScalarResourceSelector) -> core::cmp::Ordering
+impl core::cmp::PartialEq for agent_access_provider::ScalarResourceSelector
+pub fn agent_access_provider::ScalarResourceSelector::eq(&self, &agent_access_provider::ScalarResourceSelector) -> bool
+impl core::cmp::PartialOrd for agent_access_provider::ScalarResourceSelector
+pub fn agent_access_provider::ScalarResourceSelector::partial_cmp(&self, &agent_access_provider::ScalarResourceSelector) -> core::option::Option<core::cmp::Ordering>
+impl core::convert::From<&agent_access_provider::ScalarResourceSelector> for agent_access_provider::ResourceSelector
+pub fn agent_access_provider::ResourceSelector::from(&agent_access_provider::ScalarResourceSelector) -> Self
+impl core::convert::From<agent_access_provider::ScalarResourceSelector> for agent_access_provider::ResourceSelector
+pub fn agent_access_provider::ResourceSelector::from(agent_access_provider::ScalarResourceSelector) -> Self
+impl core::convert::TryFrom<&agent_access_provider::ResourceSelector> for agent_access_provider::ScalarResourceSelector
+pub type agent_access_provider::ScalarResourceSelector::Error = agent_access_provider::NonScalarResourceSelector
+pub fn agent_access_provider::ScalarResourceSelector::try_from(&agent_access_provider::ResourceSelector) -> core::result::Result<Self, Self::Error>
+impl core::convert::TryFrom<agent_access_provider::ResourceSelector> for agent_access_provider::ScalarResourceSelector
+pub type agent_access_provider::ScalarResourceSelector::Error = agent_access_provider::NonScalarResourceSelector
+pub fn agent_access_provider::ScalarResourceSelector::try_from(agent_access_provider::ResourceSelector) -> core::result::Result<Self, Self::Error>
+impl core::fmt::Debug for agent_access_provider::ScalarResourceSelector
+pub fn agent_access_provider::ScalarResourceSelector::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for agent_access_provider::ScalarResourceSelector
+pub fn agent_access_provider::ScalarResourceSelector::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::StructuralPartialEq for agent_access_provider::ScalarResourceSelector
+impl serde_core::ser::Serialize for agent_access_provider::ScalarResourceSelector
+pub fn agent_access_provider::ScalarResourceSelector::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for agent_access_provider::ScalarResourceSelector
+pub fn agent_access_provider::ScalarResourceSelector::deserialize<D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
+impl core::marker::Freeze for agent_access_provider::ScalarResourceSelector
+impl core::marker::Send for agent_access_provider::ScalarResourceSelector
+impl core::marker::Sync for agent_access_provider::ScalarResourceSelector
+impl core::marker::Unpin for agent_access_provider::ScalarResourceSelector
+impl core::marker::UnsafeUnpin for agent_access_provider::ScalarResourceSelector
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ScalarResourceSelector
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ScalarResourceSelector
+#[non_exhaustive] pub enum agent_access_provider::ScopeEvidence
+pub agent_access_provider::ScopeEvidence::Containment(agent_access_provider::ContainmentEvidence)
+pub agent_access_provider::ScopeEvidence::Scalar(agent_access_provider::ResourceScopes)
+impl core::clone::Clone for agent_access_provider::ScopeEvidence
+pub fn agent_access_provider::ScopeEvidence::clone(&self) -> agent_access_provider::ScopeEvidence
+impl core::fmt::Debug for agent_access_provider::ScopeEvidence
+pub fn agent_access_provider::ScopeEvidence::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for agent_access_provider::ScopeEvidence
+impl core::marker::Send for agent_access_provider::ScopeEvidence
+impl core::marker::Sync for agent_access_provider::ScopeEvidence
+impl core::marker::Unpin for agent_access_provider::ScopeEvidence
+impl core::marker::UnsafeUnpin for agent_access_provider::ScopeEvidence
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ScopeEvidence
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ScopeEvidence
 #[non_exhaustive] pub enum agent_access_provider::ScopedMcpNameSource
 pub agent_access_provider::ScopedMcpNameSource::CanonicalAction
 pub agent_access_provider::ScopedMcpNameSource::Imported
@@ -1969,6 +2226,7 @@ pub agent_access_provider::ActionDescriptor::presentation: core::option::Option<
 pub agent_access_provider::ActionDescriptor::read_only: bool
 pub agent_access_provider::ActionDescriptor::reports_universal_reach: bool
 pub agent_access_provider::ActionDescriptor::requires_resource_attributes: bool
+pub agent_access_provider::ActionDescriptor::requires_scope_locator_validation: bool
 pub agent_access_provider::ActionDescriptor::requires_stable_signing_key: bool
 pub agent_access_provider::ActionDescriptor::resource_scope: core::option::Option<alloc::string::String>
 pub agent_access_provider::ActionDescriptor::result_schemas: core::option::Option<agent_access_provider::ActionResultSchemas>
@@ -1998,6 +2256,7 @@ pub fn agent_access_provider::ActionDescriptor::requires_stable_signing_key(self
 pub fn agent_access_provider::ActionDescriptor::resource_attributes(self) -> Self
 pub fn agent_access_provider::ActionDescriptor::result_schemas(self, agent_access_provider::ActionResultSchemas) -> Self
 pub fn agent_access_provider::ActionDescriptor::scope(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn agent_access_provider::ActionDescriptor::scope_locator_validation(self) -> Self
 pub fn agent_access_provider::ActionDescriptor::sensitive_output(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn agent_access_provider::ActionDescriptor::token_only(self) -> Self
 pub fn agent_access_provider::ActionDescriptor::upstream_resource_ownership(self, agent_access_provider::UpstreamResourceOwnership) -> Self
@@ -2051,6 +2310,8 @@ impl agent_access_provider::AdmittedContext
 pub fn agent_access_provider::AdmittedContext::action(&self) -> &str
 pub fn agent_access_provider::AdmittedContext::authority(&self) -> &agent_access_provider::InvocationAuthority
 pub fn agent_access_provider::AdmittedContext::companion_reads_authorized(&self) -> bool
+pub fn agent_access_provider::AdmittedContext::containment_authorization(&self) -> core::result::Result<&agent_access_provider::ContainmentAuthorization, agent_access_provider::AuthorityMismatch>
+pub fn agent_access_provider::AdmittedContext::containment_collection_authorization(&self) -> core::result::Result<&agent_access_provider::ContainmentCollectionAuthorization, agent_access_provider::AuthorityMismatch>
 pub fn agent_access_provider::AdmittedContext::correlation(&self) -> &agent_access_provider::CorrelationContext
 pub fn agent_access_provider::AdmittedContext::credential_mode(&self) -> agent_access_provider::CredentialMode
 pub fn agent_access_provider::AdmittedContext::execution_context(&self) -> &str
@@ -2075,6 +2336,8 @@ impl agent_access_provider::AdmittedRequest
 pub fn agent_access_provider::AdmittedRequest::action(&self) -> &str
 pub fn agent_access_provider::AdmittedRequest::authority(&self) -> &agent_access_provider::InvocationAuthority
 pub fn agent_access_provider::AdmittedRequest::companion_reads_authorized(&self) -> bool
+pub fn agent_access_provider::AdmittedRequest::containment_authorization(&self) -> core::result::Result<&agent_access_provider::ContainmentAuthorization, agent_access_provider::AuthorityMismatch>
+pub fn agent_access_provider::AdmittedRequest::containment_collection_authorization(&self) -> core::result::Result<&agent_access_provider::ContainmentCollectionAuthorization, agent_access_provider::AuthorityMismatch>
 pub fn agent_access_provider::AdmittedRequest::context(&self) -> &agent_access_provider::AdmittedContext
 pub fn agent_access_provider::AdmittedRequest::correlation(&self) -> &agent_access_provider::CorrelationContext
 pub fn agent_access_provider::AdmittedRequest::credential_mode(&self) -> agent_access_provider::CredentialMode
@@ -2373,6 +2636,207 @@ impl core::marker::Unpin for agent_access_provider::ConnectedIdentity
 impl core::marker::UnsafeUnpin for agent_access_provider::ConnectedIdentity
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ConnectedIdentity
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ConnectedIdentity
+#[non_exhaustive] pub struct agent_access_provider::ContainmentAncestor
+pub agent_access_provider::ContainmentAncestor::containers: alloc::vec::Vec<agent_access_provider::ResourceContainer>
+pub agent_access_provider::ContainmentAncestor::identity: agent_access_provider::ContainmentIdentity
+impl agent_access_provider::ContainmentAncestor
+pub fn agent_access_provider::ContainmentAncestor::new(agent_access_provider::ContainmentIdentity, alloc::vec::Vec<agent_access_provider::ResourceContainer>) -> Self
+impl core::clone::Clone for agent_access_provider::ContainmentAncestor
+pub fn agent_access_provider::ContainmentAncestor::clone(&self) -> agent_access_provider::ContainmentAncestor
+impl core::cmp::Eq for agent_access_provider::ContainmentAncestor
+impl core::cmp::PartialEq for agent_access_provider::ContainmentAncestor
+pub fn agent_access_provider::ContainmentAncestor::eq(&self, &agent_access_provider::ContainmentAncestor) -> bool
+impl core::fmt::Debug for agent_access_provider::ContainmentAncestor
+pub fn agent_access_provider::ContainmentAncestor::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for agent_access_provider::ContainmentAncestor
+impl core::marker::Freeze for agent_access_provider::ContainmentAncestor
+impl core::marker::Send for agent_access_provider::ContainmentAncestor
+impl core::marker::Sync for agent_access_provider::ContainmentAncestor
+impl core::marker::Unpin for agent_access_provider::ContainmentAncestor
+impl core::marker::UnsafeUnpin for agent_access_provider::ContainmentAncestor
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ContainmentAncestor
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ContainmentAncestor
+pub struct agent_access_provider::ContainmentAuthorization
+impl agent_access_provider::ContainmentAuthorization
+pub fn agent_access_provider::ContainmentAuthorization::authority_digest(&self) -> &str
+pub fn agent_access_provider::ContainmentAuthorization::check_same_location(&self, &agent_access_provider::ContainmentEvidence) -> core::result::Result<(), agent_access_provider::ContainmentError>
+pub fn agent_access_provider::ContainmentAuthorization::contract(&self) -> &agent_access_provider::ContainmentScopeCapabilities
+pub fn agent_access_provider::ContainmentAuthorization::evidence(&self) -> &agent_access_provider::ContainmentEvidence
+pub fn agent_access_provider::ContainmentAuthorization::evidence_level(&self) -> agent_access_provider::ContainmentEvidenceLevel
+impl core::clone::Clone for agent_access_provider::ContainmentAuthorization
+pub fn agent_access_provider::ContainmentAuthorization::clone(&self) -> agent_access_provider::ContainmentAuthorization
+impl core::fmt::Debug for agent_access_provider::ContainmentAuthorization
+pub fn agent_access_provider::ContainmentAuthorization::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for agent_access_provider::ContainmentAuthorization
+impl core::marker::Send for agent_access_provider::ContainmentAuthorization
+impl core::marker::Sync for agent_access_provider::ContainmentAuthorization
+impl core::marker::Unpin for agent_access_provider::ContainmentAuthorization
+impl core::marker::UnsafeUnpin for agent_access_provider::ContainmentAuthorization
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ContainmentAuthorization
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ContainmentAuthorization
+pub struct agent_access_provider::ContainmentBoundary
+impl agent_access_provider::ContainmentBoundary
+pub fn agent_access_provider::ContainmentBoundary::excluded(&self) -> &[agent_access_provider::TypedResourceSelector]
+pub fn agent_access_provider::ContainmentBoundary::included(&self) -> &[agent_access_provider::TypedResourceSelector]
+pub fn agent_access_provider::ContainmentBoundary::is_empty(&self) -> bool
+pub fn agent_access_provider::ContainmentBoundary::new(alloc::vec::Vec<agent_access_provider::TypedResourceSelector>, alloc::vec::Vec<agent_access_provider::TypedResourceSelector>) -> Self
+impl agent_access_provider::ContainmentBoundary
+pub fn agent_access_provider::ContainmentBoundary::is_universe(&self, &agent_access_provider::ContainmentScopeCapabilities, &str) -> bool
+pub fn agent_access_provider::ContainmentBoundary::matches_evidence(&self, &agent_access_provider::ContainmentEvidence) -> core::result::Result<bool, agent_access_provider::ContainmentError>
+pub fn agent_access_provider::ContainmentBoundary::matches_obligation(&self, &agent_access_provider::ContainmentObligation, &[agent_access_provider::ContentLocation], &str) -> core::result::Result<bool, agent_access_provider::ContainmentError>
+pub fn agent_access_provider::ContainmentBoundary::prove_covers(&self, &Self, &agent_access_provider::ContainmentScopeCapabilities, &str) -> agent_access_provider::OfflineContainmentProof
+pub fn agent_access_provider::ContainmentBoundary::prove_intersection(&self, &Self, &agent_access_provider::ContainmentScopeCapabilities, &str) -> agent_access_provider::OfflineContainmentProof
+pub fn agent_access_provider::ContainmentBoundary::prove_nonempty(&self, &agent_access_provider::ContainmentScopeCapabilities, &str) -> agent_access_provider::OfflineContainmentProof
+impl core::clone::Clone for agent_access_provider::ContainmentBoundary
+pub fn agent_access_provider::ContainmentBoundary::clone(&self) -> agent_access_provider::ContainmentBoundary
+impl core::cmp::Eq for agent_access_provider::ContainmentBoundary
+impl core::cmp::PartialEq for agent_access_provider::ContainmentBoundary
+pub fn agent_access_provider::ContainmentBoundary::eq(&self, &agent_access_provider::ContainmentBoundary) -> bool
+impl core::fmt::Debug for agent_access_provider::ContainmentBoundary
+pub fn agent_access_provider::ContainmentBoundary::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for agent_access_provider::ContainmentBoundary
+impl serde_core::ser::Serialize for agent_access_provider::ContainmentBoundary
+pub fn agent_access_provider::ContainmentBoundary::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for agent_access_provider::ContainmentBoundary
+impl core::marker::Send for agent_access_provider::ContainmentBoundary
+impl core::marker::Sync for agent_access_provider::ContainmentBoundary
+impl core::marker::Unpin for agent_access_provider::ContainmentBoundary
+impl core::marker::UnsafeUnpin for agent_access_provider::ContainmentBoundary
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ContainmentBoundary
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ContainmentBoundary
+pub struct agent_access_provider::ContainmentCollectionAuthorization
+impl agent_access_provider::ContainmentCollectionAuthorization
+pub fn agent_access_provider::ContainmentCollectionAuthorization::authority_digest(&self) -> &str
+pub fn agent_access_provider::ContainmentCollectionAuthorization::contract(&self) -> &agent_access_provider::ContainmentScopeCapabilities
+pub fn agent_access_provider::ContainmentCollectionAuthorization::evidence_level(&self) -> agent_access_provider::ContainmentEvidenceLevel
+pub fn agent_access_provider::ContainmentCollectionAuthorization::grant_boundaries(&self) -> &[agent_access_provider::ContainmentBoundary]
+pub fn agent_access_provider::ContainmentCollectionAuthorization::matches_candidate(&self, &agent_access_provider::ContentLocation) -> core::result::Result<bool, agent_access_provider::ContainmentError>
+pub fn agent_access_provider::ContainmentCollectionAuthorization::requested_container_coverage(&self, &agent_access_provider::ResourceContainer) -> agent_access_provider::OfflineContainmentProof
+pub fn agent_access_provider::ContainmentCollectionAuthorization::site_origin(&self) -> &str
+pub fn agent_access_provider::ContainmentCollectionAuthorization::token_boundary(&self) -> core::option::Option<&agent_access_provider::ContainmentBoundary>
+pub fn agent_access_provider::ContainmentCollectionAuthorization::uses_only_scalar_container_selectors(&self) -> bool
+impl core::clone::Clone for agent_access_provider::ContainmentCollectionAuthorization
+pub fn agent_access_provider::ContainmentCollectionAuthorization::clone(&self) -> agent_access_provider::ContainmentCollectionAuthorization
+impl core::fmt::Debug for agent_access_provider::ContainmentCollectionAuthorization
+pub fn agent_access_provider::ContainmentCollectionAuthorization::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for agent_access_provider::ContainmentCollectionAuthorization
+impl core::marker::Send for agent_access_provider::ContainmentCollectionAuthorization
+impl core::marker::Sync for agent_access_provider::ContainmentCollectionAuthorization
+impl core::marker::Unpin for agent_access_provider::ContainmentCollectionAuthorization
+impl core::marker::UnsafeUnpin for agent_access_provider::ContainmentCollectionAuthorization
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ContainmentCollectionAuthorization
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ContainmentCollectionAuthorization
+pub struct agent_access_provider::ContainmentEvidence
+impl agent_access_provider::ContainmentEvidence
+pub fn agent_access_provider::ContainmentEvidence::domain(&self) -> &str
+pub fn agent_access_provider::ContainmentEvidence::has_signed_locator(&self) -> bool
+pub fn agent_access_provider::ContainmentEvidence::new(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, alloc::vec::Vec<agent_access_provider::ContainmentObligation>) -> Self
+pub fn agent_access_provider::ContainmentEvidence::obligations(&self) -> &[agent_access_provider::ContainmentObligation]
+pub fn agent_access_provider::ContainmentEvidence::projection(&self, &str) -> agent_access_provider::ResourceScopes
+pub fn agent_access_provider::ContainmentEvidence::related_roots(&self) -> &[agent_access_provider::ContentLocation]
+pub fn agent_access_provider::ContainmentEvidence::site_origin(&self) -> &str
+pub fn agent_access_provider::ContainmentEvidence::validate(&self, &agent_access_provider::ContainmentScopeCapabilities, &agent_access_provider::ResourceTypeRegistry, agent_access_provider::ContainmentEvidenceLevel) -> core::result::Result<(), agent_access_provider::ContainmentError>
+pub fn agent_access_provider::ContainmentEvidence::with_related_roots(self, alloc::vec::Vec<agent_access_provider::ContentLocation>) -> Self
+impl core::clone::Clone for agent_access_provider::ContainmentEvidence
+pub fn agent_access_provider::ContainmentEvidence::clone(&self) -> agent_access_provider::ContainmentEvidence
+impl core::cmp::Eq for agent_access_provider::ContainmentEvidence
+impl core::cmp::PartialEq for agent_access_provider::ContainmentEvidence
+pub fn agent_access_provider::ContainmentEvidence::eq(&self, &agent_access_provider::ContainmentEvidence) -> bool
+impl core::fmt::Debug for agent_access_provider::ContainmentEvidence
+pub fn agent_access_provider::ContainmentEvidence::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for agent_access_provider::ContainmentEvidence
+impl core::marker::Freeze for agent_access_provider::ContainmentEvidence
+impl core::marker::Send for agent_access_provider::ContainmentEvidence
+impl core::marker::Sync for agent_access_provider::ContainmentEvidence
+impl core::marker::Unpin for agent_access_provider::ContainmentEvidence
+impl core::marker::UnsafeUnpin for agent_access_provider::ContainmentEvidence
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ContainmentEvidence
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ContainmentEvidence
+#[non_exhaustive] pub struct agent_access_provider::ContainmentIdentity
+pub agent_access_provider::ContainmentIdentity::content_kind: alloc::string::String
+pub agent_access_provider::ContainmentIdentity::resource_type: agent_access_provider::ResourceType
+pub agent_access_provider::ContainmentIdentity::value: alloc::string::String
+impl agent_access_provider::ContainmentIdentity
+pub fn agent_access_provider::ContainmentIdentity::new(agent_access_provider::ResourceType, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
+impl core::clone::Clone for agent_access_provider::ContainmentIdentity
+pub fn agent_access_provider::ContainmentIdentity::clone(&self) -> agent_access_provider::ContainmentIdentity
+impl core::cmp::Eq for agent_access_provider::ContainmentIdentity
+impl core::cmp::Ord for agent_access_provider::ContainmentIdentity
+pub fn agent_access_provider::ContainmentIdentity::cmp(&self, &agent_access_provider::ContainmentIdentity) -> core::cmp::Ordering
+impl core::cmp::PartialEq for agent_access_provider::ContainmentIdentity
+pub fn agent_access_provider::ContainmentIdentity::eq(&self, &agent_access_provider::ContainmentIdentity) -> bool
+impl core::cmp::PartialOrd for agent_access_provider::ContainmentIdentity
+pub fn agent_access_provider::ContainmentIdentity::partial_cmp(&self, &agent_access_provider::ContainmentIdentity) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for agent_access_provider::ContainmentIdentity
+pub fn agent_access_provider::ContainmentIdentity::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for agent_access_provider::ContainmentIdentity
+pub fn agent_access_provider::ContainmentIdentity::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::StructuralPartialEq for agent_access_provider::ContainmentIdentity
+impl serde_core::ser::Serialize for agent_access_provider::ContainmentIdentity
+pub fn agent_access_provider::ContainmentIdentity::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for agent_access_provider::ContainmentIdentity
+impl core::marker::Send for agent_access_provider::ContainmentIdentity
+impl core::marker::Sync for agent_access_provider::ContainmentIdentity
+impl core::marker::Unpin for agent_access_provider::ContainmentIdentity
+impl core::marker::UnsafeUnpin for agent_access_provider::ContainmentIdentity
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ContainmentIdentity
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ContainmentIdentity
+#[non_exhaustive] pub struct agent_access_provider::ContainmentScopeCapabilities
+pub agent_access_provider::ContainmentScopeCapabilities::ancestor_kinds: alloc::vec::Vec<alloc::string::String>
+pub agent_access_provider::ContainmentScopeCapabilities::container_types: alloc::vec::Vec<agent_access_provider::ResourceType>
+pub agent_access_provider::ContainmentScopeCapabilities::domain: alloc::string::String
+pub agent_access_provider::ContainmentScopeCapabilities::effects: alloc::vec::Vec<agent_access_provider::ContainmentEffect>
+pub agent_access_provider::ContainmentScopeCapabilities::selectors_by_type: alloc::collections::btree::map::BTreeMap<agent_access_provider::ResourceType, alloc::vec::Vec<alloc::string::String>>
+pub agent_access_provider::ContainmentScopeCapabilities::target_kinds: alloc::vec::Vec<alloc::string::String>
+impl agent_access_provider::ContainmentScopeCapabilities
+pub fn agent_access_provider::ContainmentScopeCapabilities::new(impl core::convert::Into<alloc::string::String>, alloc::collections::btree::map::BTreeMap<agent_access_provider::ResourceType, alloc::vec::Vec<alloc::string::String>>, alloc::vec::Vec<agent_access_provider::ResourceType>, alloc::vec::Vec<alloc::string::String>, alloc::vec::Vec<alloc::string::String>, alloc::vec::Vec<agent_access_provider::ContainmentEffect>) -> Self
+pub fn agent_access_provider::ContainmentScopeCapabilities::selector_applicable(&self, &agent_access_provider::TypedResourceSelector, &str) -> bool
+pub fn agent_access_provider::ContainmentScopeCapabilities::validate(&self, &agent_access_provider::ResourceTypeRegistry) -> core::result::Result<(), agent_access_provider::ContainmentError>
+pub fn agent_access_provider::ContainmentScopeCapabilities::validate_shape(&self) -> core::result::Result<(), agent_access_provider::ContainmentError>
+impl core::clone::Clone for agent_access_provider::ContainmentScopeCapabilities
+pub fn agent_access_provider::ContainmentScopeCapabilities::clone(&self) -> agent_access_provider::ContainmentScopeCapabilities
+impl core::cmp::Eq for agent_access_provider::ContainmentScopeCapabilities
+impl core::cmp::PartialEq for agent_access_provider::ContainmentScopeCapabilities
+pub fn agent_access_provider::ContainmentScopeCapabilities::eq(&self, &agent_access_provider::ContainmentScopeCapabilities) -> bool
+impl core::fmt::Debug for agent_access_provider::ContainmentScopeCapabilities
+pub fn agent_access_provider::ContainmentScopeCapabilities::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for agent_access_provider::ContainmentScopeCapabilities
+impl serde_core::ser::Serialize for agent_access_provider::ContainmentScopeCapabilities
+pub fn agent_access_provider::ContainmentScopeCapabilities::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for agent_access_provider::ContainmentScopeCapabilities
+pub fn agent_access_provider::ContainmentScopeCapabilities::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for agent_access_provider::ContainmentScopeCapabilities
+impl core::marker::Send for agent_access_provider::ContainmentScopeCapabilities
+impl core::marker::Sync for agent_access_provider::ContainmentScopeCapabilities
+impl core::marker::Unpin for agent_access_provider::ContainmentScopeCapabilities
+impl core::marker::UnsafeUnpin for agent_access_provider::ContainmentScopeCapabilities
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ContainmentScopeCapabilities
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ContainmentScopeCapabilities
+#[non_exhaustive] pub struct agent_access_provider::ContentLocation
+pub agent_access_provider::ContentLocation::ancestors: alloc::vec::Vec<agent_access_provider::ContainmentAncestor>
+pub agent_access_provider::ContentLocation::containers: alloc::vec::Vec<agent_access_provider::ResourceContainer>
+pub agent_access_provider::ContentLocation::evidence_level: agent_access_provider::ContainmentEvidenceLevel
+pub agent_access_provider::ContentLocation::provenance: agent_access_provider::ContainmentProvenance
+pub agent_access_provider::ContentLocation::target: agent_access_provider::ContainmentIdentity
+impl agent_access_provider::ContentLocation
+pub fn agent_access_provider::ContentLocation::new(agent_access_provider::ContainmentIdentity, alloc::vec::Vec<agent_access_provider::ResourceContainer>, agent_access_provider::ContainmentEvidenceLevel) -> Self
+pub fn agent_access_provider::ContentLocation::with_ancestors(self, alloc::vec::Vec<agent_access_provider::ContainmentAncestor>) -> Self
+pub fn agent_access_provider::ContentLocation::with_provenance(self, agent_access_provider::ContainmentProvenance) -> Self
+impl core::clone::Clone for agent_access_provider::ContentLocation
+pub fn agent_access_provider::ContentLocation::clone(&self) -> agent_access_provider::ContentLocation
+impl core::cmp::Eq for agent_access_provider::ContentLocation
+impl core::cmp::PartialEq for agent_access_provider::ContentLocation
+pub fn agent_access_provider::ContentLocation::eq(&self, &agent_access_provider::ContentLocation) -> bool
+impl core::fmt::Debug for agent_access_provider::ContentLocation
+pub fn agent_access_provider::ContentLocation::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for agent_access_provider::ContentLocation
+impl core::marker::Freeze for agent_access_provider::ContentLocation
+impl core::marker::Send for agent_access_provider::ContentLocation
+impl core::marker::Sync for agent_access_provider::ContentLocation
+impl core::marker::Unpin for agent_access_provider::ContentLocation
+impl core::marker::UnsafeUnpin for agent_access_provider::ContentLocation
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ContentLocation
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ContentLocation
 pub struct agent_access_provider::ContinuationBinding<Stage: agent_access_provider::ContinuationStage>
 impl<Stage: agent_access_provider::ContinuationStage> agent_access_provider::ContinuationBinding<Stage>
 pub fn agent_access_provider::ContinuationBinding<Stage>::bytes(self, &'static str, &[u8]) -> Self
@@ -2412,6 +2876,7 @@ impl<P> core::panic::unwind_safe::UnwindSafe for agent_access_provider::Continua
 pub struct agent_access_provider::ContinuationFamily
 impl agent_access_provider::ContinuationFamily
 pub fn agent_access_provider::ContinuationFamily::bind(&self, &agent_access_provider::AdmittedContext, impl core::convert::AsRef<[u8]>) -> agent_access_provider::ContinuationBinding
+pub fn agent_access_provider::ContinuationFamily::bind_local_scope(&self, &agent_access_provider::LocalScopeRequest<'_>, impl core::convert::AsRef<[u8]>) -> agent_access_provider::ContinuationBinding<agent_access_provider::ScopeResolutionStage>
 pub fn agent_access_provider::ContinuationFamily::bind_scope(&self, &agent_access_provider::ScopeRequest<'_>, impl core::convert::AsRef<[u8]>) -> agent_access_provider::ContinuationBinding<agent_access_provider::ScopeResolutionStage>
 pub const fn agent_access_provider::ContinuationFamily::clock_skew(self, core::time::Duration) -> Self
 pub const fn agent_access_provider::ContinuationFamily::confidential(self) -> Self
@@ -3063,6 +3528,90 @@ impl core::marker::Unpin for agent_access_provider::LinkedIdentity
 impl core::marker::UnsafeUnpin for agent_access_provider::LinkedIdentity
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::LinkedIdentity
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::LinkedIdentity
+pub struct agent_access_provider::LocalScopeRequest<'a>
+impl<'a> agent_access_provider::LocalScopeRequest<'a>
+pub fn agent_access_provider::LocalScopeRequest<'a>::action(&self) -> &'a str
+pub fn agent_access_provider::LocalScopeRequest<'a>::correlation(&self) -> &'a agent_access_provider::CorrelationContext
+pub fn agent_access_provider::LocalScopeRequest<'a>::execution_context(&self) -> &'a str
+pub fn agent_access_provider::LocalScopeRequest<'a>::identity(&self) -> &'a agent_access_provider::InvocationIdentity
+pub fn agent_access_provider::LocalScopeRequest<'a>::inputs(&self) -> &'a serde_json::value::Value
+pub fn agent_access_provider::LocalScopeRequest<'a>::service(&self) -> &'a str
+impl<'a> core::clone::Clone for agent_access_provider::LocalScopeRequest<'a>
+pub fn agent_access_provider::LocalScopeRequest<'a>::clone(&self) -> agent_access_provider::LocalScopeRequest<'a>
+impl<'a> core::fmt::Debug for agent_access_provider::LocalScopeRequest<'a>
+pub fn agent_access_provider::LocalScopeRequest<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a> core::marker::Copy for agent_access_provider::LocalScopeRequest<'a>
+impl<'a> core::marker::Freeze for agent_access_provider::LocalScopeRequest<'a>
+impl<'a> core::marker::Send for agent_access_provider::LocalScopeRequest<'a>
+impl<'a> core::marker::Sync for agent_access_provider::LocalScopeRequest<'a>
+impl<'a> core::marker::Unpin for agent_access_provider::LocalScopeRequest<'a>
+impl<'a> core::marker::UnsafeUnpin for agent_access_provider::LocalScopeRequest<'a>
+impl<'a> core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::LocalScopeRequest<'a>
+impl<'a> core::panic::unwind_safe::UnwindSafe for agent_access_provider::LocalScopeRequest<'a>
+pub struct agent_access_provider::LocationEntryCapability
+impl agent_access_provider::LocationEntryCapability
+pub fn agent_access_provider::LocationEntryCapability::coverage_kinds(&self) -> &[alloc::string::String]
+pub fn agent_access_provider::LocationEntryCapability::location_kinds(&self) -> &[alloc::string::String]
+pub fn agent_access_provider::LocationEntryCapability::new(agent_access_provider::ResourceType, alloc::vec::Vec<agent_access_provider::ResourceType>, alloc::vec::Vec<alloc::string::String>, alloc::vec::Vec<alloc::string::String>) -> Self
+pub fn agent_access_provider::LocationEntryCapability::normalizer(&self) -> &agent_access_provider::ResourceType
+pub fn agent_access_provider::LocationEntryCapability::resource_types(&self) -> &[agent_access_provider::ResourceType]
+impl core::clone::Clone for agent_access_provider::LocationEntryCapability
+pub fn agent_access_provider::LocationEntryCapability::clone(&self) -> agent_access_provider::LocationEntryCapability
+impl core::cmp::Eq for agent_access_provider::LocationEntryCapability
+impl core::cmp::PartialEq for agent_access_provider::LocationEntryCapability
+pub fn agent_access_provider::LocationEntryCapability::eq(&self, &agent_access_provider::LocationEntryCapability) -> bool
+impl core::fmt::Debug for agent_access_provider::LocationEntryCapability
+pub fn agent_access_provider::LocationEntryCapability::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for agent_access_provider::LocationEntryCapability
+impl core::marker::Freeze for agent_access_provider::LocationEntryCapability
+impl core::marker::Send for agent_access_provider::LocationEntryCapability
+impl core::marker::Sync for agent_access_provider::LocationEntryCapability
+impl core::marker::Unpin for agent_access_provider::LocationEntryCapability
+impl core::marker::UnsafeUnpin for agent_access_provider::LocationEntryCapability
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::LocationEntryCapability
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::LocationEntryCapability
+pub struct agent_access_provider::LocationNormalizationError
+impl agent_access_provider::LocationNormalizationError
+pub const fn agent_access_provider::LocationNormalizationError::field(&self) -> &'static str
+pub const fn agent_access_provider::LocationNormalizationError::message(&self) -> &'static str
+pub const fn agent_access_provider::LocationNormalizationError::new(&'static str, &'static str) -> Self
+impl core::clone::Clone for agent_access_provider::LocationNormalizationError
+pub fn agent_access_provider::LocationNormalizationError::clone(&self) -> agent_access_provider::LocationNormalizationError
+impl core::cmp::Eq for agent_access_provider::LocationNormalizationError
+impl core::cmp::PartialEq for agent_access_provider::LocationNormalizationError
+pub fn agent_access_provider::LocationNormalizationError::eq(&self, &agent_access_provider::LocationNormalizationError) -> bool
+impl core::error::Error for agent_access_provider::LocationNormalizationError
+impl core::fmt::Debug for agent_access_provider::LocationNormalizationError
+pub fn agent_access_provider::LocationNormalizationError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for agent_access_provider::LocationNormalizationError
+pub fn agent_access_provider::LocationNormalizationError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for agent_access_provider::LocationNormalizationError
+impl core::marker::StructuralPartialEq for agent_access_provider::LocationNormalizationError
+impl core::marker::Freeze for agent_access_provider::LocationNormalizationError
+impl core::marker::Send for agent_access_provider::LocationNormalizationError
+impl core::marker::Sync for agent_access_provider::LocationNormalizationError
+impl core::marker::Unpin for agent_access_provider::LocationNormalizationError
+impl core::marker::UnsafeUnpin for agent_access_provider::LocationNormalizationError
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::LocationNormalizationError
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::LocationNormalizationError
+pub struct agent_access_provider::LocationNormalizationRequest<'a>
+impl<'a> agent_access_provider::LocationNormalizationRequest<'a>
+pub fn agent_access_provider::LocationNormalizationRequest<'a>::coverage(&self) -> &'a str
+pub fn agent_access_provider::LocationNormalizationRequest<'a>::declared_site(&self) -> &'a str
+pub fn agent_access_provider::LocationNormalizationRequest<'a>::new(&'a str, &'a str, &'a str) -> Self
+pub fn agent_access_provider::LocationNormalizationRequest<'a>::url(&self) -> &'a str
+impl<'a> core::clone::Clone for agent_access_provider::LocationNormalizationRequest<'a>
+pub fn agent_access_provider::LocationNormalizationRequest<'a>::clone(&self) -> agent_access_provider::LocationNormalizationRequest<'a>
+impl<'a> core::fmt::Debug for agent_access_provider::LocationNormalizationRequest<'a>
+pub fn agent_access_provider::LocationNormalizationRequest<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a> core::marker::Copy for agent_access_provider::LocationNormalizationRequest<'a>
+impl<'a> core::marker::Freeze for agent_access_provider::LocationNormalizationRequest<'a>
+impl<'a> core::marker::Send for agent_access_provider::LocationNormalizationRequest<'a>
+impl<'a> core::marker::Sync for agent_access_provider::LocationNormalizationRequest<'a>
+impl<'a> core::marker::Unpin for agent_access_provider::LocationNormalizationRequest<'a>
+impl<'a> core::marker::UnsafeUnpin for agent_access_provider::LocationNormalizationRequest<'a>
+impl<'a> core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::LocationNormalizationRequest<'a>
+impl<'a> core::panic::unwind_safe::UnwindSafe for agent_access_provider::LocationNormalizationRequest<'a>
 pub struct agent_access_provider::MediaTypeDeclaration
 impl agent_access_provider::MediaTypeDeclaration
 pub fn agent_access_provider::MediaTypeDeclaration::from_headers(&http::header::map::HeaderMap) -> Self
@@ -3168,6 +3717,7 @@ impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::Multipar
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::MultipartUploadSpec
 pub struct agent_access_provider::MutationReceipt
 impl agent_access_provider::MutationReceipt
+pub const fn agent_access_provider::MutationReceipt::applied() -> Self
 pub fn agent_access_provider::MutationReceipt::applied_unverified(impl core::convert::Into<alloc::string::String>, serde_json::value::Value) -> Self
 pub const fn agent_access_provider::MutationReceipt::not_applied() -> Self
 pub fn agent_access_provider::MutationReceipt::retry_safe(&self) -> bool
@@ -3232,6 +3782,50 @@ impl core::marker::Unpin for agent_access_provider::NamespaceSelectorMetadata
 impl core::marker::UnsafeUnpin for agent_access_provider::NamespaceSelectorMetadata
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::NamespaceSelectorMetadata
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::NamespaceSelectorMetadata
+pub struct agent_access_provider::NonScalarResourceSelector
+impl core::clone::Clone for agent_access_provider::NonScalarResourceSelector
+pub fn agent_access_provider::NonScalarResourceSelector::clone(&self) -> agent_access_provider::NonScalarResourceSelector
+impl core::cmp::Eq for agent_access_provider::NonScalarResourceSelector
+impl core::cmp::PartialEq for agent_access_provider::NonScalarResourceSelector
+pub fn agent_access_provider::NonScalarResourceSelector::eq(&self, &agent_access_provider::NonScalarResourceSelector) -> bool
+impl core::error::Error for agent_access_provider::NonScalarResourceSelector
+impl core::fmt::Debug for agent_access_provider::NonScalarResourceSelector
+pub fn agent_access_provider::NonScalarResourceSelector::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for agent_access_provider::NonScalarResourceSelector
+pub fn agent_access_provider::NonScalarResourceSelector::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for agent_access_provider::NonScalarResourceSelector
+impl core::marker::StructuralPartialEq for agent_access_provider::NonScalarResourceSelector
+impl core::marker::Freeze for agent_access_provider::NonScalarResourceSelector
+impl core::marker::Send for agent_access_provider::NonScalarResourceSelector
+impl core::marker::Sync for agent_access_provider::NonScalarResourceSelector
+impl core::marker::Unpin for agent_access_provider::NonScalarResourceSelector
+impl core::marker::UnsafeUnpin for agent_access_provider::NonScalarResourceSelector
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::NonScalarResourceSelector
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::NonScalarResourceSelector
+#[non_exhaustive] pub struct agent_access_provider::NormalizedResourceLocation
+pub agent_access_provider::NormalizedResourceLocation::location_kind: alloc::string::String
+pub agent_access_provider::NormalizedResourceLocation::resource_type: agent_access_provider::ResourceType
+pub agent_access_provider::NormalizedResourceLocation::selector: agent_access_provider::ResourceSelector
+pub agent_access_provider::NormalizedResourceLocation::verification: &'static str
+impl agent_access_provider::NormalizedResourceLocation
+pub fn agent_access_provider::NormalizedResourceLocation::new(agent_access_provider::ResourceType, agent_access_provider::ResourceSelector, impl core::convert::Into<alloc::string::String>) -> Self
+impl core::clone::Clone for agent_access_provider::NormalizedResourceLocation
+pub fn agent_access_provider::NormalizedResourceLocation::clone(&self) -> agent_access_provider::NormalizedResourceLocation
+impl core::cmp::Eq for agent_access_provider::NormalizedResourceLocation
+impl core::cmp::PartialEq for agent_access_provider::NormalizedResourceLocation
+pub fn agent_access_provider::NormalizedResourceLocation::eq(&self, &agent_access_provider::NormalizedResourceLocation) -> bool
+impl core::fmt::Debug for agent_access_provider::NormalizedResourceLocation
+pub fn agent_access_provider::NormalizedResourceLocation::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for agent_access_provider::NormalizedResourceLocation
+impl serde_core::ser::Serialize for agent_access_provider::NormalizedResourceLocation
+pub fn agent_access_provider::NormalizedResourceLocation::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for agent_access_provider::NormalizedResourceLocation
+impl core::marker::Send for agent_access_provider::NormalizedResourceLocation
+impl core::marker::Sync for agent_access_provider::NormalizedResourceLocation
+impl core::marker::Unpin for agent_access_provider::NormalizedResourceLocation
+impl core::marker::UnsafeUnpin for agent_access_provider::NormalizedResourceLocation
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::NormalizedResourceLocation
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::NormalizedResourceLocation
 pub struct agent_access_provider::OAuthAdapter(_)
 impl agent_access_provider::OAuthAdapter
 pub fn agent_access_provider::OAuthAdapter::as_str(&self) -> &str
@@ -3568,6 +4162,8 @@ impl core::cmp::PartialEq for agent_access_provider::ProviderError
 pub fn agent_access_provider::ProviderError::eq(&self, &agent_access_provider::ProviderError) -> bool
 impl core::convert::From<agent_access_provider::AuthorityMismatch> for agent_access_provider::ProviderError
 pub fn agent_access_provider::ProviderError::from(agent_access_provider::AuthorityMismatch) -> Self
+impl core::convert::From<agent_access_provider::ContainmentError> for agent_access_provider::ProviderError
+pub fn agent_access_provider::ProviderError::from(agent_access_provider::ContainmentError) -> Self
 impl core::convert::From<agent_access_provider::ProviderStateError> for agent_access_provider::ProviderError
 pub fn agent_access_provider::ProviderError::from(agent_access_provider::ProviderStateError) -> Self
 impl core::convert::From<agent_access_provider::SearchProjectionError> for agent_access_provider::ProviderError
@@ -3615,6 +4211,8 @@ pub fn agent_access_provider::ProviderInvocation::admitted(&self) -> &agent_acce
 pub fn agent_access_provider::ProviderInvocation::authority(&self) -> &agent_access_provider::InvocationAuthority
 pub fn agent_access_provider::ProviderInvocation::body_parts(&self) -> &[agent_access_provider::BrokerBodyPart]
 pub fn agent_access_provider::ProviderInvocation::companion_reads_authorized(&self) -> bool
+pub fn agent_access_provider::ProviderInvocation::containment_authorization(&self) -> core::result::Result<&agent_access_provider::ContainmentAuthorization, agent_access_provider::AuthorityMismatch>
+pub fn agent_access_provider::ProviderInvocation::containment_collection_authorization(&self) -> core::result::Result<&agent_access_provider::ContainmentCollectionAuthorization, agent_access_provider::AuthorityMismatch>
 pub fn agent_access_provider::ProviderInvocation::context(&self) -> &agent_access_provider::AdmittedContext
 pub fn agent_access_provider::ProviderInvocation::correlation(&self) -> &agent_access_provider::CorrelationContext
 pub fn agent_access_provider::ProviderInvocation::credential_mode(&self) -> agent_access_provider::CredentialMode
@@ -3739,6 +4337,7 @@ impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ProviderRea
 #[non_exhaustive] pub struct agent_access_provider::ProviderResult
 pub agent_access_provider::ProviderResult::audit: core::option::Option<serde_json::value::Value>
 pub agent_access_provider::ProviderResult::object_ids: core::option::Option<serde_json::value::Value>
+pub agent_access_provider::ProviderResult::presentation_recovery_receipt: core::option::Option<agent_access_provider::MutationReceipt>
 pub agent_access_provider::ProviderResult::result: serde_json::value::Value
 pub agent_access_provider::ProviderResult::stream: core::option::Option<agent_access_provider::ProviderResultStream>
 pub agent_access_provider::ProviderResult::upstream_duration_ms: core::option::Option<u64>
@@ -3747,6 +4346,7 @@ impl agent_access_provider::ProviderResult
 pub fn agent_access_provider::ProviderResult::new(serde_json::value::Value) -> Self
 pub fn agent_access_provider::ProviderResult::with_audit(self, serde_json::value::Value) -> Self
 pub fn agent_access_provider::ProviderResult::with_object_ids(self, serde_json::value::Value) -> Self
+pub fn agent_access_provider::ProviderResult::with_presentation_recovery_receipt(self, agent_access_provider::MutationReceipt) -> Self
 pub fn agent_access_provider::ProviderResult::with_stream(self, agent_access_provider::ProviderResultStream) -> Self
 pub fn agent_access_provider::ProviderResult::with_upstream(self, core::option::Option<u16>, core::option::Option<u64>) -> Self
 impl core::clone::Clone for agent_access_provider::ProviderResult
@@ -3964,6 +4564,36 @@ impl core::marker::Unpin for agent_access_provider::ResourceAttributes
 impl core::marker::UnsafeUnpin for agent_access_provider::ResourceAttributes
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ResourceAttributes
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ResourceAttributes
+#[non_exhaustive] pub struct agent_access_provider::ResourceContainer
+pub agent_access_provider::ResourceContainer::resource_type: agent_access_provider::ResourceType
+pub agent_access_provider::ResourceContainer::value: alloc::string::String
+impl agent_access_provider::ResourceContainer
+pub fn agent_access_provider::ResourceContainer::new(agent_access_provider::ResourceType, impl core::convert::Into<alloc::string::String>) -> Self
+impl core::clone::Clone for agent_access_provider::ResourceContainer
+pub fn agent_access_provider::ResourceContainer::clone(&self) -> agent_access_provider::ResourceContainer
+impl core::cmp::Eq for agent_access_provider::ResourceContainer
+impl core::cmp::Ord for agent_access_provider::ResourceContainer
+pub fn agent_access_provider::ResourceContainer::cmp(&self, &agent_access_provider::ResourceContainer) -> core::cmp::Ordering
+impl core::cmp::PartialEq for agent_access_provider::ResourceContainer
+pub fn agent_access_provider::ResourceContainer::eq(&self, &agent_access_provider::ResourceContainer) -> bool
+impl core::cmp::PartialOrd for agent_access_provider::ResourceContainer
+pub fn agent_access_provider::ResourceContainer::partial_cmp(&self, &agent_access_provider::ResourceContainer) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for agent_access_provider::ResourceContainer
+pub fn agent_access_provider::ResourceContainer::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for agent_access_provider::ResourceContainer
+pub fn agent_access_provider::ResourceContainer::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::StructuralPartialEq for agent_access_provider::ResourceContainer
+impl serde_core::ser::Serialize for agent_access_provider::ResourceContainer
+pub fn agent_access_provider::ResourceContainer::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for agent_access_provider::ResourceContainer
+pub fn agent_access_provider::ResourceContainer::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for agent_access_provider::ResourceContainer
+impl core::marker::Send for agent_access_provider::ResourceContainer
+impl core::marker::Sync for agent_access_provider::ResourceContainer
+impl core::marker::Unpin for agent_access_provider::ResourceContainer
+impl core::marker::UnsafeUnpin for agent_access_provider::ResourceContainer
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ResourceContainer
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ResourceContainer
 pub struct agent_access_provider::ResourcePattern
 impl agent_access_provider::ResourcePattern
 pub fn agent_access_provider::ResourcePattern::is_match(&self, &str) -> bool
@@ -3984,29 +4614,34 @@ impl core::marker::Unpin for agent_access_provider::ResourcePattern
 impl core::marker::UnsafeUnpin for agent_access_provider::ResourcePattern
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ResourcePattern
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ResourcePattern
-#[non_exhaustive] pub struct agent_access_provider::ResourceScopeCapabilities
-pub agent_access_provider::ResourceScopeCapabilities::resource_type: agent_access_provider::ResourceType
-pub agent_access_provider::ResourceScopeCapabilities::selectors: alloc::vec::Vec<alloc::string::String>
-impl agent_access_provider::ResourceScopeCapabilities
-pub fn agent_access_provider::ResourceScopeCapabilities::new(agent_access_provider::ResourceType, alloc::vec::Vec<alloc::string::String>) -> Self
-impl core::clone::Clone for agent_access_provider::ResourceScopeCapabilities
-pub fn agent_access_provider::ResourceScopeCapabilities::clone(&self) -> agent_access_provider::ResourceScopeCapabilities
-impl core::cmp::PartialEq for agent_access_provider::ResourceScopeCapabilities
-pub fn agent_access_provider::ResourceScopeCapabilities::eq(&self, &agent_access_provider::ResourceScopeCapabilities) -> bool
-impl core::fmt::Debug for agent_access_provider::ResourceScopeCapabilities
-pub fn agent_access_provider::ResourceScopeCapabilities::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::StructuralPartialEq for agent_access_provider::ResourceScopeCapabilities
-impl serde_core::ser::Serialize for agent_access_provider::ResourceScopeCapabilities
-pub fn agent_access_provider::ResourceScopeCapabilities::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
-impl<'de> serde_core::de::Deserialize<'de> for agent_access_provider::ResourceScopeCapabilities
-pub fn agent_access_provider::ResourceScopeCapabilities::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
-impl core::marker::Freeze for agent_access_provider::ResourceScopeCapabilities
-impl core::marker::Send for agent_access_provider::ResourceScopeCapabilities
-impl core::marker::Sync for agent_access_provider::ResourceScopeCapabilities
-impl core::marker::Unpin for agent_access_provider::ResourceScopeCapabilities
-impl core::marker::UnsafeUnpin for agent_access_provider::ResourceScopeCapabilities
-impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ResourceScopeCapabilities
-impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ResourceScopeCapabilities
+#[non_exhaustive] pub struct agent_access_provider::ResourceSelectorProjection
+pub agent_access_provider::ResourceSelectorProjection::root_kind: alloc::string::String
+pub agent_access_provider::ResourceSelectorProjection::site_origin: alloc::string::String
+impl agent_access_provider::ResourceSelectorProjection
+pub fn agent_access_provider::ResourceSelectorProjection::new(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
+impl core::clone::Clone for agent_access_provider::ResourceSelectorProjection
+pub fn agent_access_provider::ResourceSelectorProjection::clone(&self) -> agent_access_provider::ResourceSelectorProjection
+impl core::cmp::Eq for agent_access_provider::ResourceSelectorProjection
+impl core::cmp::Ord for agent_access_provider::ResourceSelectorProjection
+pub fn agent_access_provider::ResourceSelectorProjection::cmp(&self, &agent_access_provider::ResourceSelectorProjection) -> core::cmp::Ordering
+impl core::cmp::PartialEq for agent_access_provider::ResourceSelectorProjection
+pub fn agent_access_provider::ResourceSelectorProjection::eq(&self, &agent_access_provider::ResourceSelectorProjection) -> bool
+impl core::cmp::PartialOrd for agent_access_provider::ResourceSelectorProjection
+pub fn agent_access_provider::ResourceSelectorProjection::partial_cmp(&self, &agent_access_provider::ResourceSelectorProjection) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for agent_access_provider::ResourceSelectorProjection
+pub fn agent_access_provider::ResourceSelectorProjection::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for agent_access_provider::ResourceSelectorProjection
+pub fn agent_access_provider::ResourceSelectorProjection::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::StructuralPartialEq for agent_access_provider::ResourceSelectorProjection
+impl serde_core::ser::Serialize for agent_access_provider::ResourceSelectorProjection
+pub fn agent_access_provider::ResourceSelectorProjection::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for agent_access_provider::ResourceSelectorProjection
+impl core::marker::Send for agent_access_provider::ResourceSelectorProjection
+impl core::marker::Sync for agent_access_provider::ResourceSelectorProjection
+impl core::marker::Unpin for agent_access_provider::ResourceSelectorProjection
+impl core::marker::UnsafeUnpin for agent_access_provider::ResourceSelectorProjection
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ResourceSelectorProjection
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ResourceSelectorProjection
 pub struct agent_access_provider::ResourceType(_)
 impl agent_access_provider::ResourceType
 pub fn agent_access_provider::ResourceType::as_str(&self) -> &str
@@ -4046,6 +4681,7 @@ pub fn agent_access_provider::ResourceTypeDescriptor::action_inputs(&self, &agen
 pub const fn agent_access_provider::ResourceTypeDescriptor::attributes(&self) -> &[agent_access_provider::ResourceAttributeDescriptor]
 pub fn agent_access_provider::ResourceTypeDescriptor::declared(agent_access_provider::ResourceType, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, agent_access_provider::ResourcePattern, alloc::vec::Vec<agent_access_provider::ResourceAttributeDescriptor>) -> Self
 pub const fn agent_access_provider::ResourceTypeDescriptor::example(&self) -> &str
+pub const fn agent_access_provider::ResourceTypeDescriptor::has_location_normalizer(&self) -> bool
 pub const fn agent_access_provider::ResourceTypeDescriptor::id(&self) -> &agent_access_provider::ResourceType
 pub fn agent_access_provider::ResourceTypeDescriptor::is_canonical_target(&self, &str) -> bool
 pub const fn agent_access_provider::ResourceTypeDescriptor::label(&self) -> &str
@@ -4054,11 +4690,20 @@ pub const fn agent_access_provider::ResourceTypeDescriptor::namespace(&self) -> 
 pub const fn agent_access_provider::ResourceTypeDescriptor::new(agent_access_provider::ResourceType, &'static str, &'static str, &'static str, fn(&str) -> bool, &'static [agent_access_provider::ResourceAttributeDescriptor]) -> Self
 pub fn agent_access_provider::ResourceTypeDescriptor::pattern(&self) -> core::option::Option<&agent_access_provider::ResourcePattern>
 pub const fn agent_access_provider::ResourceTypeDescriptor::plural_label(&self) -> &str
+pub fn agent_access_provider::ResourceTypeDescriptor::project_selector(&self, &agent_access_provider::ResourceSelector) -> core::result::Result<core::option::Option<agent_access_provider::ResourceSelectorProjection>, agent_access_provider::LocationNormalizationError>
+pub fn agent_access_provider::ResourceTypeDescriptor::project_target(&self, &str) -> core::result::Result<core::option::Option<agent_access_provider::ResourceSelectorProjection>, agent_access_provider::LocationNormalizationError>
 pub fn agent_access_provider::ResourceTypeDescriptor::selector_kinds(&self) -> alloc::vec::Vec<&'static str>
+pub const fn agent_access_provider::ResourceTypeDescriptor::subtree(&self) -> core::option::Option<&agent_access_provider::SubtreeSelectorDescriptor>
+pub const fn agent_access_provider::ResourceTypeDescriptor::supports_all(&self) -> bool
 pub const fn agent_access_provider::ResourceTypeDescriptor::supports_exclusions(&self) -> bool
 pub fn agent_access_provider::ResourceTypeDescriptor::validate_attributes(&self, &agent_access_provider::ResourceSelector, &agent_access_provider::ResourceAttributes, bool) -> core::result::Result<(), alloc::string::String>
 pub const fn agent_access_provider::ResourceTypeDescriptor::with_action_inputs(self, agent_access_provider::ResourceActionInputs) -> Self
+pub const fn agent_access_provider::ResourceTypeDescriptor::with_exact_validator(self, fn(&str) -> bool) -> Self
+pub const fn agent_access_provider::ResourceTypeDescriptor::with_location_normalizer(self, agent_access_provider::LocationNormalizer) -> Self
 pub const fn agent_access_provider::ResourceTypeDescriptor::with_namespace(self, agent_access_provider::NamespaceSelectorDescriptor) -> Self
+pub const fn agent_access_provider::ResourceTypeDescriptor::with_selector_projection(self, agent_access_provider::ResourceSelectorProjector) -> Self
+pub const fn agent_access_provider::ResourceTypeDescriptor::with_subtree(self, agent_access_provider::SubtreeSelectorDescriptor) -> Self
+pub const fn agent_access_provider::ResourceTypeDescriptor::with_supports_all(self, bool) -> Self
 pub const fn agent_access_provider::ResourceTypeDescriptor::with_supports_exclusions(self, bool) -> Self
 impl core::clone::Clone for agent_access_provider::ResourceTypeDescriptor
 pub fn agent_access_provider::ResourceTypeDescriptor::clone(&self) -> agent_access_provider::ResourceTypeDescriptor
@@ -4081,6 +4726,7 @@ pub agent_access_provider::ResourceTypeMetadata::namespace: core::option::Option
 pub agent_access_provider::ResourceTypeMetadata::plural_label: alloc::string::String
 pub agent_access_provider::ResourceTypeMetadata::removed: bool
 pub agent_access_provider::ResourceTypeMetadata::selectors: alloc::vec::Vec<alloc::string::String>
+pub agent_access_provider::ResourceTypeMetadata::subtree: core::option::Option<agent_access_provider::SubtreeSelectorMetadata>
 pub agent_access_provider::ResourceTypeMetadata::supports_exclusions: bool
 impl core::clone::Clone for agent_access_provider::ResourceTypeMetadata
 pub fn agent_access_provider::ResourceTypeMetadata::clone(&self) -> agent_access_provider::ResourceTypeMetadata
@@ -4110,6 +4756,10 @@ pub fn agent_access_provider::ResourceTypeRegistry::ids(&self) -> impl core::ite
 pub fn agent_access_provider::ResourceTypeRegistry::metadata(&self) -> alloc::vec::Vec<agent_access_provider::ResourceTypeMetadata>
 pub fn agent_access_provider::ResourceTypeRegistry::new(impl core::iter::traits::collect::IntoIterator<Item = &'static agent_access_provider::ResourceTypeDescriptor>) -> core::result::Result<Self, alloc::vec::Vec<alloc::string::String>>
 pub fn agent_access_provider::ResourceTypeRegistry::validate_selector(&self, &str, &agent_access_provider::ResourceType, &agent_access_provider::ResourceSelector) -> core::result::Result<(), alloc::string::String>
+impl agent_access_provider::ResourceTypeRegistry
+pub fn agent_access_provider::ResourceTypeRegistry::normalize_location(&self, &agent_access_provider::ResourceType, &agent_access_provider::LocationNormalizationRequest<'_>) -> core::result::Result<agent_access_provider::NormalizedResourceLocation, agent_access_provider::LocationNormalizationError>
+impl agent_access_provider::ResourceTypeRegistry
+pub fn agent_access_provider::ResourceTypeRegistry::typed_selector(&self, &agent_access_provider::ResourceType, &agent_access_provider::ResourceSelector) -> core::result::Result<agent_access_provider::TypedResourceSelector, agent_access_provider::ContainmentError>
 impl core::clone::Clone for agent_access_provider::ResourceTypeRegistry
 pub fn agent_access_provider::ResourceTypeRegistry::clone(&self) -> agent_access_provider::ResourceTypeRegistry
 impl core::fmt::Debug for agent_access_provider::ResourceTypeRegistry
@@ -4138,16 +4788,19 @@ impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ResultSchem
 pub struct agent_access_provider::ScopeRequest<'a>
 impl<'a> agent_access_provider::ScopeRequest<'a>
 pub fn agent_access_provider::ScopeRequest<'a>::action(&self) -> &'a str
+pub fn agent_access_provider::ScopeRequest<'a>::containment_evidence_level(&self) -> agent_access_provider::ContainmentEvidenceLevel
+pub fn agent_access_provider::ScopeRequest<'a>::containment_roots(&self) -> &'a [agent_access_provider::TypedResourceSelector]
 pub fn agent_access_provider::ScopeRequest<'a>::correlation(&self) -> &'a agent_access_provider::CorrelationContext
 pub fn agent_access_provider::ScopeRequest<'a>::execution_context(&self) -> &'a str
 pub fn agent_access_provider::ScopeRequest<'a>::identity(&self) -> &'a agent_access_provider::InvocationIdentity
 pub fn agent_access_provider::ScopeRequest<'a>::inputs(&self) -> &'a serde_json::value::Value
+pub fn agent_access_provider::ScopeRequest<'a>::locator_state(&self) -> core::option::Option<&'a agent_access_provider::ProviderState>
 pub fn agent_access_provider::ScopeRequest<'a>::lookup_access(&self) -> core::option::Option<&'a agent_access_provider::LookupAccess>
 pub fn agent_access_provider::ScopeRequest<'a>::service(&self) -> &'a str
+impl core::fmt::Debug for agent_access_provider::ScopeRequest<'_>
+pub fn agent_access_provider::ScopeRequest<'_>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl<'a> core::clone::Clone for agent_access_provider::ScopeRequest<'a>
 pub fn agent_access_provider::ScopeRequest<'a>::clone(&self) -> agent_access_provider::ScopeRequest<'a>
-impl<'a> core::fmt::Debug for agent_access_provider::ScopeRequest<'a>
-pub fn agent_access_provider::ScopeRequest<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl<'a> core::marker::Copy for agent_access_provider::ScopeRequest<'a>
 impl<'a> core::marker::Freeze for agent_access_provider::ScopeRequest<'a>
 impl<'a> core::marker::Send for agent_access_provider::ScopeRequest<'a>
@@ -4158,11 +4811,13 @@ impl<'a> !core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::Sco
 impl<'a> !core::panic::unwind_safe::UnwindSafe for agent_access_provider::ScopeRequest<'a>
 pub struct agent_access_provider::ScopeResolution
 impl agent_access_provider::ScopeResolution
-pub fn agent_access_provider::ScopeResolution::into_parts(self) -> (agent_access_provider::ResourceScopes, core::option::Option<agent_access_provider::ProviderState>)
-pub fn agent_access_provider::ScopeResolution::into_scopes(self) -> agent_access_provider::ResourceScopes
+pub fn agent_access_provider::ScopeResolution::containment(agent_access_provider::ContainmentEvidence) -> Self
+pub fn agent_access_provider::ScopeResolution::evidence(&self) -> &agent_access_provider::ScopeEvidence
+pub fn agent_access_provider::ScopeResolution::into_parts(self) -> (agent_access_provider::ScopeEvidence, core::option::Option<agent_access_provider::ProviderState>)
+pub fn agent_access_provider::ScopeResolution::into_scopes(self) -> core::result::Result<agent_access_provider::ResourceScopes, agent_access_provider::ContainmentError>
 pub fn agent_access_provider::ScopeResolution::no_resources() -> Self
 pub fn agent_access_provider::ScopeResolution::resources(agent_access_provider::ResourceScopes) -> Self
-pub fn agent_access_provider::ScopeResolution::scopes(&self) -> &agent_access_provider::ResourceScopes
+pub fn agent_access_provider::ScopeResolution::scopes(&self) -> core::result::Result<&agent_access_provider::ResourceScopes, agent_access_provider::ContainmentError>
 pub fn agent_access_provider::ScopeResolution::state(&self) -> core::option::Option<&agent_access_provider::ProviderState>
 pub fn agent_access_provider::ScopeResolution::with_state(self, agent_access_provider::ProviderState) -> Self
 impl core::clone::Clone for agent_access_provider::ScopeResolution
@@ -4209,12 +4864,12 @@ impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::SearchAu
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::SearchAuthorization
 pub struct agent_access_provider::SearchAuthorizationClause
 impl agent_access_provider::SearchAuthorizationClause
-pub fn agent_access_provider::SearchAuthorizationClause::excluded(&self) -> &[agent_access_provider::ResourceSelector]
-pub fn agent_access_provider::SearchAuthorizationClause::included(&self) -> &[agent_access_provider::ResourceSelector]
+pub fn agent_access_provider::SearchAuthorizationClause::excluded(&self) -> &[agent_access_provider::ScalarResourceSelector]
+pub fn agent_access_provider::SearchAuthorizationClause::included(&self) -> &[agent_access_provider::ScalarResourceSelector]
 pub fn agent_access_provider::SearchAuthorizationClause::intersection(&self, &Self) -> Self
 pub fn agent_access_provider::SearchAuthorizationClause::is_empty(&self) -> bool
 pub fn agent_access_provider::SearchAuthorizationClause::matches(&self, &str) -> bool
-pub fn agent_access_provider::SearchAuthorizationClause::new(alloc::vec::Vec<agent_access_provider::ResourceSelector>, alloc::vec::Vec<agent_access_provider::ResourceSelector>) -> Self
+pub fn agent_access_provider::SearchAuthorizationClause::new(alloc::vec::Vec<agent_access_provider::ScalarResourceSelector>, alloc::vec::Vec<agent_access_provider::ScalarResourceSelector>) -> Self
 pub fn agent_access_provider::SearchAuthorizationClause::subtract(&self, &Self) -> alloc::vec::Vec<Self>
 impl core::clone::Clone for agent_access_provider::SearchAuthorizationClause
 pub fn agent_access_provider::SearchAuthorizationClause::clone(&self) -> agent_access_provider::SearchAuthorizationClause
@@ -4242,12 +4897,12 @@ impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::SearchAutho
 pub struct agent_access_provider::SearchAuthorizationScope
 impl agent_access_provider::SearchAuthorizationScope
 pub fn agent_access_provider::SearchAuthorizationScope::clauses(&self) -> &[agent_access_provider::SearchAuthorizationClause]
-pub fn agent_access_provider::SearchAuthorizationScope::covers(&self, &agent_access_provider::ResourceSelector) -> bool
+pub fn agent_access_provider::SearchAuthorizationScope::covers(&self, &agent_access_provider::ScalarResourceSelector) -> bool
 pub fn agent_access_provider::SearchAuthorizationScope::empty() -> Self
 pub fn agent_access_provider::SearchAuthorizationScope::exact_projection(&self) -> core::result::Result<agent_access_provider::ExactSearchProjection, agent_access_provider::SearchProjectionError>
 pub fn agent_access_provider::SearchAuthorizationScope::excluding_exact_values(alloc::vec::Vec<alloc::string::String>) -> Self
 pub fn agent_access_provider::SearchAuthorizationScope::from_exact_values(alloc::vec::Vec<alloc::string::String>) -> Self
-pub fn agent_access_provider::SearchAuthorizationScope::from_selectors(alloc::vec::Vec<agent_access_provider::ResourceSelector>, alloc::vec::Vec<agent_access_provider::ResourceSelector>) -> Self
+pub fn agent_access_provider::SearchAuthorizationScope::from_selectors(alloc::vec::Vec<agent_access_provider::ScalarResourceSelector>, alloc::vec::Vec<agent_access_provider::ScalarResourceSelector>) -> Self
 pub fn agent_access_provider::SearchAuthorizationScope::intersection(&self, &Self) -> Self
 pub fn agent_access_provider::SearchAuthorizationScope::is_empty(&self) -> bool
 pub fn agent_access_provider::SearchAuthorizationScope::is_universe(&self) -> bool
@@ -4374,6 +5029,8 @@ impl<'a> core::panic::unwind_safe::UnwindSafe for agent_access_provider::Service
 pub agent_access_provider::ServiceDescriptor::actions: alloc::vec::Vec<agent_access_provider::ActionDescriptor>
 pub agent_access_provider::ServiceDescriptor::credentials: agent_access_provider::CredentialDescriptor
 pub agent_access_provider::ServiceDescriptor::display_name: alloc::string::String
+pub agent_access_provider::ServiceDescriptor::location_entry: core::option::Option<agent_access_provider::LocationEntryCapability>
+pub agent_access_provider::ServiceDescriptor::preferred_output_content_format: core::option::Option<agent_access_provider::presentation::OutputContentFormat>
 pub agent_access_provider::ServiceDescriptor::presentation_body_limit: core::option::Option<u64>
 pub agent_access_provider::ServiceDescriptor::resource_scopes: alloc::collections::btree::map::BTreeMap<alloc::string::String, agent_access_provider::ResourceScopeCapabilities>
 pub agent_access_provider::ServiceDescriptor::service: alloc::string::String
@@ -4394,6 +5051,8 @@ pub fn agent_access_provider::ServiceDescriptor::validate(&self) -> core::result
 pub fn agent_access_provider::ServiceDescriptor::validate_builtin_mcp_names(&self) -> core::result::Result<(), alloc::vec::Vec<alloc::string::String>>
 pub fn agent_access_provider::ServiceDescriptor::with_actions(self, alloc::vec::Vec<agent_access_provider::ActionDescriptor>) -> Self
 pub fn agent_access_provider::ServiceDescriptor::with_credentials(self, agent_access_provider::CredentialDescriptor) -> Self
+pub fn agent_access_provider::ServiceDescriptor::with_location_entry(self, agent_access_provider::LocationEntryCapability) -> Self
+pub fn agent_access_provider::ServiceDescriptor::with_preferred_output_content_format(self, agent_access_provider::presentation::OutputContentFormat) -> Self
 pub fn agent_access_provider::ServiceDescriptor::with_presentation_body_limit(self, u64) -> Self
 pub fn agent_access_provider::ServiceDescriptor::with_resource_scopes(self, alloc::collections::btree::map::BTreeMap<alloc::string::String, agent_access_provider::ResourceScopeCapabilities>) -> Self
 pub fn agent_access_provider::ServiceDescriptor::with_surface(self, agent_access_provider::ServiceSurface) -> Self
@@ -4465,6 +5124,47 @@ impl core::marker::Unpin for agent_access_provider::SigningError
 impl core::marker::UnsafeUnpin for agent_access_provider::SigningError
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::SigningError
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::SigningError
+#[non_exhaustive] pub struct agent_access_provider::SubtreeSelectorDescriptor
+impl agent_access_provider::SubtreeSelectorDescriptor
+pub const fn agent_access_provider::SubtreeSelectorDescriptor::example(&self) -> &'static str
+pub fn agent_access_provider::SubtreeSelectorDescriptor::is_valid(&self, &str) -> bool
+pub const fn agent_access_provider::SubtreeSelectorDescriptor::label(&self) -> &'static str
+pub const fn agent_access_provider::SubtreeSelectorDescriptor::members_label(&self) -> &'static str
+pub const fn agent_access_provider::SubtreeSelectorDescriptor::new(fn(&str) -> bool, &'static str, &'static str, &'static str) -> Self
+impl core::clone::Clone for agent_access_provider::SubtreeSelectorDescriptor
+pub fn agent_access_provider::SubtreeSelectorDescriptor::clone(&self) -> agent_access_provider::SubtreeSelectorDescriptor
+impl core::fmt::Debug for agent_access_provider::SubtreeSelectorDescriptor
+pub fn agent_access_provider::SubtreeSelectorDescriptor::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for agent_access_provider::SubtreeSelectorDescriptor
+impl core::marker::Send for agent_access_provider::SubtreeSelectorDescriptor
+impl core::marker::Sync for agent_access_provider::SubtreeSelectorDescriptor
+impl core::marker::Unpin for agent_access_provider::SubtreeSelectorDescriptor
+impl core::marker::UnsafeUnpin for agent_access_provider::SubtreeSelectorDescriptor
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::SubtreeSelectorDescriptor
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::SubtreeSelectorDescriptor
+#[non_exhaustive] pub struct agent_access_provider::SubtreeSelectorMetadata
+pub agent_access_provider::SubtreeSelectorMetadata::example: alloc::string::String
+pub agent_access_provider::SubtreeSelectorMetadata::label: alloc::string::String
+pub agent_access_provider::SubtreeSelectorMetadata::members_label: alloc::string::String
+impl core::clone::Clone for agent_access_provider::SubtreeSelectorMetadata
+pub fn agent_access_provider::SubtreeSelectorMetadata::clone(&self) -> agent_access_provider::SubtreeSelectorMetadata
+impl core::cmp::Eq for agent_access_provider::SubtreeSelectorMetadata
+impl core::cmp::PartialEq for agent_access_provider::SubtreeSelectorMetadata
+pub fn agent_access_provider::SubtreeSelectorMetadata::eq(&self, &agent_access_provider::SubtreeSelectorMetadata) -> bool
+impl core::fmt::Debug for agent_access_provider::SubtreeSelectorMetadata
+pub fn agent_access_provider::SubtreeSelectorMetadata::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for agent_access_provider::SubtreeSelectorMetadata
+impl serde_core::ser::Serialize for agent_access_provider::SubtreeSelectorMetadata
+pub fn agent_access_provider::SubtreeSelectorMetadata::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for agent_access_provider::SubtreeSelectorMetadata
+pub fn agent_access_provider::SubtreeSelectorMetadata::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for agent_access_provider::SubtreeSelectorMetadata
+impl core::marker::Send for agent_access_provider::SubtreeSelectorMetadata
+impl core::marker::Sync for agent_access_provider::SubtreeSelectorMetadata
+impl core::marker::Unpin for agent_access_provider::SubtreeSelectorMetadata
+impl core::marker::UnsafeUnpin for agent_access_provider::SubtreeSelectorMetadata
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::SubtreeSelectorMetadata
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::SubtreeSelectorMetadata
 #[non_exhaustive] pub struct agent_access_provider::TokenGrant
 pub agent_access_provider::TokenGrant::access_token: alloc::string::String
 pub agent_access_provider::TokenGrant::expires_in: u64
@@ -4498,6 +5198,34 @@ impl<'a> core::marker::Unpin for agent_access_provider::TokenRevocation<'a>
 impl<'a> core::marker::UnsafeUnpin for agent_access_provider::TokenRevocation<'a>
 impl<'a> core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::TokenRevocation<'a>
 impl<'a> core::panic::unwind_safe::UnwindSafe for agent_access_provider::TokenRevocation<'a>
+pub struct agent_access_provider::TypedResourceSelector
+impl agent_access_provider::TypedResourceSelector
+pub fn agent_access_provider::TypedResourceSelector::projection(&self) -> core::option::Option<&agent_access_provider::ResourceSelectorProjection>
+pub fn agent_access_provider::TypedResourceSelector::resource_type(&self) -> &agent_access_provider::ResourceType
+pub fn agent_access_provider::TypedResourceSelector::selector(&self) -> &agent_access_provider::ResourceSelector
+impl core::clone::Clone for agent_access_provider::TypedResourceSelector
+pub fn agent_access_provider::TypedResourceSelector::clone(&self) -> agent_access_provider::TypedResourceSelector
+impl core::cmp::Eq for agent_access_provider::TypedResourceSelector
+impl core::cmp::Ord for agent_access_provider::TypedResourceSelector
+pub fn agent_access_provider::TypedResourceSelector::cmp(&self, &agent_access_provider::TypedResourceSelector) -> core::cmp::Ordering
+impl core::cmp::PartialEq for agent_access_provider::TypedResourceSelector
+pub fn agent_access_provider::TypedResourceSelector::eq(&self, &agent_access_provider::TypedResourceSelector) -> bool
+impl core::cmp::PartialOrd for agent_access_provider::TypedResourceSelector
+pub fn agent_access_provider::TypedResourceSelector::partial_cmp(&self, &agent_access_provider::TypedResourceSelector) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for agent_access_provider::TypedResourceSelector
+pub fn agent_access_provider::TypedResourceSelector::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for agent_access_provider::TypedResourceSelector
+pub fn agent_access_provider::TypedResourceSelector::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::StructuralPartialEq for agent_access_provider::TypedResourceSelector
+impl serde_core::ser::Serialize for agent_access_provider::TypedResourceSelector
+pub fn agent_access_provider::TypedResourceSelector::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for agent_access_provider::TypedResourceSelector
+impl core::marker::Send for agent_access_provider::TypedResourceSelector
+impl core::marker::Sync for agent_access_provider::TypedResourceSelector
+impl core::marker::Unpin for agent_access_provider::TypedResourceSelector
+impl core::marker::UnsafeUnpin for agent_access_provider::TypedResourceSelector
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::TypedResourceSelector
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::TypedResourceSelector
 pub struct agent_access_provider::UnsupportedCredentialMode
 impl core::clone::Clone for agent_access_provider::UnsupportedCredentialMode
 pub fn agent_access_provider::UnsupportedCredentialMode::clone(&self) -> agent_access_provider::UnsupportedCredentialMode
@@ -4780,6 +5508,7 @@ pub fn agent_access_provider::Provider::authorize_body_parts<'life0, 'life1, 'li
 pub fn agent_access_provider::Provider::invoke<'life0, 'async_trait>(&'life0 self, agent_access_provider::ProviderInvocation) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agent_access_provider::ProviderResult, agent_access_provider::ProviderError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub fn agent_access_provider::Provider::resolve_scopes<'life0, 'life1, 'async_trait>(&'life0 self, agent_access_provider::ScopeRequest<'life1>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agent_access_provider::ScopeResolution, agent_access_provider::ProviderError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn agent_access_provider::Provider::resource_roots(&self, &agent_access_provider::ResourceType) -> alloc::vec::Vec<alloc::string::String>
+pub fn agent_access_provider::Provider::validate_scope_locator(&self, agent_access_provider::LocalScopeRequest<'_>) -> core::result::Result<core::option::Option<agent_access_provider::ProviderState>, agent_access_provider::ProviderError>
 pub fn agent_access_provider::Provider::verify_execution_credential<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 agent_access_provider::ExecutionCredential, &'life2 agent_access_provider::CorrelationContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<core::option::Option<agent_access_provider::ProviderCredentialVerification>, agent_access_provider::ProviderError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub trait agent_access_provider::RedirectAuthorizer: core::marker::Send + core::marker::Sync
 pub fn agent_access_provider::RedirectAuthorizer::authorize<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 url::Url) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agent_access_provider::UpstreamAuthorization, agent_access_provider::ProviderError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
@@ -4846,9 +5575,11 @@ pub type agent_access_provider::BackendConfigParser = fn(toml::de::deserializer:
 pub type agent_access_provider::GatewayBodyStream = core::pin::Pin<alloc::boxed::Box<(dyn futures_core::stream::Stream<Item = core::result::Result<agent_access_provider::GatewayBodyFrame, agent_access_provider::GatewayBodyError>> + core::marker::Send)>>
 pub type agent_access_provider::GatewayConfigParser = fn(toml::value::Value) -> core::result::Result<alloc::sync::Arc<dyn agent_access_provider::GatewayConfig>, alloc::string::String>
 pub type agent_access_provider::GatewayManagedPlanBuilder = fn(&agent_access_provider::GatewayServiceContext, &agent_access_provider::GatewayManagedInput) -> core::result::Result<alloc::sync::Arc<dyn agent_access_provider::GatewayProtocol>, agent_access_provider::ProviderBuildError>
+pub type agent_access_provider::LocationNormalizer = for<'a> fn(&agent_access_provider::LocationNormalizationRequest<'a>) -> core::result::Result<agent_access_provider::NormalizedResourceLocation, agent_access_provider::LocationNormalizationError>
 pub type agent_access_provider::ProviderByteStream = core::pin::Pin<alloc::boxed::Box<(dyn futures_core::stream::Stream<Item = core::result::Result<bytes::bytes::Bytes, agent_access_provider::ProviderStreamError>> + core::marker::Send + 'static)>>
 pub type agent_access_provider::ResourceActionInputs = fn(&agent_access_provider::ResourceSelector) -> core::option::Option<serde_json::map::Map<alloc::string::String, serde_json::value::Value>>
 pub type agent_access_provider::ResourceScopes = alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::vec::Vec<alloc::string::String>>
+pub type agent_access_provider::ResourceSelectorProjector = fn(&agent_access_provider::ResourceSelector) -> core::result::Result<agent_access_provider::ResourceSelectorProjection, agent_access_provider::LocationNormalizationError>
 pub type agent_access_provider::UploadProgress = tokio::sync::watch::Receiver<tokio::time::instant::Instant>
 
 // Exposed through supported signatures: agent-access-provider (features: none)
@@ -4866,6 +5597,11 @@ enum agent_access_provider::AttributionVerb: non-exhaustive
 enum agent_access_provider::AuthorityMismatch: non-exhaustive
 enum agent_access_provider::BodyReadError: non-exhaustive
 enum agent_access_provider::ClientProfile: non-exhaustive
+enum agent_access_provider::ContainmentEffect: non-exhaustive
+enum agent_access_provider::ContainmentError: non-exhaustive
+enum agent_access_provider::ContainmentEvidenceLevel: non-exhaustive
+enum agent_access_provider::ContainmentObligation: non-exhaustive
+enum agent_access_provider::ContainmentProvenance: non-exhaustive
 enum agent_access_provider::ContinuationError: non-exhaustive
 enum agent_access_provider::ContinuationLifetime: non-exhaustive
 enum agent_access_provider::ContinuationOwner: non-exhaustive
@@ -4899,13 +5635,17 @@ enum agent_access_provider::OAuthRotation: non-exhaustive
 enum agent_access_provider::OAuthScopeMode: non-exhaustive
 enum agent_access_provider::OAuthTokenEncoding: non-exhaustive
 enum agent_access_provider::OAuthTokenType: non-exhaustive
+enum agent_access_provider::OfflineContainmentProof: non-exhaustive
 enum agent_access_provider::ProviderFailureStatus: exhaustive
 enum agent_access_provider::ProviderResultStreamSource: exhaustive
 enum agent_access_provider::ProviderStateError: non-exhaustive
 enum agent_access_provider::ReasonCode: non-exhaustive
 enum agent_access_provider::RefreshReplay: exhaustive
+enum agent_access_provider::ResourceScopeCapabilities: non-exhaustive
 enum agent_access_provider::ResourceSelector: non-exhaustive
 enum agent_access_provider::RevocationOutcome: non-exhaustive
+enum agent_access_provider::ScalarResourceSelector: non-exhaustive
+enum agent_access_provider::ScopeEvidence: non-exhaustive
 enum agent_access_provider::ScopedMcpNameSource: non-exhaustive
 enum agent_access_provider::ServiceSurface: non-exhaustive
 enum agent_access_provider::StateDisposition: exhaustive
@@ -4915,9 +5655,8 @@ enum agent_access_provider::UpstreamResourceOwnership: non-exhaustive
 enum agent_access_provider::host::ContractViolation: non-exhaustive
 enum agent_access_provider::host::HostPort: non-exhaustive
 enum agent_access_provider::presentation::BodyPathSegment: non-exhaustive
-enum agent_access_provider::presentation::ReadContentFormat: exhaustive
+enum agent_access_provider::presentation::OutputContentFormat: non-exhaustive
 enum agent_access_provider::presentation::RenderBudgetExhausted: non-exhaustive
-enum agent_access_provider::presentation::ResponseFormat: non-exhaustive
 struct agent_access_provider::ActionCapabilities: named fields, non-exhaustive
 struct agent_access_provider::ActionDescriptor: named fields, non-exhaustive
 struct agent_access_provider::ActionResultSchemas: named fields, private fields, non-exhaustive
@@ -4938,6 +5677,14 @@ struct agent_access_provider::BrokerBodyPartSpec: named fields, non-exhaustive
 struct agent_access_provider::BuildContext: named fields, private fields
 struct agent_access_provider::CodeExchange: named fields, non-exhaustive
 struct agent_access_provider::ConnectedIdentity: named fields, non-exhaustive
+struct agent_access_provider::ContainmentAncestor: named fields, non-exhaustive
+struct agent_access_provider::ContainmentAuthorization: named fields, private fields
+struct agent_access_provider::ContainmentBoundary: named fields, private fields
+struct agent_access_provider::ContainmentCollectionAuthorization: named fields, private fields
+struct agent_access_provider::ContainmentEvidence: named fields, private fields
+struct agent_access_provider::ContainmentIdentity: named fields, non-exhaustive
+struct agent_access_provider::ContainmentScopeCapabilities: named fields, non-exhaustive
+struct agent_access_provider::ContentLocation: named fields, non-exhaustive
 struct agent_access_provider::ContinuationBinding: named fields, private fields
 struct agent_access_provider::ContinuationFailures: named fields, private fields
 struct agent_access_provider::ContinuationFamily: named fields, private fields
@@ -4970,6 +5717,10 @@ struct agent_access_provider::InvalidReasonCodeId: unit
 struct agent_access_provider::InvocationIdentity: named fields, non-exhaustive
 struct agent_access_provider::InvocationScope: named fields, private fields
 struct agent_access_provider::LinkedIdentity: named fields, non-exhaustive
+struct agent_access_provider::LocalScopeRequest: named fields, private fields
+struct agent_access_provider::LocationEntryCapability: named fields, private fields
+struct agent_access_provider::LocationNormalizationError: named fields, private fields
+struct agent_access_provider::LocationNormalizationRequest: named fields, private fields
 struct agent_access_provider::MediaTypeDeclaration: named fields, private fields
 struct agent_access_provider::MediaTypePolicyConfig: named fields
 struct agent_access_provider::ModuleMetadata: named fields, private fields, non-exhaustive
@@ -4977,6 +5728,8 @@ struct agent_access_provider::MultipartUploadSpec: named fields, non-exhaustive
 struct agent_access_provider::MutationReceipt: named fields, private fields
 struct agent_access_provider::NamespaceSelectorDescriptor: named fields, private fields, non-exhaustive
 struct agent_access_provider::NamespaceSelectorMetadata: named fields, non-exhaustive
+struct agent_access_provider::NonScalarResourceSelector: unit
+struct agent_access_provider::NormalizedResourceLocation: named fields, non-exhaustive
 struct agent_access_provider::OAuthAdapter: tuple fields, private fields
 struct agent_access_provider::OAuthCallbackIssuer: named fields, non-exhaustive
 struct agent_access_provider::OAuthClient: named fields, non-exhaustive
@@ -5009,8 +5762,9 @@ struct agent_access_provider::RedirectRules: named fields, private fields, non-e
 struct agent_access_provider::ResourceAttributeDescriptor: named fields, private fields, non-exhaustive
 struct agent_access_provider::ResourceAttributeMetadata: named fields, non-exhaustive
 struct agent_access_provider::ResourceAttributes: tuple fields, private fields
+struct agent_access_provider::ResourceContainer: named fields, non-exhaustive
 struct agent_access_provider::ResourcePattern: named fields, private fields
-struct agent_access_provider::ResourceScopeCapabilities: named fields, non-exhaustive
+struct agent_access_provider::ResourceSelectorProjection: named fields, non-exhaustive
 struct agent_access_provider::ResourceType: tuple fields, private fields
 struct agent_access_provider::ResourceTypeDescriptor: named fields, private fields, non-exhaustive
 struct agent_access_provider::ResourceTypeMetadata: named fields, non-exhaustive
@@ -5030,8 +5784,11 @@ struct agent_access_provider::ServiceDescriptor: named fields, non-exhaustive
 struct agent_access_provider::ServiceProvider: named fields, non-exhaustive
 struct agent_access_provider::SharedBodyBudget: named fields, private fields
 struct agent_access_provider::SigningError: unit
+struct agent_access_provider::SubtreeSelectorDescriptor: named fields, private fields, non-exhaustive
+struct agent_access_provider::SubtreeSelectorMetadata: named fields, non-exhaustive
 struct agent_access_provider::TokenGrant: named fields, non-exhaustive
 struct agent_access_provider::TokenRevocation: named fields, non-exhaustive
+struct agent_access_provider::TypedResourceSelector: named fields, private fields
 struct agent_access_provider::UnsupportedCredentialMode: unit
 struct agent_access_provider::UpstreamAuthority: named fields, private fields
 struct agent_access_provider::UpstreamAuthorization: named fields, private fields
@@ -5046,20 +5803,20 @@ struct agent_access_provider::ValidationContext: named fields, non-exhaustive
 struct agent_access_provider::host::AdmittedRequestParts: named fields
 struct agent_access_provider::host::ClientTransportSpec: named fields, private fields
 struct agent_access_provider::host::HookContext: named fields, private fields
+struct agent_access_provider::host::LocalScopeRequestParts: named fields
 struct agent_access_provider::host::ScopeRequestParts: named fields
 struct agent_access_provider::host::TransportClient: named fields, private fields
 struct agent_access_provider::host::UpstreamClientFactoryError: tuple fields, private fields
 struct agent_access_provider::presentation::ActionPresentation: named fields, private fields, non-exhaustive
+struct agent_access_provider::presentation::BodyField: named fields, non-exhaustive
 struct agent_access_provider::presentation::EmbeddedBody: named fields, private fields, non-exhaustive
-struct agent_access_provider::presentation::MarkdownWriter: named fields, private fields
-struct agent_access_provider::presentation::PresentationBudget: named fields, private fields
 struct agent_access_provider::presentation::RenderBudget: named fields, private fields
-struct agent_access_provider::presentation::RenderContext: named fields, non-exhaustive
 struct agent_access_provider::presentation::RenderError: unit
-struct agent_access_provider::presentation::RenderedBody: named fields, non-exhaustive
+struct agent_access_provider::presentation::ResolvedPresentation: named fields, private fields
 struct agent_access_provider::presentation::ResponseCapabilities: named fields, non-exhaustive
 struct agent_access_provider::presentation::ResponseOptions: named fields, non-exhaustive
-struct agent_access_provider::presentation::UnresolvedBodyOwner: unit
+struct agent_access_provider::presentation::SelectedContent: named fields, private fields
+struct agent_access_provider::presentation::UnresolvedBodyField: unit, non-exhaustive
 trait agent_access_provider::BackendConfig: dyn-compatible
 trait agent_access_provider::BackendConfig::build: required fn
 trait agent_access_provider::BackendConfig::descriptor: required fn
@@ -5110,6 +5867,7 @@ trait agent_access_provider::Provider::authorize_body_parts: provided fn
 trait agent_access_provider::Provider::invoke: required fn
 trait agent_access_provider::Provider::resolve_scopes: required fn
 trait agent_access_provider::Provider::resource_roots: provided fn
+trait agent_access_provider::Provider::validate_scope_locator: provided fn
 trait agent_access_provider::Provider::verify_execution_credential: provided fn
 trait agent_access_provider::RedirectAuthorizer: dyn-compatible
 trait agent_access_provider::RedirectAuthorizer::authorize: required fn
@@ -5119,9 +5877,8 @@ trait agent_access_provider::continuation::sealed::Stage: dyn-compatible
 trait agent_access_provider::host::UpstreamClientFactory: dyn-compatible
 trait agent_access_provider::host::UpstreamClientFactory::build_client: required fn
 trait agent_access_provider::presentation::EmbeddedBodyCodec: dyn-compatible
-trait agent_access_provider::presentation::EmbeddedBodyCodec::render: required fn
-trait agent_access_provider::presentation::WholeResultRenderer: dyn-compatible
-trait agent_access_provider::presentation::WholeResultRenderer::render: required fn
+trait agent_access_provider::presentation::EmbeddedBodyCodec::select: required fn
+trait agent_access_provider::presentation::EmbeddedBodyCodec::supported_formats: required fn
 variant agent_access_provider::CredentialSource::Static: named fields, non-exhaustive
 
 // Public dependency packages (semver-compatible lines)

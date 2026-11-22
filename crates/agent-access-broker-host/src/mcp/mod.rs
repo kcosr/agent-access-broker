@@ -14,6 +14,7 @@ use agent_access_core::{
     IngressAdmission, InvocationControl,
     mcp::{McpView, OutputSchemas},
 };
+use agent_access_provider::presentation::OutputContentFormat;
 use axum::{
     Extension,
     body::Body,
@@ -122,6 +123,8 @@ struct Admitted {
     view: McpView,
     /// This request's own selection: never session state, never authority.
     output_schemas: OutputSchemas,
+    preferred_output_content_format: Option<OutputContentFormat>,
+    include_text_copy: bool,
     snapshot: Arc<RuntimeSnapshot>,
     http_span: tracing::Span,
     cancellation: Arc<ExplicitCancellation>,
@@ -391,10 +394,8 @@ fn security_headers(
             ));
         }
     }
-    if endpoint_query(uri.query()).is_none()
-        || headers.contains_key("content-encoding")
-        || headers.contains_key("last-event-id")
-    {
+    query_options(uri.query()).map_err(|()| invalid_query_options())?;
+    if headers.contains_key("content-encoding") || headers.contains_key("last-event-id") {
         return Err(failure(
             StatusCode::BAD_REQUEST,
             "Unsupported MCP request encoding or replay",
@@ -446,50 +447,83 @@ fn security_headers(
     Ok(Some(token.to_owned()))
 }
 
-/// The one parser of an MCP endpoint's raw query: none, or exactly
-/// `outputSchemas=on` or `outputSchemas=off`. Every other form is refused:
-/// a bare or empty `?`, a repeated, empty, encoded or unknown parameter, or
-/// any other separator. A new parameter is added here explicitly. The value
-/// selects presentation only, never identity, context or authorization.
-fn endpoint_query(query: Option<&str>) -> Option<OutputSchemas> {
-    let Some(query) = query else {
-        return Some(OutputSchemas::CONNECTION_DEFAULT);
-    };
-    OutputSchemas::parse(query.strip_prefix("outputSchemas=")?)
+// Match literal query keys and values without percent/form decoding. The three
+// independent controls may appear in any order, exactly once each.
+struct QueryOptions {
+    output_schemas: OutputSchemas,
+    preferred_output_content_format: Option<OutputContentFormat>,
+    include_text_copy: bool,
+}
+fn query_options(query: Option<&str>) -> Result<QueryOptions, ()> {
+    let mut output_schemas = None;
+    let mut preference = None;
+    let mut include_text_copy = None;
+    if let Some(query) = query {
+        for field in query.split('&') {
+            let (key, value) = field.split_once('=').ok_or(())?;
+            match key {
+                "outputSchemas" if output_schemas.is_none() => {
+                    output_schemas = Some(OutputSchemas::parse(value).ok_or(())?);
+                }
+                "preferredOutputContentFormat" if preference.is_none() => {
+                    preference = Some(match value {
+                        "markdown" => OutputContentFormat::Markdown,
+                        "text" => OutputContentFormat::Text,
+                        "adf" => OutputContentFormat::Adf,
+                        "storage" => OutputContentFormat::Storage,
+                        _ => return Err(()),
+                    });
+                }
+                "includeTextCopy" if include_text_copy.is_none() => {
+                    include_text_copy = Some(match value {
+                        "true" => true,
+                        "false" => false,
+                        _ => return Err(()),
+                    });
+                }
+                _ => return Err(()),
+            }
+        }
+    }
+    Ok(QueryOptions {
+        output_schemas: output_schemas.unwrap_or(OutputSchemas::CONNECTION_DEFAULT),
+        preferred_output_content_format: preference,
+        include_text_copy: include_text_copy.unwrap_or(true),
+    })
 }
 
-enum EndpointRejection {
-    Path,
-    Query,
+fn invalid_query_options() -> Response {
+    failure(StatusCode::BAD_REQUEST, "Invalid MCP query options")
 }
 
-// Parse the original, undecoded path and query. Axum's path parameters are
-// intentionally not used: percent encodings must never create aliases for a
-// service connection.
-fn request_view(request: &Request<Body>) -> Result<(McpView, OutputSchemas), EndpointRejection> {
+fn request_query_options(request: &Request<Body>) -> Result<QueryOptions, ()> {
+    let original = request
+        .extensions()
+        .get::<OriginalUri>()
+        .map(|uri| &uri.0)
+        .unwrap_or_else(|| request.uri());
+    if original.query() != request.uri().query() {
+        return Err(());
+    }
+    query_options(original.query())
+}
+
+// Parse the original, undecoded path. Axum's path parameters are intentionally
+// not used: percent encodings must never create aliases for a service connection.
+fn request_view(request: &Request<Body>) -> Option<McpView> {
     let original = request
         .extensions()
         .get::<OriginalUri>()
         .map(|uri| &uri.0)
         .unwrap_or_else(|| request.uri());
     if original.path() != request.uri().path() {
-        return Err(EndpointRejection::Path);
+        return None;
     }
-    let view = if original.path() == "/mcp" {
-        McpView::Aggregate
-    } else {
-        let service = original
-            .path()
-            .strip_prefix("/mcp/")
-            .filter(|service| agent_access_provider::is_service_name(service))
-            .ok_or(EndpointRejection::Path)?;
-        McpView::Service(service.to_owned())
-    };
-    if original.query() != request.uri().query() {
-        return Err(EndpointRejection::Query);
+    if original.path() == "/mcp" {
+        return Some(McpView::Aggregate);
     }
-    let output_schemas = endpoint_query(original.query()).ok_or(EndpointRejection::Query)?;
-    Ok((view, output_schemas))
+    let service = original.path().strip_prefix("/mcp/")?;
+    agent_access_provider::is_service_name(service).then(|| McpView::Service(service.to_owned()))
 }
 
 pub(crate) async fn handle(
@@ -513,32 +547,32 @@ pub(crate) async fn handle(
     if !config.enabled {
         return failure(StatusCode::NOT_FOUND, "MCP endpoint is disabled");
     }
-    let (view, output_schemas) = match request_view(&request) {
-        Ok(selection) => selection,
-        Err(rejection) => {
-            // A malformed endpoint query is a request-shape error, never an
-            // identity failure: every admission mode, username included, gets
-            // the same plain 400 before any identity work.
-            if ingress.is_username() && matches!(rejection, EndpointRejection::Path) {
-                return crate::router::admission_failure_response(
-                    &state,
-                    snapshot,
-                    request.headers(),
-                    Some(remote),
-                    IdentityFailure::AssertionInvalid,
-                )
-                .await;
-            }
-            return failure(
-                StatusCode::BAD_REQUEST,
-                match rejection {
-                    EndpointRejection::Path => "Invalid MCP endpoint path",
-                    EndpointRejection::Query => {
-                        "Invalid MCP endpoint query; only outputSchemas=on or outputSchemas=off is accepted"
-                    }
-                },
-            );
+    let Some(view) = request_view(&request) else {
+        if ingress.is_username() {
+            return crate::router::admission_failure_response(
+                &state,
+                snapshot,
+                request.headers(),
+                Some(remote),
+                IdentityFailure::AssertionInvalid,
+            )
+            .await;
         }
+        return failure(StatusCode::BAD_REQUEST, "Invalid MCP endpoint path");
+    };
+    let options = match request_query_options(&request) {
+        Ok(options) => options,
+        Err(()) if ingress.is_username() => {
+            return crate::router::admission_failure_response(
+                &state,
+                snapshot,
+                request.headers(),
+                Some(remote),
+                IdentityFailure::AssertionInvalid,
+            )
+            .await;
+        }
+        Err(()) => return invalid_query_options(),
     };
     if request.headers().contains_key("trailer") {
         return if ingress.is_username() {
@@ -994,7 +1028,9 @@ pub(crate) async fn handle(
     );
     let mut admitted = Admitted {
         view,
-        output_schemas,
+        output_schemas: options.output_schemas,
+        preferred_output_content_format: options.preferred_output_content_format,
+        include_text_copy: options.include_text_copy,
         snapshot: snapshot.clone(),
         http_span: tracing::Span::current(),
         cancellation: Arc::new(ExplicitCancellation::default()),
@@ -1207,10 +1243,19 @@ pub(crate) async fn handle(
             Ok(Ok(Ok(detail))) if tokio::time::Instant::now() < discovery_deadline => {
                 serde_json::to_value(detail)
                     .ok()
-                    .and_then(|value| output::result(value, false, config.max_response_bytes).ok())
+                    .and_then(|value| {
+                        output::result(
+                            value,
+                            false,
+                            config.max_response_bytes,
+                            admitted.include_text_copy,
+                        )
+                        .ok()
+                    })
                     .unwrap_or_else(|| {
                         output::message(
                             "Discovery result exceeds MCP response limit; use narrower discovery",
+                            admitted.include_text_copy,
                         )
                     })
             }
@@ -1443,16 +1488,42 @@ mod tests {
     use super::*;
 
     #[test]
-    fn endpoint_query_accepts_only_no_query_or_one_exact_selection() {
-        assert_eq!(endpoint_query(None), Some(OutputSchemas::Off));
+    fn endpoint_query_composes_each_literal_option_once() {
         assert_eq!(
-            endpoint_query(Some("outputSchemas=on")),
-            Some(OutputSchemas::On)
+            query_options(None).unwrap().output_schemas,
+            OutputSchemas::Off
         );
         assert_eq!(
-            endpoint_query(Some("outputSchemas=off")),
-            Some(OutputSchemas::Off)
+            query_options(Some("outputSchemas=on"))
+                .unwrap()
+                .output_schemas,
+            OutputSchemas::On
         );
+        assert_eq!(
+            query_options(Some("outputSchemas=off"))
+                .unwrap()
+                .output_schemas,
+            OutputSchemas::Off
+        );
+        let defaults = query_options(None).unwrap();
+        assert!(defaults.include_text_copy);
+        assert_eq!(defaults.preferred_output_content_format, None);
+        for query in [
+            "outputSchemas=on&includeTextCopy=false&preferredOutputContentFormat=text",
+            "includeTextCopy=false&preferredOutputContentFormat=text&outputSchemas=on",
+            "preferredOutputContentFormat=text&outputSchemas=on&includeTextCopy=false",
+            "outputSchemas=on&preferredOutputContentFormat=text&includeTextCopy=false",
+            "preferredOutputContentFormat=text&includeTextCopy=false&outputSchemas=on",
+            "includeTextCopy=false&outputSchemas=on&preferredOutputContentFormat=text",
+        ] {
+            let options = query_options(Some(query)).unwrap();
+            assert_eq!(options.output_schemas, OutputSchemas::On);
+            assert!(!options.include_text_copy);
+            assert_eq!(
+                options.preferred_output_content_format,
+                Some(OutputContentFormat::Text)
+            );
+        }
         for rejected in [
             "",
             "outputSchemas",
@@ -1470,7 +1541,7 @@ mod tests {
             " outputSchemas=on",
             "outputSchemas=on ",
         ] {
-            assert_eq!(endpoint_query(Some(rejected)), None, "{rejected:?}");
+            assert!(query_options(Some(rejected)).is_err(), "{rejected:?}");
         }
     }
 }

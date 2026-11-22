@@ -1,8 +1,8 @@
 //! Prepared `audit_events` rows: the record JSON exactly as JSONL writes it,
 //! the derived query columns, and the broker-built full-text index text.
 
-use super::super::{AuditRecord, StampedAuditRecord};
-use agent_access_provider::ResourceSelector;
+use super::super::{AuditRecord, SearchAuthorizationAudit, StampedAuditRecord};
+use agent_access_provider::{ResourceSelector, ScalarResourceSelector};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use std::collections::HashSet;
@@ -241,14 +241,14 @@ fn fts_text(record: &AuditRecord) -> String {
     let search_grants = record
         .search_authorization
         .iter()
-        .flat_map(|plan| plan.matched_grants.iter());
+        .flat_map(|plan| plan.matched_grants().iter());
     for grant in record.matched_grant.iter().chain(search_grants) {
         if let Some(grant_id) = &grant.grant_id {
             text.push(grant_id);
         }
         text.push(&grant.subject);
     }
-    if let Some(plan) = &record.search_authorization {
+    if let Some(SearchAuthorizationAudit::Scalar(plan)) = &record.search_authorization {
         for selector in plan
             .scope
             .clauses()
@@ -256,8 +256,23 @@ fn fts_text(record: &AuditRecord) -> String {
             .flat_map(|clause| clause.included().iter().chain(clause.excluded()))
         {
             match selector {
-                ResourceSelector::Exact { value } | ResourceSelector::Namespace { value } => {
-                    text.push(value)
+                ScalarResourceSelector::Exact { value }
+                | ScalarResourceSelector::Namespace { value } => text.push(value),
+                _ => {}
+            }
+        }
+    }
+    if let Some(SearchAuthorizationAudit::Location(plan)) = &record.search_authorization {
+        for selector in plan
+            .grant_boundaries
+            .iter()
+            .chain(plan.token_boundary.iter())
+            .flat_map(|boundary| boundary.included.iter().chain(boundary.excluded.iter()))
+        {
+            text.push(selector.resource_type.as_str());
+            match &selector.selector {
+                ResourceSelector::Exact { value } | ResourceSelector::Subtree { value } => {
+                    text.push(value);
                 }
                 _ => {}
             }
@@ -397,27 +412,24 @@ mod tests {
         use agent_access_provider::SearchAuthorizationScope;
         let mut record = crate::runtime::tests::test_audit_record();
         let authority = SearchAuthorizationScope::from_selectors(
-            vec![ResourceSelector::Namespace {
+            vec![ScalarResourceSelector::Namespace {
                 value: "engineering".into(),
             }],
-            vec![ResourceSelector::Namespace {
+            vec![ScalarResourceSelector::Namespace {
                 value: "engineering/private".into(),
             }],
         )
         .union(&SearchAuthorizationScope::from_exact_values(vec![
             "engineering/private/tool".into(),
         ]));
-        record.search_authorization = Some(crate::runtime::SearchAuthorizationPlan {
+        let plan = crate::runtime::SearchAuthorizationPlan {
             scope_type: "repository".into(),
             scope: authority.clone(),
             credential_mode: "service".into(),
             matched_grants: vec![],
-        });
-        let summary = record
-            .search_authorization
-            .as_ref()
-            .unwrap()
-            .resource_scope_summary();
+        };
+        let summary = plan.resource_scope_summary();
+        record.search_authorization = Some(plan.into());
         assert_eq!(summary["repository"], ["*"]);
         let stamped = StampedAuditRecord::new(record.clone(), "node-1");
         let row = PreparedRow::prepare(&stamped).unwrap();
@@ -436,6 +448,42 @@ mod tests {
         }
         assert!(!text.contains("clauses"));
         assert!(!text.contains("included"));
+    }
+
+    #[test]
+    fn location_search_audit_preserves_and_indexes_typed_boundaries() {
+        let mut record = crate::runtime::tests::test_audit_record();
+        let authority = serde_json::json!({
+            "scope":"location", "scopeType":"location", "domain":"page",
+            "resourceTypes":["confluence_space", "confluence_content"],
+            "evidenceLevel":"complete_lineage", "credentialMode":"per_user",
+            "authorityDigest":"d".repeat(64), "matchedGrants":[],
+            "grantBoundaries":[{
+                "included":[{"resourceType":"confluence_content","selector":{"kind":"subtree","value":"https://example.atlassian.net/wiki/content/folder/100"}}],
+                "excluded":[{"resourceType":"confluence_content","selector":{"kind":"exact","value":"https://example.atlassian.net/wiki/content/page/200"}}]
+            }],
+            "tokenBoundary":{
+                "included":[{"resourceType":"confluence_space","selector":{"kind":"exact","value":"ENG"}}],
+                "excluded":[]
+            }
+        });
+        record.search_authorization = Some(serde_json::from_value(authority.clone()).unwrap());
+        let stamped = StampedAuditRecord::new(record.clone(), "node-1");
+        let row = PreparedRow::prepare(&stamped).unwrap();
+        let json: Value = serde_json::from_str(&row.record_json).unwrap();
+        assert_eq!(json["searchAuthorization"], authority);
+        let text = fts_text(&record);
+        for value in [
+            "confluence_content",
+            "confluence_space",
+            "/folder/100",
+            "/page/200",
+            "ENG",
+        ] {
+            assert!(text.contains(value), "{value}: {text}");
+        }
+        assert!(!text.contains(&"d".repeat(64)));
+        assert!(!text.contains("grantBoundaries"));
     }
 
     #[test]

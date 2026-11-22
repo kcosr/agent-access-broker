@@ -26,6 +26,9 @@ mod issue_type_tests;
 #[path = "custom_field_tests.rs"]
 mod custom_field_tests;
 
+#[path = "transitions_tests.rs"]
+mod transitions_tests;
+
 #[path = "jql_custom_field_tests.rs"]
 mod jql_custom_field_tests;
 
@@ -447,6 +450,7 @@ struct StubJiraBackend {
     issue_link_readbacks: Mutex<BTreeMap<String, JiraIssueLinks>>,
     issue_view_links: Mutex<Option<Vec<JiraIssueViewLink>>>,
     issue_view_context: Mutex<JiraIssueViewContext>,
+    issue_view_custom_fields: Mutex<Vec<Value>>,
     issue_view_link_requests: Mutex<Vec<bool>>,
     issue_links_error: Mutex<Option<JiraBackendError>>,
     search_page: Mutex<Option<JiraSearchPage>>,
@@ -499,6 +503,32 @@ impl StubJiraBackend {
 
 #[async_trait]
 impl JiraBackend for StubJiraBackend {
+    async fn issue_status(
+        &self,
+        _issue_id: &str,
+        _credential: &AtlassianCredential,
+    ) -> Result<JiraBackendResponse<Value>, JiraBackendError> {
+        panic!("unexpected status request in this fixture")
+    }
+    async fn issue_transitions(
+        &self,
+        _issue_id: &str,
+        _include_fields: bool,
+        _transition_id: Option<&str>,
+        _credential: &AtlassianCredential,
+    ) -> Result<JiraBackendResponse<Value>, JiraBackendError> {
+        panic!("unexpected transition discovery in this fixture")
+    }
+    async fn transition_issue(
+        &self,
+        _issue_id: &str,
+        _transition_id: &str,
+        _resolution_id: Option<&str>,
+        _credential: &AtlassianCredential,
+    ) -> Result<JiraBackendResponse<()>, JiraBackendError> {
+        panic!("unexpected transition write in this fixture")
+    }
+
     async fn project_list(
         &self,
         _request: JiraProjectListRequest,
@@ -608,7 +638,7 @@ impl JiraBackend for StubJiraBackend {
             value: JiraIssueView {
                 issue: response.value,
                 context: self.issue_view_context.lock().unwrap().clone(),
-                custom_fields: Vec::new(),
+                custom_fields: self.issue_view_custom_fields.lock().unwrap().clone(),
                 issue_links: include_issue_references
                     .then(|| self.issue_view_links.lock().unwrap().clone())
                     .flatten(),
@@ -9656,14 +9686,14 @@ fn search_clause_projection_restores_exact_values_and_rejects_namespaces() {
     );
     for (included, excluded) in [
         (
-            vec![agent_access_provider::ResourceSelector::Namespace {
+            vec![agent_access_provider::ScalarResourceSelector::Namespace {
                 value: "engineering".into(),
             }],
             vec![],
         ),
         (
-            vec![agent_access_provider::ResourceSelector::All],
-            vec![agent_access_provider::ResourceSelector::Namespace {
+            vec![agent_access_provider::ScalarResourceSelector::All],
+            vec![agent_access_provider::ScalarResourceSelector::Namespace {
                 value: "engineering/private".into(),
             }],
         ),
@@ -9680,3 +9710,5 @@ fn search_clause_projection_restores_exact_values_and_rejects_namespaces() {
         );
     }
 }
+#[path = "tests/content_output.rs"]
+mod content_output;

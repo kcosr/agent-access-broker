@@ -8,64 +8,46 @@ fn strings(values: &[&str]) -> Vec<String> {
     values.iter().map(ToString::to_string).collect()
 }
 
-/// The configurations of the core action matrix
-/// (`runtime/input_explanation_tests.rs`).
-fn configurations() -> Vec<(&'static str, ConfluenceProviderConfig)> {
-    let configuration = |page: &[&str], blog: &[&str], comment: &[&str], uploads: &[&str]| {
-        let mut config = confluence_config();
-        config.content = crate::ConfluenceContentConfig {
-            page_formats: strings(page),
-            blog_formats: strings(blog),
-            comment_formats: strings(comment),
-            ..Default::default()
-        };
-        config.attachments.upload_media_types = strings(uploads);
-        config
-    };
-    vec![
-        (
-            "default",
-            configuration(&[], &["storage"], &["storage"], &[]),
-        ),
-        ("content-disabled", configuration(&[], &[], &[], &[])),
-        (
-            "pages-text-only",
-            configuration(&["storage"], &["storage"], &["storage"], &[]),
-        ),
-        (
-            "pages-object-only",
-            configuration(&["atlas_doc_format"], &["storage"], &["storage"], &[]),
-        ),
-        (
-            "all-enabled",
-            configuration(
-                &["storage", "atlas_doc_format"],
-                &["storage"],
-                &["storage"],
-                &["text/plain", "application/json"],
-            ),
-        ),
-    ]
+/// Every combination that changes action publication or body capabilities.
+fn configurations() -> Vec<ConfluenceProviderConfig> {
+    let mut configurations = Vec::new();
+    for pages in [
+        &[][..],
+        &["storage"],
+        &["atlas_doc_format"],
+        &["storage", "atlas_doc_format"],
+    ] {
+        for blogs in [&[][..], &["storage"]] {
+            for comments in [&[][..], &["storage"]] {
+                for uploads in [&[][..], &["text/plain", "application/json"]] {
+                    let mut config = confluence_config();
+                    config.content.page_formats = strings(pages);
+                    config.content.blog_formats = strings(blogs);
+                    config.content.comment_formats = strings(comments);
+                    config.attachments.upload_media_types = strings(uploads);
+                    configurations.push(config);
+                }
+            }
+        }
+    }
+    configurations
 }
 
 #[test]
 fn result_schemas_cover_every_action_in_every_configuration() {
     let mut published = BTreeSet::new();
-    for (name, config) in configurations() {
+    for (index, config) in configurations().into_iter().enumerate() {
         let descriptor = confluence_descriptor(&config);
         descriptor
             .validate()
-            .unwrap_or_else(|problems| panic!("{name}: {problems:?}"));
+            .unwrap_or_else(|problems| panic!("configuration {index}: {problems:?}"));
         for action in &descriptor.actions {
             assert!(
                 action.result_schemas.is_some(),
-                "{name}: {} declares no result schemas",
+                "configuration {index}: {} declares no result schemas",
                 action.action
             );
             published.insert(action.action.clone());
-        }
-        if name == "all-enabled" {
-            assert_eq!(descriptor.actions.len(), RESULT_SCHEMAS.actions().len());
         }
     }
     let bundled = RESULT_SCHEMAS
@@ -74,6 +56,72 @@ fn result_schemas_cover_every_action_in_every_configuration() {
         .map(ToString::to_string)
         .collect::<BTreeSet<_>>();
     assert_eq!(published, bundled);
+}
+
+#[test]
+fn content_schemas_expose_current_parent_and_scan_paths() {
+    let descriptor = confluence_descriptor(&confluence_config());
+    for action in [
+        "page.create",
+        "page.draft.create",
+        "page.draft.stage",
+        "page.draft.view",
+        "page.draft.update",
+        "page.draft.publish",
+    ] {
+        let schema = descriptor
+            .action(action)
+            .unwrap()
+            .result_schemas
+            .as_ref()
+            .unwrap()
+            .success();
+        assert_eq!(
+            schema["properties"]["parent"]["properties"]["kind"]["enum"],
+            json!(["page", "folder"])
+        );
+        assert_eq!(
+            schema["properties"]["parent"]["properties"]["id"]["type"],
+            "string"
+        );
+        assert!(schema["properties"].get("parentPageId").is_none());
+    }
+    for action in [
+        "blog.draft.create",
+        "blog.draft.stage",
+        "blog.draft.view",
+        "blog.draft.update",
+        "blog.draft.publish",
+    ] {
+        let schema = descriptor
+            .action(action)
+            .unwrap()
+            .result_schemas
+            .as_ref()
+            .unwrap()
+            .success();
+        assert!(schema["properties"].get("parent").is_none());
+        assert!(schema["properties"].get("parentPageId").is_none());
+    }
+    for action in ["search", "blog.search"] {
+        let schema = descriptor
+            .action(action)
+            .unwrap()
+            .result_schemas
+            .as_ref()
+            .unwrap()
+            .success();
+        assert_eq!(
+            schema["properties"]["scanStatus"]["enum"],
+            json!(["exhausted", "more", "scan_budget"])
+        );
+        assert!(
+            schema["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("scanStatus"))
+        );
+    }
 }
 
 #[test]
@@ -125,7 +173,7 @@ async fn page_and_blog_update_conflicts_report_the_versions_they_know() {
     let backend = Arc::new(AttributionStubConfluenceBackend::new());
     let provider = confluence_attribution_provider(backend.clone(), &[], confluence_config());
     let error = provider
-        .invoke_checked(update_invocation("page.update", "pageId", "123456", 6))
+        .invoke_fixture(update_invocation("page.update", "pageId", "123456", 6))
         .await
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::VersionConflict);
@@ -136,7 +184,7 @@ async fn page_and_blog_update_conflicts_report_the_versions_they_know() {
         )
     );
     let error = provider
-        .invoke_checked(update_invocation("blog.update", "blogId", "7777", 2))
+        .invoke_fixture(update_invocation("blog.update", "blogId", "7777", 2))
         .await
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::VersionConflict);
@@ -157,16 +205,16 @@ async fn page_and_blog_update_conflicts_report_the_versions_they_know() {
     });
     let provider = confluence_attribution_provider(backend, &[], confluence_config());
     let error = provider
-        .invoke_checked(update_invocation("page.update", "pageId", "123456", 7))
+        .invoke_fixture(update_invocation("page.update", "pageId", "123456", 7))
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code(), ReasonCode::VersionConflict);
+    assert_eq!(error.reason_code().as_str(), "confluence_update_conflict");
     assert_eq!(
         error.result.as_deref(),
         Some(&json!({"pageId": "123456", "space": "ENG", "expectedBaseVersion": 7}))
     );
     let error = provider
-        .invoke_checked(update_invocation("blog.update", "blogId", "7777", 3))
+        .invoke_fixture(update_invocation("blog.update", "blogId", "7777", 3))
         .await
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::VersionConflict);
@@ -193,7 +241,7 @@ async fn comment_update_conflicts_report_the_versions_they_know() {
         backend.clone(),
     );
     let error = provider
-        .invoke_checked(update_invocation(
+        .invoke_fixture(update_invocation(
             "page.footer_comment.update",
             "commentId",
             "5001",
@@ -214,7 +262,7 @@ async fn comment_update_conflicts_report_the_versions_they_know() {
     let provider =
         ConfluenceProvider::with_backend(confluence_config(), ProviderLimits::default(), backend);
     let error = provider
-        .invoke_checked(update_invocation(
+        .invoke_fixture(update_invocation(
             "page.footer_comment.update",
             "commentId",
             "5001",
@@ -250,7 +298,7 @@ async fn draft_stage_conflicts_name_the_current_version_or_the_existing_draft() 
         let action = format!("{prefix}.draft.stage");
 
         let error = provider
-            .invoke_checked(update_invocation(&action, id_key, backend.id(), 3))
+            .invoke_fixture(update_invocation(&action, id_key, backend.id(), 3))
             .await
             .unwrap_err();
         assert_eq!(error.reason_code(), ReasonCode::VersionConflict, "{prefix}");
@@ -262,18 +310,18 @@ async fn draft_stage_conflicts_name_the_current_version_or_the_existing_draft() 
 
         // The current version matches, but a broker-managed draft exists.
         let error = provider
-            .invoke_checked(update_invocation(&action, id_key, backend.id(), 4))
+            .invoke_fixture(update_invocation(&action, id_key, backend.id(), 4))
             .await
             .unwrap_err();
         assert_eq!(error.reason_code(), ReasonCode::VersionConflict, "{prefix}");
-        assert_eq!(
-            error.result.as_deref(),
-            Some(&json!({
-                id_key: backend.id(), "space": "ENG", "spaceId": "98765",
-                "expectedBaseVersion": 4, "draftVersion": 1, "lifecycle": "draft",
-            })),
-            "{prefix}"
-        );
+        let mut expected = json!({
+            id_key: backend.id(), "space": "ENG", "spaceId": "98765",
+            "expectedBaseVersion": 4, "draftVersion": 1, "lifecycle": "draft",
+        });
+        if content_type == ConfluenceDraftContentType::Page {
+            expected["parent"] = json!({"kind":"page", "id":"55555"});
+        }
+        assert_eq!(error.result.as_deref(), Some(&expected), "{prefix}");
     }
 }
 
@@ -287,7 +335,7 @@ async fn draft_and_blog_verification_mismatches_report_what_was_checked() {
             draft_throttle_provider(DraftThrottleBackend::new(content_type));
         let action = format!("{prefix}.draft.verify");
         let error = provider
-            .invoke_checked(draft_invocation(
+            .invoke_fixture(draft_invocation(
                 &action,
                 json!({id_key: backend.id(), "draftHandle": handle, "expectVersion": 1, "expectTitle": "Other"}),
             ))
@@ -299,25 +347,25 @@ async fn draft_and_blog_verification_mismatches_report_what_was_checked() {
             "{prefix}"
         );
         assert_eq!(error.decision(), Decision::Allow, "{prefix}");
-        assert_eq!(
-            error.result.as_deref(),
-            Some(&json!({
-                "operation": action,
-                "verification": {
-                    "status": "mismatch",
-                    "checked": [{"type": format!("{kind}Version"), "version": 1}],
-                    "mismatch": {"type": format!("{kind}Title")},
-                },
-                id_key: backend.id(), "space": "ENG", "spaceId": "98765", "lifecycle": "draft",
-            })),
-            "{prefix}"
-        );
+        let mut expected = json!({
+            "operation": action,
+            "verification": {
+                "status": "mismatch",
+                "checked": [{"type": format!("{kind}Version"), "version": 1}],
+                "mismatch": {"type": format!("{kind}Title")},
+            },
+            id_key: backend.id(), "space": "ENG", "spaceId": "98765", "lifecycle": "draft",
+        });
+        if content_type == ConfluenceDraftContentType::Page {
+            expected["parent"] = json!({"kind":"page", "id":"55555"});
+        }
+        assert_eq!(error.result.as_deref(), Some(&expected), "{prefix}");
     }
 
     let backend = Arc::new(AttributionStubConfluenceBackend::new());
     let provider = confluence_attribution_provider(backend, &[], confluence_config());
     let error = provider
-        .invoke_checked(draft_invocation(
+        .invoke_fixture(draft_invocation(
             "blog.verify",
             json!({"blogId": "7777", "expectVersion": 9}),
         ))

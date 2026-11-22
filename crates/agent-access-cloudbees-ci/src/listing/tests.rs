@@ -32,15 +32,15 @@ fn provider(cfg: CloudbeesCiProviderConfig, limits: ProviderLimits) -> Cloudbees
     provider
 }
 fn scope() -> SearchAuthorizationScope {
-    SearchAuthorizationScope::from_selectors(vec![ResourceSelector::All], vec![])
+    SearchAuthorizationScope::from_selectors(vec![ScalarResourceSelector::All], vec![])
 }
-fn exact(value: &str) -> ResourceSelector {
-    ResourceSelector::Exact {
+fn exact(value: &str) -> ScalarResourceSelector {
+    ScalarResourceSelector::Exact {
         value: value.into(),
     }
 }
-fn namespace(value: &str) -> ResourceSelector {
-    ResourceSelector::Namespace {
+fn namespace(value: &str) -> ScalarResourceSelector {
+    ScalarResourceSelector::Namespace {
         value: value.into(),
     }
 }
@@ -246,7 +246,7 @@ async fn namespace_exclusions_and_independent_allows_control_descent() {
     )
     .await;
     let base = SearchAuthorizationScope::from_selectors(
-        vec![ResourceSelector::All],
+        vec![ScalarResourceSelector::All],
         vec![
             namespace("ci/DENIED"),
             exact("ci/DENIED"),

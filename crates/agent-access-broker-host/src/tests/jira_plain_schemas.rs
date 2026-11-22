@@ -81,7 +81,7 @@ async fn jira_plain_inputs_project_through_stdio_http_send_and_openapi() {
         .iter()
         .find(|service| service.service == "jira")
         .unwrap();
-    assert_eq!(jira.actions.len(), 25);
+    assert_eq!(jira.actions.len(), 27);
     for action in &jira.actions {
         let schema = &action.input_schema;
         assert_eq!(schema["type"], "object", "{}", action.action);
@@ -221,7 +221,7 @@ async fn jira_plain_inputs_project_through_stdio_http_send_and_openapi() {
 
     let send_validator = jsonschema::validator_for(&send).unwrap();
     for action in ["comment.list", "issue.update"] {
-        let mut request = json!({"version": "agent-access.send.v1", "kind": "invoke", "service": "jira", "action": action});
+        let mut request = json!({"version": "agent-access.send.v2", "kind": "invoke", "service": "jira", "action": action});
         assert!(send_validator.is_valid(&request));
         request["inputs"] = json!({});
         assert!(send_validator.is_valid(&request));
@@ -232,13 +232,13 @@ async fn jira_plain_inputs_project_through_stdio_http_send_and_openapi() {
         json!({}),
         json!({"content": "text", "contentFormat": "plain_text"}),
     ] {
-        let request = json!({"version": "agent-access.send.v1", "kind": "invoke", "service": "jira", "action": "comment.add", "inputs": inputs});
+        let request = json!({"version": "agent-access.send.v2", "kind": "invoke", "service": "jira", "action": "comment.add", "inputs": inputs});
         assert_eq!(
             send_validator.is_valid(&request),
             inputs.get("content").is_some()
         );
     }
-    assert!(!send_validator.is_valid(&json!({"version": "agent-access.send.v1", "kind": "invoke", "service": "jira", "action": "comment.add"})));
+    assert!(!send_validator.is_valid(&json!({"version": "agent-access.send.v2", "kind": "invoke", "service": "jira", "action": "comment.add"})));
 }
 
 #[tokio::test]
