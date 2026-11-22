@@ -10,14 +10,16 @@ async fn http_defaults_and_explicit_overrides_apply_in_both_views() {
                 config.mcp.include_text_copy = default_copy;
             })
             .await;
-            let spec = fixture
-                .send(at_uri(
-                    "/v1/spec/openapi.json",
-                    request(Method::GET, Some(TOKEN_A), None, None),
-                ))
-                .await;
-            assert_eq!(spec.status(), StatusCode::OK);
+            let spec = spec_get(
+                fixture.app.clone(),
+                "/v1/spec/openapi.json",
+                "mcp-defaults-spec",
+                Some(TOKEN_A),
+            )
+            .await;
+            let status = spec.status();
             let spec = response_json(spec).await;
+            assert_eq!(status, StatusCode::OK, "{spec}");
             for path in ["/mcp", "/mcp/{service}"] {
                 let parameters = spec["paths"][path]["parameters"].as_array().unwrap();
                 for (name, expected) in [
