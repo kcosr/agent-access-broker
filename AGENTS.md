@@ -218,6 +218,17 @@ when presentation fails. Client validation errors withhold invalid content, keep
 known completion and do not replay an invocation. Provider content preferences
 use `preferred_output_format`; client defaults use `preferred_output_content_format`.
 
+MCP `includeTextCopy` defaults to true; false emits top-level `content: []`,
+retaining complete `structuredContent`, `isError` and `_meta` on every tool-result
+path. Keep readable messages represented in structured errors too. Construct
+results without allocating an omitted copy and count actual emitted wire bytes;
+preserve provider/body and resource-access caps. Never remove nested imported
+`result.upstreamMcp.content` or add client-detection fallback. HTTP owns this
+setting per admitted request, independently of session identity and discovery
+cursors; stdio owns `--include-text-copy` for the process. Keep strict composable
+HTTP query parsing and trusted-username admission audits. This is transport
+presentation, separate from output-content selection and tool arguments.
+
 ## Invocation admission and discovery
 
 Keep one FIFO rate queue per principal/service across tokens and transports,

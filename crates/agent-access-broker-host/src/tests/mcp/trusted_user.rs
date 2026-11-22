@@ -321,7 +321,7 @@ async fn trusted_user_content_preferences_preserve_valid_admission_and_audited_q
             ("/mcp", if relayed { "adf" } else { "markdown" }),
             ("/mcp/fake", if relayed { "storage" } else { "text" }),
         ] {
-            let uri = format!("{path}?preferredOutputContentFormat={format}");
+            let uri = format!("{path}?preferredOutputContentFormat={format}&includeTextCopy=false");
             let tool_call = |id| {
                 let mut message = call(id);
                 if path != "/mcp" {
@@ -353,8 +353,11 @@ async fn trusted_user_content_preferences_preserve_valid_admission_and_audited_q
             let response = fixture.send(valid).await;
             assert_eq!(response.status(), StatusCode::OK);
             let response = rpc_body(response).await;
-            assert_eq!(structured(&response)["decision"], "allow", "{response}");
-            assert_eq!(structured(&response)["result"]["principal"], "alice");
+            assert!(response.get("error").is_none(), "{response}");
+            let envelope = &response["result"]["structuredContent"];
+            assert_eq!(envelope["decision"], "allow", "{response}");
+            assert_eq!(envelope["result"]["principal"], "alice");
+            assert_eq!(response["result"]["content"], json!([]));
             completed += 1;
             assert_eq!(provider.executions.load(Ordering::SeqCst), completed);
 
@@ -366,6 +369,12 @@ async fn trusted_user_content_preferences_preserve_valid_admission_and_audited_q
                 "preferredOutputContentFormat=%74ext",
                 "preferredOutputContentFormat=native",
                 "unknown=query-private-marker",
+                "includeTextCopy=FALSE",
+                "includeTextCopy=false&includeTextCopy=true",
+                "%69ncludeTextCopy=false",
+                "includeTextCopy=%66alse",
+                "includeTextCopy=false&",
+                "includeTextCopy=false&preferredOutputContentFormat=",
             ] {
                 let id = format!("invalid-content-preference-{}", denied_ids.len());
                 let mut invalid = user_request(relayed, Some(&session), tool_call(11));

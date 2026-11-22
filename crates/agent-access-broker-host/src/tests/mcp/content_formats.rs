@@ -236,21 +236,230 @@ async fn http_mcp_preferences_are_per_request_with_exact_override_and_native_fal
     );
 }
 
+// No-copy assertions inspect structured content independently of the shared
+// default-mode helper, which deliberately requires an equivalent text mirror.
+fn tool_envelope(result: &Value) -> &Value {
+    assert!(result.get("error").is_none(), "{result}");
+    let value = &result["result"]["structuredContent"];
+    assert!(value.is_object(), "{result}");
+    value
+}
+
+#[tokio::test]
+async fn http_mcp_text_copy_is_per_request_and_composes_with_content_preferences() {
+    let provider = ContentProvider::default();
+    let fixture = Fixture::with_providers(|_| {}, vec![Arc::new(provider.clone())]).await;
+    let mut calls = 0;
+    for (base, name) in [("/mcp", "fake_echo"), ("/mcp/fake", "echo")] {
+        // Initialize with false; following requests independently choose their mode.
+        let session =
+            scoped::initialize(&fixture, &format!("{base}?includeTextCopy=false"), TOKEN_A).await;
+        for (index, query, has_copy, format) in [
+            (0, "?includeTextCopy=false", false, "text"),
+            (1, "", true, "text"),
+            (2, "?includeTextCopy=true", true, "text"),
+            (
+                3,
+                "?includeTextCopy=false&preferredOutputContentFormat=markdown",
+                false,
+                "markdown",
+            ),
+            (
+                4,
+                "?preferredOutputContentFormat=text&includeTextCopy=false",
+                false,
+                "text",
+            ),
+        ] {
+            let path = format!("{base}{query}");
+            let result = rpc(
+                &fixture,
+                &path,
+                &session,
+                10 + index,
+                "tools/call",
+                invoke(name, None),
+            )
+            .await;
+            assert_eq!(result["result"]["isError"], false, "{result}");
+            let envelope = tool_envelope(&result);
+            assert_eq!(
+                envelope["result"]["body"],
+                json!({"format":format,"value":"synthetic rich content"})
+            );
+            assert_eq!(
+                result["result"]["content"].as_array().unwrap().is_empty(),
+                !has_copy
+            );
+            if has_copy {
+                assert_eq!(
+                    serde_json::from_str::<Value>(
+                        result["result"]["content"][0]["text"].as_str().unwrap()
+                    )
+                    .unwrap(),
+                    *envelope
+                );
+            }
+            calls += 1;
+            assert_eq!(provider.executions.load(Ordering::SeqCst), calls);
+        }
+        let path = format!("{base}?includeTextCopy=false");
+        for (index, name, arguments, error) in [
+            (20, "services_list", json!({}), false),
+            (21, "services_describe", json!({"service":"fake"}), false),
+            (
+                22,
+                "actions_describe",
+                json!({"service":"fake","action":"echo"}),
+                false,
+            ),
+            (
+                23,
+                "resource_access_describe",
+                json!({"service":"fake"}),
+                false,
+            ),
+            (
+                24,
+                "services_describe",
+                json!({"service":"unavailable"}),
+                true,
+            ),
+            (25, "services_describe", json!({"unexpected":true}), true),
+            (26, name, json!({}), true),
+            (27, name, json!({"inputs":{},"includeTextCopy":false}), true),
+            (
+                28,
+                name,
+                json!({"inputs":{"project":"PRIVATE","message":"fixture"}}),
+                true,
+            ),
+        ] {
+            let result = rpc(
+                &fixture,
+                &path,
+                &session,
+                index,
+                "tools/call",
+                json!({"name":name,"arguments":arguments}),
+            )
+            .await;
+            assert_eq!(result["result"]["isError"], error, "{result}");
+            assert_eq!(result["result"]["content"], json!([]), "{result}");
+            assert!(
+                result["result"]["structuredContent"].is_object(),
+                "{result}"
+            );
+        }
+        assert_eq!(provider.executions.load(Ordering::SeqCst), calls);
+        // A protocol error stays a protocol error, with no synthetic tool result.
+        let unknown = rpc(
+            &fixture,
+            &path,
+            &session,
+            40,
+            "tools/call",
+            json!({"name":"missing_tool","arguments":{}}),
+        )
+        .await;
+        assert_eq!(unknown["error"]["code"], -32602);
+        assert!(unknown.get("result").is_none());
+        let original = rpc(&fixture, base, &session, 41, "tools/list", json!({})).await;
+        let without_copy = rpc(&fixture, &path, &session, 42, "tools/list", json!({})).await;
+        assert_eq!(original["result"], without_copy["result"]);
+    }
+}
+
+#[tokio::test]
+async fn http_mcp_no_text_copy_preserves_rate_charging_and_admission_errors() {
+    let fixture = Fixture::new(|config| fake_invocation_limit(config, 2)).await;
+    let session = fixture.initialize().await;
+    let path = "/mcp?includeTextCopy=false";
+    for id in 10..13 {
+        let helper = rpc(
+            &fixture,
+            path,
+            &session,
+            id,
+            "tools/call",
+            json!({"name":"services_list","arguments":{}}),
+        )
+        .await;
+        assert_eq!(helper["result"]["content"], json!([]));
+        assert_eq!(helper["result"]["isError"], false);
+    }
+    for id in [20, 21] {
+        let result = rpc(
+            &fixture,
+            path,
+            &session,
+            id,
+            "tools/call",
+            invoke("fake_echo", None),
+        )
+        .await;
+        assert_eq!(tool_envelope(&result)["decision"], "allow", "{result}");
+        assert_eq!(result["result"]["content"], json!([]));
+    }
+    let limited = rpc(
+        &fixture,
+        path,
+        &session,
+        22,
+        "tools/call",
+        invoke("fake_echo", None),
+    )
+    .await;
+    assert_eq!(limited["result"]["content"], json!([]));
+    assert_eq!(limited["result"]["isError"], true);
+    assert_eq!(tool_envelope(&limited)["reasonCode"], "rate_limited");
+    assert!(
+        tool_envelope(&limited)["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Retry after ")
+    );
+    let records = read_audit_records(&fixture.audit_path);
+    assert_eq!(
+        records
+            .iter()
+            .filter(|record| record["decision"] == "allow")
+            .count(),
+        2
+    );
+    assert_eq!(
+        records
+            .iter()
+            .filter(|record| record["reasonCode"] == "rate_limited")
+            .count(),
+        1
+    );
+}
+
 #[tokio::test]
 async fn http_mcp_query_preferences_use_one_literal_closed_grammar() {
     let fixture = Fixture::new(|_| {}).await;
     let session = fixture.initialize().await;
     for base in ["/mcp", "/mcp/fake"] {
-        for preference in ["markdown", "text", "adf", "storage"] {
+        for query in [
+            "preferredOutputContentFormat=markdown",
+            "preferredOutputContentFormat=text",
+            "preferredOutputContentFormat=adf",
+            "preferredOutputContentFormat=storage",
+            "includeTextCopy=true",
+            "includeTextCopy=false",
+            "includeTextCopy=false&preferredOutputContentFormat=text",
+            "preferredOutputContentFormat=markdown&includeTextCopy=true",
+        ] {
             let response = fixture.send(at(
-                &format!("{base}?preferredOutputContentFormat={preference}"),
+                &format!("{base}?{query}"),
                 request(Method::POST, Some(TOKEN_A), None, Some(json!({
                     "jsonrpc":"2.0","id":1,"method":"initialize","params":{
                         "protocolVersion":VERSION,"capabilities":{},"clientInfo":{"name":"literal-query-test","version":"1"}
                     }
                 }))),
             )).await;
-            assert_eq!(response.status(), StatusCode::OK, "{preference}");
+            assert_eq!(response.status(), StatusCode::OK, "{query}");
             let created = response.headers()["mcp-session-id"]
                 .to_str()
                 .unwrap()
@@ -281,6 +490,25 @@ async fn http_mcp_query_preferences_use_one_literal_closed_grammar() {
             "preferredOutputContentFormat=text;token=QUERY_SECRET",
             "preferredOutputContentFormat=text&token=QUERY_SECRET",
             "token=QUERY_SECRET",
+            "includeTextCopy",
+            "includeTextCopy=",
+            "includeTextCopy=True",
+            "includeTextCopy=FALSE",
+            "includeTextCopy=0",
+            "includeTextCopy=1",
+            "includeTextCopy=null",
+            "includetextcopy=false",
+            "%69ncludeTextCopy=false",
+            "includeTextCopy=%66alse",
+            "includeTextCopy=false+",
+            "includeTextCopy=false=",
+            "includeTextCopy=false&",
+            "&includeTextCopy=false",
+            "includeTextCopy=false&&preferredOutputContentFormat=text",
+            "includeTextCopy=false&includeTextCopy=false",
+            "includeTextCopy=false&includeTextCopy=true",
+            "preferredOutputContentFormat=text&includeTextCopy=false&preferredOutputContentFormat=text",
+            "includeTextCopy=false&unknown=QUERY_SECRET",
         ] {
             let rejected = fixture
                 .send(at(
@@ -298,9 +526,7 @@ async fn http_mcp_query_preferences_use_one_literal_closed_grammar() {
                 .await
                 .unwrap();
             assert!(!String::from_utf8_lossy(&body).contains("QUERY_SECRET"));
-            assert!(
-                String::from_utf8_lossy(&body).contains("Invalid MCP output content preference")
-            );
+            assert!(String::from_utf8_lossy(&body).contains("Invalid MCP query options"));
         }
     }
 }
@@ -327,6 +553,16 @@ async fn http_mcp_catalog_cursor_is_bound_to_the_request_preference() {
         )
         .await;
         assert!(same.get("error").is_none(), "{same}");
+        let without_copy = rpc(
+            &fixture,
+            &format!("{base}?includeTextCopy=false&preferredOutputContentFormat=text"),
+            &session,
+            53,
+            "tools/list",
+            json!({"cursor":cursor}),
+        )
+        .await;
+        assert_eq!(same["result"], without_copy["result"]);
         for path in [
             base.to_owned(),
             format!("{base}?preferredOutputContentFormat=markdown"),

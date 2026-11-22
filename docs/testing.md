@@ -760,6 +760,11 @@ The offline smoke harnesses live in `crates/agent-access/tests/`:
   The synthetic OAuth fixture's three action documents have separate projection
   and minimum-budget checks. Initialization tests keep the calling rule on the
   first physical line, including scoped and read-only connections.
+  Text-copy tests exercise the default/true and false modes on HTTP and stdio,
+  strict query/CLI parsing, composition with output-content preferences, helper
+  and error results, and exact serialized-size boundaries. Structured outcomes,
+  metadata and nested imported content must survive omission of the outer copy;
+  HTTP settings remain per request without changing discovery cursors.
   See [local MCP](mcp.md).
 
 They use in-process or stubbed components and require no upstream credentials.
@@ -1628,7 +1633,7 @@ between discovery and invocation, and disabling sources so optional bodies vanis
 Stdio exercises inline and saved responses; invalid successful selected bodies
 produce bounded `response_content_invalid` receipts without rejected data or replay.
 CLI/send writes that receipt on stderr and exits 5; MCP returns it as an error
-with structured content and the usual JSON text copy.
+with structured content and its text copy when enabled.
 
 Successful recovery-receipt coverage must mechanically match all 31 body-bearing
 native mutations: five Jira, ten Confluence and sixteen GitLab actions. Each case

@@ -954,7 +954,7 @@ There is no separate custom-field-count or aggregate custom-field byte limit.
 The complete upstream response and Broker result remain bounded by
 `limits.max_upstream_response_bytes` (default 512 MiB). HTTP MCP additionally
 uses `mcp.max_response_bytes` (default 16 MiB, configurable), counting structured
-content and its text copy; excess returns `mcp_response_too_large`. The local
+content and any emitted text copy; excess returns `mcp_response_too_large`. The local
 stdio MCP adapter has a 16 MiB Broker-JSON receipt cap. These are ceilings, not
 target response sizes. Custom-field audit metadata contains only
 `customFields: {count, unsupported, withheld}` counts, never names, values, or

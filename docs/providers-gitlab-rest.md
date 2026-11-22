@@ -1608,8 +1608,8 @@ content-representation hash: GitLab can convert text before hashing it, so this
 value is not a guaranteed raw-byte checksum.
 
 HTTP MCP supports these inline reads, including explicitly raised budgets. Its
-actual serialized response limit still applies to both text and structured
-result copies, including JSON escaping. CLI and stdio MCP
+actual serialized response limit applies to structured content and any emitted
+text copy, including JSON escaping. CLI and stdio MCP
 also retain their response limits. A file fitting `maxContentBytes` does not
 override a delivery or presentation limit.
 

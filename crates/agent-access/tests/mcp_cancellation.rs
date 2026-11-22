@@ -19,16 +19,21 @@ struct Client {
 
 impl Client {
     fn start(config: &Path) -> Self {
+        Self::start_with_text_copy(config, None)
+    }
+
+    fn start_with_text_copy(config: &Path, include_text_copy: Option<bool>) -> Self {
         let mut command = Command::new(env!("CARGO_BIN_EXE_agent-access"));
         for (name, _) in std::env::vars_os() {
             if name.to_string_lossy().starts_with("AGENT_ACCESS_") {
                 command.env_remove(name);
             }
         }
+        command.arg("--config").arg(config).args(["mcp", "serve"]);
+        if let Some(include_text_copy) = include_text_copy {
+            command.arg(format!("--include-text-copy={include_text_copy}"));
+        }
         let mut process = command
-            .arg("--config")
-            .arg(config)
-            .args(["mcp", "serve"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -148,6 +153,15 @@ fn config(directory: &Path, broker: &MockServer) -> std::path::PathBuf {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cancelled_call_releases_handler_without_retry_and_keeps_stdio_usable() {
+    cancellation_lifecycle(None).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancelled_call_without_text_copy_releases_handler_and_keeps_stdio_usable() {
+    cancellation_lifecycle(Some(false)).await;
+}
+
+async fn cancellation_lifecycle(include_text_copy: Option<bool>) {
     let directory = tempfile::tempdir().unwrap();
     let destination = directory.path().join("response.json");
     std::fs::write(&destination, b"keep existing response").unwrap();
@@ -158,7 +172,8 @@ async fn cancelled_call_releases_handler_without_retry_and_keeps_stdio_usable() 
         .expect(1)
         .mount(&broker)
         .await;
-    let mut client = Client::start(&config(directory.path(), &broker));
+    let mut client =
+        Client::start_with_text_copy(&config(directory.path(), &broker), include_text_copy);
     let original_entries = directory_entries(directory.path());
     let initialized = client
         .request(

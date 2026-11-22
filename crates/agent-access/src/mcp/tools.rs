@@ -86,12 +86,13 @@ pub(super) async fn call_tool(
     view: &McpView,
     name: &str,
     arguments: Map<String, Value>,
+    include_text_copy: bool,
 ) -> Result<CallToolResult> {
     // Detail has its own bounded control admission. Its authoritative readiness
     // and authenticated limits projection let this helper retain scoped-view
     // checks without an execution-capacity-dependent catalog round trip.
     if matches!(view, McpView::Service(_)) && name == "services_describe" {
-        return super::discovery::call(settings, view, name, arguments).await;
+        return super::discovery::call(settings, view, name, arguments, include_text_copy).await;
     }
     // Aggregate discovery keeps its ordinary broker authorization, including
     // permitted anonymous reads. Fixed helper names are reserved, so resolve
@@ -105,7 +106,14 @@ pub(super) async fn call_tool(
             STDIO_MAX_CATALOG_BYTES,
         )?;
         if let Some(ToolTarget::Helper(helper)) = helpers.resolve(name) {
-            return super::discovery::call(settings, view, helper.as_str(), arguments).await;
+            return super::discovery::call(
+                settings,
+                view,
+                helper.as_str(),
+                arguments,
+                include_text_copy,
+            )
+            .await;
         }
     }
     let catalog = fetch_catalog(settings).await?;
@@ -118,7 +126,14 @@ pub(super) async fn call_tool(
     let (selected_service, selected_action) =
         match registry.resolve(name).ok_or(UnknownToolError)? {
             ToolTarget::Helper(helper) => {
-                return super::discovery::call(settings, view, helper.as_str(), arguments).await;
+                return super::discovery::call(
+                    settings,
+                    view,
+                    helper.as_str(),
+                    arguments,
+                    include_text_copy,
+                )
+                .await;
             }
             ToolTarget::Action { service, action } => (service, action),
         };
@@ -285,7 +300,7 @@ pub(super) async fn call_tool(
                 .save_json(&value)?;
         }
     }
-    let mut result = envelope_result(status, value, is_error)?;
+    let mut result = envelope_result(status, value, is_error, include_text_copy)?;
     if !file_receipt && !action.sensitive_output_pointers.is_empty() {
         result["_meta"] =
             json!({"agent-access/sensitive-output-pointers":action.sensitive_output_pointers});
@@ -294,15 +309,23 @@ pub(super) async fn call_tool(
 }
 
 /// A tool result with the broker envelope (or file receipt) as structured
-/// content. The text repeats it as JSON, except for broker and upstream rate
-/// limits: their text is the broker's message, which names the wait, because
-/// agents often see only text.
-pub(super) fn envelope_result(status: u16, value: Value, is_error: bool) -> Result<Value> {
-    let text = match crate::rate_limit_message(status, &value) {
-        Some(message) if is_error => message.to_owned(),
-        _ => serde_json::to_string(&value)?,
+/// content. When enabled, the text repeats it as JSON, except for broker and
+/// upstream rate limits: their text is the broker's message, which names the wait.
+pub(super) fn envelope_result(
+    status: u16,
+    value: Value,
+    is_error: bool,
+    include_text_copy: bool,
+) -> Result<Value> {
+    let content = if include_text_copy {
+        let text = match crate::rate_limit_message(status, &value) {
+            Some(message) if is_error => message.to_owned(),
+            _ => serde_json::to_string(&value)?,
+        };
+        json!([{"type":"text","text":text}])
+    } else {
+        json!([])
     };
-    let content = json!([{"type":"text","text":text}]);
     Ok(json!({"content":content,"structuredContent":value,"isError":is_error}))
 }
 
@@ -728,6 +751,7 @@ mod tests {
                 &McpView::Aggregate,
                 &tool_name("jira-team", "issue.view"),
                 arguments.as_object().unwrap().clone(),
+                true,
             )
             .await
             .unwrap_err();
@@ -813,6 +837,7 @@ mod tests {
                     &view,
                     "services_describe",
                     json!({"service":"jira-team"}).as_object().unwrap().clone(),
+                    true,
                 )
                 .await
                 .unwrap(),
@@ -885,6 +910,7 @@ mod tests {
                     .as_object()
                     .unwrap()
                     .clone(),
+                true,
             )
             .await
             .unwrap_err();
@@ -904,6 +930,7 @@ mod tests {
                 .as_object()
                 .unwrap()
                 .clone(),
+            true,
         )
         .await
         .unwrap_err();
@@ -918,6 +945,7 @@ mod tests {
             &McpView::Service("jira-team".into()),
             "services_describe",
             json!({"service":"jira-team"}).as_object().unwrap().clone(),
+            true,
         )
         .await
         .unwrap();
@@ -1269,6 +1297,7 @@ mod tests {
                 .as_object()
                 .unwrap()
                 .clone(),
+            true,
         )
         .await
         .unwrap_err();
@@ -1299,9 +1328,15 @@ mod tests {
             .await;
         let mut anonymous = settings(&server);
         anonymous.token = None;
-        let result = call_tool(&anonymous, &McpView::Aggregate, "services_list", Map::new())
-            .await
-            .unwrap();
+        let result = call_tool(
+            &anonymous,
+            &McpView::Aggregate,
+            "services_list",
+            Map::new(),
+            true,
+        )
+        .await
+        .unwrap();
         let result = serde_json::to_value(result).unwrap();
         assert_eq!(result["isError"], false);
         assert_eq!(result["structuredContent"], json!({"services":[]}));
@@ -1321,7 +1356,7 @@ mod tests {
             .mount(&server)
             .await;
         for name in ["unknown".to_owned(), tool_name("jira-team", "issue.view")] {
-            let error = call_tool(&anonymous, &McpView::Aggregate, &name, Map::new())
+            let error = call_tool(&anonymous, &McpView::Aggregate, &name, Map::new(), true)
                 .await
                 .unwrap_err();
             assert_eq!(
@@ -1368,6 +1403,7 @@ mod tests {
                     .as_object()
                     .unwrap()
                     .clone(),
+                true,
             )
             .await
             .unwrap();
@@ -1392,6 +1428,7 @@ mod tests {
                     .as_object()
                     .unwrap()
                     .clone(),
+                true,
             )
             .await
             .unwrap_err();
@@ -1421,6 +1458,7 @@ mod tests {
             &McpView::Aggregate,
             "resource_access_describe",
             json!({"service":"confluence"}).as_object().unwrap().clone(),
+            true,
         )
         .await
         .unwrap();
@@ -1445,8 +1483,8 @@ mod tests {
         });
         Mock::given(method("GET"))
             .and(path("/v1/services/confluence/resource-access"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(result))
-            .expect(1)
+            .respond_with(ResponseTemplate::new(200).set_body_json(&result))
+            .expect(2)
             .mount(&server)
             .await;
         let result = call_tool(
@@ -1454,6 +1492,7 @@ mod tests {
             &McpView::Aggregate,
             "resource_access_describe",
             json!({"service":"confluence"}).as_object().unwrap().clone(),
+            true,
         )
         .await
         .unwrap();
@@ -1471,6 +1510,29 @@ mod tests {
                 .is_none()
         );
         assert!(serde_json::to_vec(&result).unwrap().len() < 1024);
+        let without_copy = call_tool(
+            &settings(&server),
+            &McpView::Aggregate,
+            "resource_access_describe",
+            json!({"service":"confluence"}).as_object().unwrap().clone(),
+            false,
+        )
+        .await
+        .unwrap();
+        let without_copy = serde_json::to_value(without_copy).unwrap();
+        assert_eq!(without_copy["isError"], false);
+        assert_eq!(without_copy["content"], json!([]));
+        assert_eq!(
+            without_copy["structuredContent"]["availability"]["message"]
+                .as_str()
+                .unwrap()
+                .len(),
+            8 * 1024 * 1024
+        );
+        assert!(
+            serde_json::to_vec(&without_copy).unwrap().len()
+                <= agent_access_core::RESOURCE_ACCESS_MAX_RESPONSE_BYTES
+        );
         server.verify().await;
     }
 
@@ -1518,6 +1580,7 @@ mod tests {
             &view,
             "services_list",
             json!({"outputPath":output}).as_object().unwrap().clone(),
+            true,
         )
         .await
         .unwrap();
@@ -1534,6 +1597,7 @@ mod tests {
                 .as_object()
                 .unwrap()
                 .clone(),
+            true,
         )
         .await
         .unwrap_err();
@@ -1546,6 +1610,7 @@ mod tests {
                 &unavailable,
                 "services_list",
                 json!({"outputPath":output}).as_object().unwrap().clone(),
+                true,
             )
             .await
             .unwrap_err();
@@ -1596,6 +1661,7 @@ mod tests {
                 .as_object()
                 .unwrap()
                 .clone(),
+            true,
         )
         .await
         .unwrap();
@@ -1662,6 +1728,7 @@ mod tests {
                 .as_object()
                 .unwrap()
                 .clone(),
+            true,
         )
         .await
         .unwrap();
@@ -1673,6 +1740,7 @@ mod tests {
             &McpView::Aggregate,
             "unknown",
             Map::new(),
+            true,
         )
         .await
         .unwrap_err();
@@ -1704,6 +1772,7 @@ mod tests {
                 .as_object()
                 .unwrap()
                 .clone(),
+            true,
         )
         .await
         .unwrap();
@@ -1758,6 +1827,7 @@ mod tests {
                 .as_object()
                 .unwrap()
                 .clone(),
+            true,
         )
         .await
         .unwrap_err();
@@ -1796,6 +1866,7 @@ mod tests {
                     .as_object()
                     .unwrap()
                     .clone(),
+                true,
             )
             .await;
             let receipt = if save_fails {
@@ -1853,6 +1924,7 @@ mod tests {
                         .as_object()
                         .unwrap()
                         .clone(),
+                    true,
                 )
                 .await
                 .unwrap_err();
@@ -1889,6 +1961,7 @@ mod tests {
                     .as_object()
                     .unwrap()
                     .clone(),
+                true,
             )
             .await;
             if status == 403 {
@@ -1930,7 +2003,7 @@ mod tests {
             let destination = temp.path().join("formatted.json");
             std::fs::write(&destination, "original").unwrap();
             let result = call_tool(&settings(&server), &McpView::Aggregate, &tool_name("jira-team", "issue.view"),
-                json!({"inputs":{"issue":"ABC-1"},"outputContentFormat":"markdown","outputPath":destination}).as_object().unwrap().clone()).await;
+                json!({"inputs":{"issue":"ABC-1"},"outputContentFormat":"markdown","outputPath":destination}).as_object().unwrap().clone(), true).await;
             if formatted["value"].is_string() {
                 let result = serde_json::to_value(result.unwrap()).unwrap();
                 assert_eq!(
@@ -1968,7 +2041,8 @@ mod tests {
                     json!({"inputs":{"issue":"ABC-1"},"outputPath":output})
                         .as_object()
                         .unwrap()
-                        .clone()
+                        .clone(),
+                    true
                 )
                 .await
                 .is_err()
@@ -2012,6 +2086,7 @@ mod tests {
                 &McpView::Aggregate,
                 &tool_name("jira-team", "issue.view"),
                 arguments.as_object().unwrap().clone(),
+                true,
             )
             .await
             .unwrap_err()
@@ -2026,6 +2101,7 @@ mod tests {
             &McpView::Aggregate,
             &tool_name("jira-team", "issue.view"),
             json!({"outputPath":output}).as_object().unwrap().clone(),
+            true,
         )
         .await
         .unwrap_err();
@@ -2086,7 +2162,7 @@ mod tests {
                         .insert_header("Retry-After", "12")
                         .set_body_json(&envelope),
                 )
-                .expect(1)
+                .expect(2)
                 .mount(&server)
                 .await;
             let temp = tempfile::tempdir().unwrap();
@@ -2096,28 +2172,36 @@ mod tests {
             if output {
                 arguments["outputPath"] = json!(destination);
             }
-            let result = call_tool(
-                &settings(&server),
-                &McpView::Aggregate,
-                &tool_name("jira-team", "issue.view"),
-                arguments.as_object().unwrap().clone(),
-            )
-            .await
-            .unwrap();
-            let result = serde_json::to_value(result).unwrap();
-            assert_eq!(result["isError"], true, "{reason_code}");
-            assert_eq!(result["structuredContent"], envelope, "{reason_code}");
-            let text = if reason_code == "concurrency_limited" {
-                serde_json::to_string(&envelope).unwrap()
-            } else {
-                message.to_owned()
-            };
-            assert_eq!(
-                result["content"],
-                json!([{"type":"text","text":text}]),
-                "{reason_code}"
-            );
-            assert_eq!(std::fs::read_to_string(&destination).unwrap(), "original");
+            for include_text_copy in [true, false] {
+                let result = call_tool(
+                    &settings(&server),
+                    &McpView::Aggregate,
+                    &tool_name("jira-team", "issue.view"),
+                    arguments.as_object().unwrap().clone(),
+                    include_text_copy,
+                )
+                .await
+                .unwrap();
+                let result = serde_json::to_value(result).unwrap();
+                assert_eq!(result["isError"], true, "{reason_code}");
+                assert_eq!(result["structuredContent"], envelope, "{reason_code}");
+                let text = if reason_code == "concurrency_limited" {
+                    serde_json::to_string(&envelope).unwrap()
+                } else {
+                    message.to_owned()
+                };
+                assert_eq!(
+                    result["content"],
+                    if include_text_copy {
+                        json!([{"type":"text","text":text}])
+                    } else {
+                        json!([])
+                    },
+                    "{reason_code}"
+                );
+                assert_eq!(std::fs::read_to_string(&destination).unwrap(), "original");
+            }
+            server.verify().await;
         }
     }
 
@@ -2147,6 +2231,7 @@ mod tests {
                     .as_object()
                     .unwrap()
                     .clone(),
+                true,
             )
             .await
             .unwrap();
@@ -2201,6 +2286,7 @@ mod tests {
             &McpView::Aggregate,
             &tool_name("jira-team", "issue.view"),
             json!({"inputs":{}}).as_object().unwrap().clone(),
+            true,
         )
         .await
         .unwrap_err();
@@ -2250,6 +2336,7 @@ mod tests {
                 .as_object()
                 .unwrap()
                 .clone(),
+            true,
         )
         .await;
         assert!(result.is_err());
@@ -2291,6 +2378,7 @@ mod tests {
                 .as_object()
                 .unwrap()
                 .clone(),
+            true,
         )
         .await
         .unwrap();
@@ -2348,13 +2436,14 @@ mod tests {
                 .as_object()
                 .unwrap()
                 .clone(),
+            true,
         )
         .await
         .unwrap_err();
         let failure = error
             .downcast_ref::<crate::output::LocalOutputFailure>()
             .unwrap();
-        let result = envelope_result(200, failure.details.clone(), true).unwrap();
+        let result = envelope_result(200, failure.details.clone(), true, true).unwrap();
         assert_eq!(result["isError"], true);
         assert_eq!(
             result["structuredContent"]["operationStatus"],
@@ -2443,7 +2532,7 @@ mod tests {
                 .as_object()
                 .unwrap()
                 .clone(),
-        )
+         true)
         .await
         .unwrap();
         let result = serde_json::to_value(result).unwrap();
@@ -2541,6 +2630,7 @@ mod tests {
                     .as_object()
                     .unwrap()
                     .clone(),
+                true,
             )
             .await
             .unwrap();

@@ -29,41 +29,86 @@ pub(super) fn serialize<T: Serialize>(value: &T, limit: usize) -> Result<Vec<u8>
     serde_json::to_writer(&mut writer, value).map_err(|_| ())?;
     Ok(writer.bytes)
 }
-pub(super) fn result(value: Value, error: bool, limit: usize) -> Result<CallToolResult, ()> {
-    // The single value itself is checked before the SDK creates its text copy.
-    serialize(&value, limit)?;
-    let result = if error {
-        CallToolResult::structured_error(value)
+/// The only constructor for downstream tool results. Every text block is a
+/// representation of data retained in structured content, including errors.
+fn tool_result(
+    value: Value,
+    error: bool,
+    include_text_copy: bool,
+    text_override: Option<String>,
+) -> CallToolResult {
+    let mut result = if error {
+        CallToolResult::error(Vec::new())
     } else {
-        CallToolResult::structured(value)
+        CallToolResult::success(Vec::new())
     };
+    if include_text_copy {
+        result.content.push(rmcp::model::ContentBlock::text(
+            text_override.unwrap_or_else(|| value.to_string()),
+        ));
+    }
+    result.structured_content = Some(value);
+    result
+}
+fn bounded_result(
+    value: Value,
+    error: bool,
+    limit: usize,
+    include_text_copy: bool,
+    text_override: Option<String>,
+) -> Result<CallToolResult, ()> {
+    // Retain the source cap, then count the representation actually delivered.
+    serialize(&value, limit)?;
+    let result = tool_result(value, error, include_text_copy, text_override);
     serialize(&result, limit.saturating_sub(WIRE_RESERVE))?;
     Ok(result)
 }
+pub(super) fn result(
+    value: Value,
+    error: bool,
+    limit: usize,
+    include_text_copy: bool,
+) -> Result<CallToolResult, ()> {
+    bounded_result(value, error, limit, include_text_copy, None)
+}
 /// Inspection failures are standard Broker errors, not partial resource lists.
-pub(super) fn resource_access_too_complex() -> CallToolResult {
-    CallToolResult::structured_error(json!({
-        "decision":"error", "reasonCode":"resource_access_too_complex", "result":null,
-        "error":{"message":"Resource access response exceeds the result size limit."}
-    }))
+pub(super) fn resource_access_too_complex(include_text_copy: bool) -> CallToolResult {
+    tool_result(
+        json!({
+            "decision":"error", "reasonCode":"resource_access_too_complex", "result":null,
+            "error":{"message":"Resource access response exceeds the result size limit."}
+        }),
+        true,
+        include_text_copy,
+        None,
+    )
 }
 
-/// Preflight the structured value and its escaped text copy before the SDK
-/// allocates that copy. The final serializer still checks the complete wrapper.
-pub(super) fn resource_access_result(value: Value, limit: usize) -> CallToolResult {
+/// Preflight the structured value and optional escaped text copy before
+/// allocating that copy. The final serializer still checks the complete wrapper.
+pub(super) fn resource_access_result(
+    value: Value,
+    limit: usize,
+    include_text_copy: bool,
+) -> CallToolResult {
     struct Counter {
         count: usize,
         maximum: usize,
+        include_text_copy: bool,
     }
     impl Write for Counter {
         fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-            let escapes = bytes
-                .iter()
-                .filter(|byte| matches!(**byte, b'"' | b'\\'))
-                .count();
+            let escapes = if self.include_text_copy {
+                bytes
+                    .iter()
+                    .filter(|byte| matches!(**byte, b'"' | b'\\'))
+                    .count()
+            } else {
+                0
+            };
             self.count = bytes
                 .len()
-                .checked_mul(2)
+                .checked_mul(if self.include_text_copy { 2 } else { 1 })
                 .and_then(|size| size.checked_add(escapes))
                 .and_then(|size| self.count.checked_add(size))
                 .filter(|size| *size <= self.maximum)
@@ -74,23 +119,28 @@ pub(super) fn resource_access_result(value: Value, limit: usize) -> CallToolResu
             Ok(())
         }
     }
-    // `null` contributes four bytes in both copies; the quote pair enclosing
-    // the text, resultType and any future SDK wrapper fields stay in overhead.
-    let overhead = serialize(&CallToolResult::structured(Value::Null), 1024)
-        .expect("fixed MCP wrapper fits")
-        .len()
-        - 8;
+    // Subtract the placeholder's bytes once per represented copy. Quotes around
+    // text, resultType and any future SDK wrapper fields remain in overhead.
+    let overhead = serialize(
+        &tool_result(Value::Null, false, include_text_copy, None),
+        1024,
+    )
+    .expect("fixed MCP wrapper fits")
+    .len()
+        - if include_text_copy { 8 } else { 4 };
     let maximum = limit
         .min(agent_access_core::RESOURCE_ACCESS_MAX_RESPONSE_BYTES)
         .saturating_sub(WIRE_RESERVE);
     let mut counter = Counter {
         count: overhead,
         maximum,
+        include_text_copy,
     };
     if overhead > maximum || serde_json::to_writer(&mut counter, &value).is_err() {
-        return resource_access_too_complex();
+        return resource_access_too_complex(include_text_copy);
     }
-    result(value, false, limit).unwrap_or_else(|_| resource_access_too_complex())
+    result(value, false, limit, include_text_copy)
+        .unwrap_or_else(|_| resource_access_too_complex(include_text_copy))
 }
 
 /// The Broker's message for a `rate_limited` or `upstream_rate_limited`
@@ -108,35 +158,32 @@ fn rate_limit_message(envelope: &Value) -> Option<String> {
         .filter(|message| !message.trim().is_empty())
         .map(str::to_owned)
 }
-/// Replaces an error result's text copy with the rate-limit message, keeping
-/// the envelope, including `reasonCode` and the structured retry `result`, as
-/// structured content.
-fn with_rate_limit_text(mut result: CallToolResult, message: Option<String>) -> CallToolResult {
-    if let Some(message) = message
-        && result.is_error == Some(true)
-    {
-        result.content = vec![rmcp::model::ContentBlock::text(message)];
-    }
-    result
+/// Tool error for a request the Broker refused before dispatch. Rate-limited
+/// errors use their complete message for the optional text representation.
+pub(super) fn admission_failure(
+    envelope: Value,
+    limit: usize,
+    include_text_copy: bool,
+) -> Result<CallToolResult, ()> {
+    let message = include_text_copy
+        .then(|| rate_limit_message(&envelope))
+        .flatten();
+    bounded_result(envelope, true, limit, include_text_copy, message)
 }
-/// Tool error for a request the Broker refused before dispatch. A
-/// `rate_limited` or `upstream_rate_limited` refusal carries its complete
-/// message as the text content.
-pub(super) fn admission_failure(envelope: Value, limit: usize) -> Result<CallToolResult, ()> {
-    let message = rate_limit_message(&envelope);
-    Ok(with_rate_limit_text(
-        result(envelope, true, limit)?,
-        message,
-    ))
-}
-pub(super) fn message(message: &str) -> CallToolResult {
-    CallToolResult::structured_error(json!({"error":{"code":"mcp_tool_error","message":message}}))
+pub(super) fn message(message: &str, include_text_copy: bool) -> CallToolResult {
+    tool_result(
+        json!({"error":{"code":"mcp_tool_error","message":message}}),
+        true,
+        include_text_copy,
+        None,
+    )
 }
 pub(super) fn broker(
     response: BrokerResponse<Value>,
     control: &InvocationControl,
     limit: usize,
     sensitive: &[String],
+    include_text_copy: bool,
 ) -> CallToolResult {
     let error = response.status >= 400
         || response.envelope.error.is_some()
@@ -145,10 +192,10 @@ pub(super) fn broker(
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .and_then(|value| {
-            let message = rate_limit_message(&value);
-            result(value, error, limit)
-                .ok()
-                .map(|result| with_rate_limit_text(result, message))
+            let message = (error && include_text_copy)
+                .then(|| rate_limit_message(&value))
+                .flatten();
+            bounded_result(value, error, limit, include_text_copy, message).ok()
         });
     if let Some(mut normal) = normal {
         if !sensitive.is_empty() {
@@ -182,13 +229,18 @@ pub(super) fn broker(
     }
     // Only fixed-size/status metadata is copied. Never export arbitrary result
     // locators, error strings or deliberately issued credentials in this path.
-    CallToolResult::structured_error(json!({
-        "error":{"code":"mcp_response_too_large","message":"Execution output could not be delivered within the MCP response limit. Do not repeat the operation to recover output."},
-        "agentRequestId":response.envelope.agent_request_id,"brokerRequestId":response.envelope.broker_request_id,
-        "service":response.envelope.service,"action":response.envelope.action,"brokerOutcome":outcome,
-        "execution":{"dispatched":control.dispatched(),"completion":if control.completed(){"completed"}else if control.dispatched(){"unknown"}else{"not_started"}},
-        "resultAvailable":false,"retrySafe":false
-    }))
+    tool_result(
+        json!({
+            "error":{"code":"mcp_response_too_large","message":"Execution output could not be delivered within the MCP response limit. Do not repeat the operation to recover output."},
+            "agentRequestId":response.envelope.agent_request_id,"brokerRequestId":response.envelope.broker_request_id,
+            "service":response.envelope.service,"action":response.envelope.action,"brokerOutcome":outcome,
+            "execution":{"dispatched":control.dispatched(),"completion":if control.completed(){"completed"}else if control.dispatched(){"unknown"}else{"not_started"}},
+            "resultAvailable":false,"retrySafe":false
+        }),
+        true,
+        include_text_copy,
+        None,
+    )
 }
 
 #[cfg(test)]
@@ -203,10 +255,10 @@ mod tests {
         ]});
         let expected = CallToolResult::structured(value.clone());
         let exact = serde_json::to_vec(&expected).unwrap().len() + WIRE_RESERVE;
-        let result = resource_access_result(value.clone(), exact);
+        let result = resource_access_result(value.clone(), exact, true);
         assert_eq!(result.is_error, Some(false));
         assert_eq!(result.structured_content, Some(value.clone()));
-        let result = resource_access_result(value, exact - 1);
+        let result = resource_access_result(value, exact - 1, true);
         assert_eq!(result.is_error, Some(true));
         let failure = result.structured_content.unwrap();
         assert_eq!(failure["decision"], "error");
@@ -224,12 +276,12 @@ mod tests {
             "label":"DOC_SENTINEL", "inputs":{"body":"\\\"".repeat(2000), "lines":"one\ntwo"}
         }]}});
         let one = serialize(&value, 64 * 1024).unwrap().len();
-        assert!(result(value.clone(), false, one + WIRE_RESERVE).is_err());
+        assert!(result(value.clone(), false, one + WIRE_RESERVE, true).is_err());
         let encoded = CallToolResult::structured(value.clone());
         let exact = serde_json::to_vec(&encoded).unwrap().len() + WIRE_RESERVE;
         assert!(exact > one + WIRE_RESERVE);
-        assert!(result(value.clone(), false, exact - 1).is_err());
-        let result = result(value.clone(), false, exact).unwrap();
+        assert!(result(value.clone(), false, exact - 1, true).is_err());
+        let result = result(value.clone(), false, exact, true).unwrap();
         assert_eq!(result.structured_content, Some(value.clone()));
         let wire = serde_json::to_value(result).unwrap();
         assert_eq!(
@@ -237,6 +289,83 @@ mod tests {
             value
         );
     }
+    #[test]
+    fn no_text_copy_preserves_nested_content_and_counts_only_the_emitted_wrapper() {
+        let value = json!({"result":{"upstreamMcp":{
+            "content":[{"type":"text","text":"nested upstream \\\" content"}],
+            "structuredContent":{"body":"界\n\\\"".repeat(1000)}
+        }}});
+        let encoded = tool_result(value.clone(), false, false, None);
+        let exact = serde_json::to_vec(&encoded).unwrap().len() + WIRE_RESERVE;
+        assert!(result(value.clone(), false, exact, true).is_err());
+        assert!(result(value.clone(), false, exact - 1, false).is_err());
+        let result = result(value.clone(), false, exact, false).unwrap();
+        assert!(result.content.is_empty());
+        assert_eq!(result.structured_content, Some(value));
+        assert_eq!(result.is_error, Some(false));
+    }
+
+    #[test]
+    fn no_text_copy_resource_access_uses_actual_wire_size_and_retains_its_own_cap() {
+        let value = json!({"access":[{"selector":{"value":"界\n\\\"".repeat(1000)}}]});
+        let exact = serde_json::to_vec(&tool_result(value.clone(), false, false, None))
+            .unwrap()
+            .len()
+            + WIRE_RESERVE;
+        let result = resource_access_result(value.clone(), exact, false);
+        assert!(result.content.is_empty());
+        assert_eq!(result.is_error, Some(false));
+        assert_eq!(result.structured_content, Some(value.clone()));
+        for (limit, include_text_copy) in [(exact - 1, false), (exact, true)] {
+            let result = resource_access_result(value.clone(), limit, include_text_copy);
+            assert_eq!(result.is_error, Some(true));
+            assert_eq!(result.content.is_empty(), !include_text_copy);
+            assert_eq!(
+                result.structured_content.unwrap()["reasonCode"],
+                "resource_access_too_complex"
+            );
+        }
+        let result = resource_access_result(
+            json!({"access":"x".repeat(agent_access_core::RESOURCE_ACCESS_MAX_RESPONSE_BYTES)}),
+            agent_access_core::RESOURCE_ACCESS_MAX_RESPONSE_BYTES * 2,
+            false,
+        );
+        assert!(result.content.is_empty());
+        assert_eq!(
+            result.structured_content.unwrap()["reasonCode"],
+            "resource_access_too_complex"
+        );
+    }
+
+    #[test]
+    fn rate_limit_budget_counts_the_selected_text_without_constructing_a_json_copy() {
+        for reason in ["rate_limited", "upstream_rate_limited"] {
+            let envelope = json!({"reasonCode":reason,"error":{"message":"Retry later."},"result":{"details":"x".repeat(4000)}});
+            for include_text_copy in [true, false] {
+                let expected = tool_result(
+                    envelope.clone(),
+                    true,
+                    include_text_copy,
+                    Some("Retry later.".into()),
+                );
+                let exact = serde_json::to_vec(&expected).unwrap().len() + WIRE_RESERVE;
+                let result = admission_failure(envelope.clone(), exact, include_text_copy).unwrap();
+                assert_eq!(
+                    serde_json::to_value(result).unwrap(),
+                    serde_json::to_value(expected).unwrap()
+                );
+                assert!(admission_failure(envelope.clone(), exact - 1, include_text_copy).is_err());
+            }
+        }
+        let result = message("Complete tool failure message", false);
+        assert!(result.content.is_empty());
+        assert_eq!(result.is_error, Some(true));
+        assert_eq!(
+            result.structured_content.unwrap()["error"]["message"],
+            "Complete tool failure message"
+        );
+    }
+
     #[test]
     fn writer_stops_before_allocating_excess() {
         assert!(serialize(&"x".repeat(100_000), 32).is_err());
@@ -292,7 +421,7 @@ mod tests {
                         .action_detail("oauth_stub", &action.action)
                         .unwrap();
                     assert!(detail["mcpTool"].get("documentation").is_none());
-                    let response = result(detail.clone(), false, 65_536).unwrap();
+                    let response = result(detail.clone(), false, 65_536, true).unwrap();
                     assert_eq!(response.structured_content.as_ref(), Some(&detail));
                     assert_eq!(
                         serde_json::from_str::<Value>(&text(&response)).unwrap(),
@@ -450,7 +579,19 @@ upload_spool_dir={spool:?}
                 &control,
                 16_384,
                 &["/result/issuedToken".into()],
+                true,
             );
+            let without_copy = broker(
+                response.clone(),
+                &control,
+                16_384,
+                &["/result/issuedToken".into()],
+                false,
+            );
+            assert!(without_copy.content.is_empty());
+            assert_eq!(without_copy.structured_content, result.structured_content);
+            assert_eq!(without_copy.is_error, result.is_error);
+            assert_eq!(without_copy.meta, result.meta);
             assert_eq!(result.is_error, Some(true));
             let value = result.structured_content.as_ref().unwrap();
             assert_eq!(value["error"]["code"], "mcp_response_too_large");
@@ -489,7 +630,7 @@ upload_spool_dir={spool:?}
                 "error": {"message": "fake is rate limiting requests. Retry after 7s (at 2026-09-25T14:03:07Z)."},
                 "result": {"limitScope": "upstream", "service": "fake", "retryAfterSeconds": 7},
             });
-            let result = admission_failure(envelope.clone(), 64 * 1024).unwrap();
+            let result = admission_failure(envelope.clone(), 64 * 1024, true).unwrap();
             assert_eq!(result.is_error, Some(true));
             assert_eq!(
                 text(&result),
@@ -498,7 +639,7 @@ upload_spool_dir={spool:?}
             assert_eq!(result.structured_content.as_ref(), Some(&envelope));
         }
         let other = json!({"reasonCode": "concurrency_limited", "error": {"message": "busy"}});
-        let result = admission_failure(other.clone(), 64 * 1024).unwrap();
+        let result = admission_failure(other.clone(), 64 * 1024, true).unwrap();
         assert_eq!(text(&result), serde_json::to_string(&other).unwrap());
     }
     #[tokio::test]
@@ -516,9 +657,13 @@ upload_spool_dir={spool:?}
                 message: message.into(),
             });
             response.envelope.result = Some(json!({"limitScope": "upstream", "service": "fake"}));
-            let result = broker(response.clone(), &control, 64 * 1024, &[]);
+            let result = broker(response.clone(), &control, 64 * 1024, &[], true);
             assert_eq!(result.is_error, Some(true));
             assert_eq!(text(&result), message);
+            let without_copy = broker(response.clone(), &control, 64 * 1024, &[], false);
+            assert!(without_copy.content.is_empty());
+            assert_eq!(without_copy.structured_content, result.structured_content);
+            assert_eq!(without_copy.is_error, result.is_error);
             let value = result.structured_content.as_ref().unwrap();
             assert_eq!(value["reasonCode"], reason.as_str());
             assert_eq!(value["error"]["message"], message);
@@ -528,18 +673,53 @@ upload_spool_dir={spool:?}
         response.status = 502;
         response.envelope.reason_code =
             Some(agent_access_provider::ReasonCode::UpstreamFailed.into());
-        let result = broker(response, &control, 64 * 1024, &[]);
+        let result = broker(response, &control, 64 * 1024, &[], true);
         assert_eq!(
             serde_json::from_str::<Value>(&text(&result)).unwrap(),
             *result.structured_content.as_ref().unwrap()
         );
     }
     #[tokio::test]
+    async fn no_text_copy_retains_result_bearing_errors_and_counts_sensitive_metadata() {
+        let (mut response, control) = outcome(false).await;
+        response.status = 502;
+        response.envelope.decision = agent_access_provider::Decision::Error;
+        response.envelope.reason_code =
+            Some(agent_access_provider::ReasonCode::MutationVerificationFailed.into());
+        response.envelope.result =
+            Some(json!({"mutationStatus":"applied_unverified","body":"bounded original result"}));
+        let pointers = ["/result/body".to_owned()];
+        let mirrored = broker(response.clone(), &control, 64 * 1024, &pointers, true);
+        let without_copy = broker(response.clone(), &control, 64 * 1024, &pointers, false);
+        assert!(without_copy.content.is_empty());
+        assert_eq!(without_copy.structured_content, mirrored.structured_content);
+        assert_eq!(without_copy.is_error, Some(true));
+        assert_eq!(without_copy.meta, mirrored.meta);
+        assert!(without_copy.meta.is_some());
+        let exact = serde_json::to_vec(&without_copy).unwrap().len() + WIRE_RESERVE;
+        assert_eq!(
+            broker(response.clone(), &control, exact, &pointers, false).structured_content,
+            without_copy.structured_content,
+        );
+        let overflow = broker(response, &control, exact - 1, &pointers, false);
+        assert!(overflow.content.is_empty());
+        let value = overflow.structured_content.unwrap();
+        assert_eq!(value["error"]["code"], "mcp_response_too_large");
+        assert_eq!(
+            value["brokerOutcome"]["mutationStatus"],
+            "applied_unverified"
+        );
+    }
+
+    #[tokio::test]
     async fn oversized_unknown_outcome_does_not_infer_application_or_completion() {
         let (mut response, control) = outcome(true).await;
         response.envelope.result =
             Some(json!({"mutationStatus":"unrecognized-private-state", "body":"x".repeat(32_000)}));
-        let result = broker(response, &control, 16_384, &[]);
+        let result = broker(response.clone(), &control, 16_384, &[], true);
+        let without_copy = broker(response, &control, 16_384, &[], false);
+        assert!(without_copy.content.is_empty());
+        assert_eq!(without_copy.structured_content, result.structured_content);
         let value = result.structured_content.unwrap();
         assert_eq!(
             value["execution"],
