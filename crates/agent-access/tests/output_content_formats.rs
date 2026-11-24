@@ -234,6 +234,11 @@ async fn invalid_successful_content_produces_bounded_receipt_without_replay_or_f
             let output = cmd.output().unwrap();
             assert_exit(&output, 5);
             assert!(output.stdout.is_empty());
+            assert!(output.stderr.ends_with(b"\n"));
+            assert_eq!(
+                output.stderr.iter().filter(|&&byte| byte == b'\n').count(),
+                1
+            );
             let receipt: Value = serde_json::from_slice(&output.stderr).unwrap();
             assert_eq!(receipt["reasonCode"], "response_content_invalid");
             assert_eq!(receipt["operationStatus"], "succeeded");
