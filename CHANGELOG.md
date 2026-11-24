@@ -556,6 +556,7 @@ All notable changes to this project are documented in this file.
   `outputPath` and `send` metadata files. Saved JSON sizes and hashes reflect
   the new bytes. Raw downloads and whitespace inside strings are preserved;
   use `jq .` for an indented view.
+  ([#125](https://github.com/kcosr/agent-access-broker/pull/125))
 
 - **Confluence page writes use the v2 API and validate typed placement.**
   `page.update` accepts `baseVersion` from 1 through 2147483646; a measured stale
