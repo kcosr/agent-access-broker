@@ -136,8 +136,12 @@ agent-access invoke SERVICE.ACTION --input-file inputs.json --output result.json
 
 For JSON responses, `--output PATH` saves the successful representation and
 returns a compact receipt; omit it or use `--output -` for normal stdout.
+CLI JSON responses, receipts and structured errors use compact JSON with a
+trailing newline on stdout, stderr and in files. String whitespace is preserved;
+use `jq .` for an indented view.
 Catalog-declared downloads require `--output`; a file receives raw bytes, and
 `--output -` verifies the transfer before writing bytes alone to stdout.
+Download bytes remain unchanged even for JSON content.
 Relative paths are allowed and are never sent to the Broker. Requesting an
 output path does not turn a bounded read into a download.
 

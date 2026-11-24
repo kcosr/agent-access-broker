@@ -232,6 +232,13 @@ actions and exposes typed wrappers for supported services.
 
 ## Output content contracts
 
+CLI-generated JSON uses compact serialization plus one trailing newline on
+stdout, stderr and local files, including stdio MCP `outputPath` and `send`
+metadata files. Preserve string values and compute receipts from the exact
+written bytes. Keep raw downloads byte-for-byte, including JSON downloads,
+and retain plain-text status/diagnostic output. Do not add a formatting setting;
+users can use `jq .` for an indented view.
+
 Ordinary invocation results stay JSON. Return one selected `{format,value}` at
 each declared rich-text field; retain metadata, absence/null rules and binary
 contracts. Exact `outputContentFormat` is strict. Resolve a soft preference from
@@ -1534,8 +1541,9 @@ authority to a new draft destination.
 
 Command downloads declare only `download: true`, with fixed base64 in the
 `agent-access-command/1` response and an explicit operator `max_download_bytes`;
-absence disables the capability. Keep ordinary JSON persisted bytes/hashes
-unchanged. Validate the flag through preview, acceptance, load and build; refresh
+absence disables the capability. Ordinary JSON outputs use the shared compact
+serialization contract above; raw downloads retain their exact bytes and hashes.
+Validate the flag through preview, acceptance, load and build; refresh
 quarantines output-kind changes. The output schema describes bounded `result`
 metadata only. Keep decoding in the command adapter, with checked decoded and
 envelope limits, and publish computed size/hash at the result root.

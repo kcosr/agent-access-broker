@@ -8,6 +8,7 @@ use agent_access_cloudbees_ci::CLOUDBEES_CI_JOB_RESOURCE;
 use agent_access_provider::RESULT_METADATA_HEADER;
 use base64::Engine;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::{
     io::{BufRead, BufReader, Write},
     process::{Child, ChildStdin, Command, Stdio},
@@ -20,6 +21,24 @@ use wiremock::{
 const JOB: &str = "payments/build-api";
 const ARTIFACT: &str = "reports/tests.xml";
 const ARTIFACT_BYTES: &[u8] = b"<testsuite tests=\"1\"/>";
+
+fn json_line(bytes: &[u8]) -> Value {
+    assert_eq!(bytes.last(), Some(&b'\n'), "JSON must end with a newline");
+    assert_eq!(
+        bytes.iter().filter(|&&byte| byte == b'\n').count(),
+        1,
+        "JSON must occupy one line"
+    );
+    serde_json::from_slice(bytes).unwrap()
+}
+
+fn assert_receipt_bytes(receipt: &Value, bytes: &[u8]) {
+    assert_eq!(receipt["output"]["size"], bytes.len() as u64);
+    assert_eq!(
+        receipt["output"]["sha256"],
+        format!("{:x}", Sha256::digest(bytes))
+    );
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn generic_read_file_output_preserves_bounds_permissions_and_existing_destinations() {
@@ -75,15 +94,15 @@ async fn generic_read_file_output_preserves_bounds_permissions_and_existing_dest
         std::fs::write(&destination, b"old contents").unwrap();
         let result = run(&args);
         assert_success("save read", &result);
-        let receipt: Value = serde_json::from_slice(&result.stdout).unwrap();
+        let receipt = json_line(&result.stdout);
         assert!(
             receipt.get("result").is_none(),
             "receipt repeats content: {receipt}"
         );
         assert_eq!(receipt["output"]["path"], destination.to_str().unwrap());
         let bytes = std::fs::read(&destination).unwrap();
-        assert_eq!(receipt["output"]["size"], bytes.len() as u64);
-        let saved: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_receipt_bytes(&receipt, &bytes);
+        let saved = json_line(&bytes);
         assert_eq!(saved["decision"], "allow");
         assert_eq!(saved["result"]["text"], "partial\n");
         assert_eq!(saved["result"]["sourceEnd"], 8);
@@ -98,7 +117,7 @@ async fn generic_read_file_output_preserves_bounds_permissions_and_existing_dest
         "-",
     ]);
     assert_success("stdout read", &stdout);
-    let value: Value = serde_json::from_slice(&stdout.stdout).unwrap();
+    let value = json_line(&stdout.stdout);
     assert_eq!(value["result"]["text"], "partial\n");
     assert!(value.get("output").is_none());
     let mut request_without_sink: Value = serde_json::from_str(&request).unwrap();
@@ -140,7 +159,9 @@ async fn generic_read_file_output_preserves_bounds_permissions_and_existing_dest
     let receipt = &result["result"]["structuredContent"];
     assert!(receipt.get("result").is_none());
     assert_eq!(receipt["output"]["path"], destination.to_str().unwrap());
-    let saved: Value = serde_json::from_slice(&std::fs::read(&destination).unwrap()).unwrap();
+    let bytes = std::fs::read(&destination).unwrap();
+    assert_receipt_bytes(receipt, &bytes);
+    let saved = json_line(&bytes);
     assert_eq!(saved["result"]["text"], "partial\n");
     assert_eq!(saved["result"]["reachedEnd"], true);
     std::fs::write(&destination, b"keep this file").unwrap();
@@ -219,7 +240,7 @@ async fn generic_read_file_output_preserves_bounds_permissions_and_existing_dest
         spec_path.to_str().unwrap(),
     ]);
     assert_success("offline spec output", &spec);
-    let schema: Value = serde_json::from_slice(&std::fs::read(&spec_path).unwrap()).unwrap();
+    let schema = json_line(&std::fs::read(&spec_path).unwrap());
     assert!(schema.get("$schema").is_some());
     let discovery_path = temp.path().join("actions.json");
     let discovery = run(&[
@@ -231,7 +252,7 @@ async fn generic_read_file_output_preserves_bounds_permissions_and_existing_dest
         discovery_path.to_str().unwrap(),
     ]);
     assert_success("discovery output", &discovery);
-    assert!(serde_json::from_slice::<Value>(&std::fs::read(&discovery_path).unwrap()).is_ok());
+    json_line(&std::fs::read(&discovery_path).unwrap());
     let requests = controller.received_requests().await.unwrap();
     assert_eq!(
         requests.len(),
@@ -253,7 +274,12 @@ async fn generic_read_file_output_preserves_bounds_permissions_and_existing_dest
 async fn console_and_report_downloads_work_over_cli_send_http_and_stdio() {
     let controller = MockServer::start().await;
     let console = "console output\n".repeat(6000);
-    let report = json!({"totalCount":1,"suites":[{"name":"suite","cases":[{"name":"failure","errorStackTrace":"details"}]}]}).to_string();
+    // Raw JSON downloads preserve upstream formatting and string whitespace.
+    let report = concat!(
+        "{\n  \"totalCount\": 1,\n  \"suites\": [\n",
+        r#"    {"name": "suite", "cases": [{"name": "failure", "errorStackTrace": "  details\nline two  "}]}"#,
+        "\n  ]\n}\n"
+    ).to_owned();
     for (endpoint, content_type, bytes) in [
         ("consoleText", "text/plain; charset=UTF-8", &console),
         ("testReport/api/json", "application/json", &report),
@@ -312,9 +338,9 @@ async fn console_and_report_downloads_work_over_cli_send_http_and_stdio() {
             .unwrap();
         assert_success(command, &result);
         assert_eq!(std::fs::read(&output).unwrap(), bytes.as_bytes());
-        let metadata: Value = serde_json::from_slice(&result.stdout).unwrap();
+        let metadata = json_line(&result.stdout);
         assert!(metadata["result"].get("text").is_none());
-        assert_eq!(metadata["output"]["size"], bytes.len() as u64);
+        assert_receipt_bytes(&metadata, bytes.as_bytes());
         assert_eq!(metadata["output"]["path"], output.to_str().unwrap());
 
         // Generic invoke plans native downloads from the same caller catalog
@@ -335,8 +361,8 @@ async fn console_and_report_downloads_work_over_cli_send_http_and_stdio() {
             .unwrap();
         assert_success("generic invoke native download", &result);
         assert_eq!(std::fs::read(&output).unwrap(), bytes.as_bytes());
-        let metadata: Value = serde_json::from_slice(&result.stdout).unwrap();
-        assert_eq!(metadata["output"]["size"], bytes.len() as u64);
+        let metadata = json_line(&result.stdout);
+        assert_receipt_bytes(&metadata, bytes.as_bytes());
         assert_eq!(metadata["output"]["path"], output.to_str().unwrap());
 
         let output = temp.path().join(format!("{command}.send"));
@@ -351,6 +377,7 @@ async fn console_and_report_downloads_work_over_cli_send_http_and_stdio() {
             .unwrap();
         assert_success("send read download", &result);
         assert_eq!(std::fs::read(&output).unwrap(), bytes.as_bytes());
+        assert_receipt_bytes(&json_line(&result.stdout), bytes.as_bytes());
 
         let result = reqwest::Client::new()
             .post(format!("{broker_url}/v1/invoke/cloudbees_ci/{action}"))
@@ -381,6 +408,7 @@ async fn console_and_report_downloads_work_over_cli_send_http_and_stdio() {
             .await;
         assert_eq!(result["result"]["isError"], false, "{result}");
         assert_eq!(std::fs::read(&output).unwrap(), bytes.as_bytes());
+        assert_receipt_bytes(&result["result"]["structuredContent"], bytes.as_bytes());
     }
     mcp.finish().await;
     assert!(
@@ -515,8 +543,8 @@ async fn raw_download_destinations_are_checked_before_upstream_dispatch() {
     let result = send_download(&request);
     assert_success("send download after preflight rejection", &result);
     assert_eq!(std::fs::read(&preserved).unwrap(), contents);
-    let receipt: Value = serde_json::from_slice(&std::fs::read(&metadata).unwrap()).unwrap();
-    assert_eq!(receipt["output"]["size"], contents.len());
+    let receipt = json_line(&std::fs::read(&metadata).unwrap());
+    assert_receipt_bytes(&receipt, contents);
     assert_eq!(controller.received_requests().await.unwrap().len(), 2);
     stop(broker).await;
 }

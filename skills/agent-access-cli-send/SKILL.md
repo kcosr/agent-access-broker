@@ -147,6 +147,11 @@ has URL syntax. Provided action `inputs` remain usable as supplied.
   `send --output PATH` supplies a missing invoke output and conflicts with one
   already in the envelope. A file sink rejects bare `-`; use the stdout sink.
 
+CLI JSON responses, receipts and structured errors use compact JSON with a
+trailing newline on stdout, stderr and in files, including `metadataOutput`.
+String whitespace is preserved; use `jq .` for an indented view. Raw download
+payloads retain their original bytes even for JSON content.
+
 File output returns a compact receipt with correlation/status IDs and
 `output: {status,path,size,sha256,contentType,sensitive}`. Downloads retain bounded
 Broker metadata and warnings. Stdout sinks emit only payload unless separate

@@ -1830,6 +1830,9 @@ mod tests {
         let result = serde_json::to_value(result).unwrap();
         let bytes = std::fs::read(&destination).unwrap();
         assert_eq!(serde_json::from_slice::<Value>(&bytes).unwrap(), body);
+        assert!(bytes.ends_with(b"\n"));
+        assert_eq!(bytes.iter().filter(|&&byte| byte == b'\n').count(), 1);
+        assert!(!bytes.windows(2).any(|pair| pair == b": "));
         assert_eq!(result["isError"], false);
         assert_eq!(result["structuredContent"]["brokerRequestId"], "broker");
         assert_eq!(result["structuredContent"]["output"]["size"], bytes.len());

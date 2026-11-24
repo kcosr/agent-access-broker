@@ -137,9 +137,13 @@ when the action marks them sensitive.
 Broker JSON envelope, including selected rich-text values.
 It also works for discovery, specs and `broker status`; specs use
 `--output-format json`. Omit the path or use `--output -` for normal stdout.
+CLI JSON responses, receipts and structured errors use compact JSON with a
+trailing newline on stdout, stderr and in files. String whitespace is preserved;
+use `jq .` for an indented view.
 Downloads require `--output`; files receive verified raw bytes, and `-` emits
-bytes alone to stdout after verification. Relative paths are allowed. Local
-paths never become provider inputs or change the action's grants or bounds.
+bytes alone to stdout after verification, unchanged even for JSON content.
+Relative paths are allowed. Local paths never become provider inputs or change
+the action's grants or bounds.
 
 A saved result returns a compact receipt with correlation/status IDs and
 `output.path`, `size`, `sha256`, `contentType` and declared `sensitive`; downloads

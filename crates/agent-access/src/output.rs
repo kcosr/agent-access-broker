@@ -122,7 +122,7 @@ impl ResponseOutput {
     }
 
     pub(crate) fn save_json(self, envelope: &Value) -> Result<Value> {
-        let mut bytes = serde_json::to_vec_pretty(envelope)?;
+        let mut bytes = serde_json::to_vec(envelope)?;
         bytes.push(b'\n');
         self.save(envelope, &bytes, "application/json")
     }
