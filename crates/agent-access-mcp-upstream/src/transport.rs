@@ -1102,22 +1102,33 @@ mod tests {
     async fn dropping_operation_owner_fences_a_pending_transport_send() {
         let received = Arc::new(AtomicUsize::new(0));
         let counter = received.clone();
+        let arrived = Arc::new(tokio::sync::Semaphore::new(0));
+        let signal = arrived.clone();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!("http://{}/mcp", listener.local_addr().unwrap());
         let app = axum::Router::new().route(
             "/mcp",
             axum::routing::post(move || {
                 let counter = counter.clone();
+                let signal = signal.clone();
                 async move {
                     counter.fetch_add(1, Ordering::SeqCst);
-                    axum::Json(json!({"jsonrpc":"2.0","id":1,"result":{}}))
+                    signal.add_permits(1);
+                    axum::Json(json!({"jsonrpc":"2.0","id":1,"result":{"resultType":"complete","content":[],"isError":false}}))
                 }
             }),
         );
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let operation = operation(&endpoint, Duration::from_secs(60));
+        let mut operation = operation(&endpoint, Duration::from_secs(60));
+        Arc::get_mut(&mut operation.context).unwrap().call = Some(Arc::new(CallArguments {
+            name: "update_item".into(),
+            arguments: json!({}),
+            modern_arguments: json!({}),
+            headers: HeaderMap::new(),
+        }));
         let state = operation.state.clone();
         let (mut transport, cancel) = operation.attempt(Lifecycle::Discover);
+        *transport.attempt.stage.lock().unwrap() = Stage::Ready;
         let pause = Arc::new((std::sync::Barrier::new(2), std::sync::Barrier::new(2)));
         state.lock().unwrap().dispatch_pause = Some(pause.clone());
         let mut owner = Box::pin(async move {
@@ -1131,7 +1142,7 @@ mod tests {
         assert!(futures_util::poll!(&mut owner).is_pending());
         let send = tokio::spawn(async move {
             let request = serde_json::from_value(
-                json!({"jsonrpc":"2.0","id":1,"method":"server/discover","params":{}}),
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"update_item","arguments":{}}}),
             )
             .unwrap();
             transport.send(request).await
@@ -1147,7 +1158,17 @@ mod tests {
         pause.1.wait();
         assert!(send.await.unwrap().is_err());
         assert!(cancelled_by_owner);
+        // Catch detached work that could outlive the returned send future.
+        assert!(
+            tokio::time::timeout(Duration::from_millis(300), arrived.acquire())
+                .await
+                .is_err(),
+            "no late upstream request after owner drop"
+        );
         assert!(state.lock().unwrap().closed);
+        // Admission records dispatch before the first network yield, even if
+        // cancellation subsequently prevents the server receiving the request.
+        assert!(!state.lock().unwrap().call_dispatched);
         assert_eq!(received.load(Ordering::SeqCst), 0);
         server.abort();
     }
