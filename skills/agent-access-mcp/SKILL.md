@@ -146,8 +146,11 @@ Local stdio exposes these options only when advertised by the tool schema:
 - Uploads use sibling `files: [{"role":"ROLE","path":"/absolute/path/upload"}]`
   with the declared role. The adapter derives metadata; do not invent size/digests.
 - JSON results and helpers can use sibling `outputPath`; raw downloads require
-  it. JSON saves contain the complete Broker envelope. Download bytes go only
-  to the file; receipts retain bounded metadata, size/hash and sensitivity.
+  it. JSON saves contain the complete Broker envelope or helper result as
+  compact JSON with a trailing newline, preserving whitespace inside strings.
+  Use `jq . result.json` for an indented view. Download bytes go only to the file
+  and remain unchanged even for JSON content; receipts retain bounded metadata,
+  size/hash and sensitivity.
 - Catalog-declared sensitive values cannot be inline on stdio. Use a private
   `requestFile` or advertised `secretSources`: each has a `pointer` such as
   `/inputs/FIELD` and `source` of `{"type":"env","name":"VARIABLE"}` or

@@ -4756,6 +4756,15 @@ async fn cli_invokes_required_static_identity_against_stubbed_broker() {
         String::from_utf8_lossy(&send_http.stdout),
         String::from_utf8_lossy(&send_http.stderr)
     );
+    assert!(send_http.stdout.ends_with(b"\n"));
+    assert_eq!(
+        send_http
+            .stdout
+            .iter()
+            .filter(|&&byte| byte == b'\n')
+            .count(),
+        1
+    );
     let send_http_json: serde_json::Value = serde_json::from_slice(&send_http.stdout).unwrap();
     assert_eq!(send_http_json["service"], "fake");
 

@@ -592,8 +592,9 @@ The following fixed Broker wire names accept flat JSON arguments, without the pr
 `inputs`/`requestFile` wrapper. They read broker metadata without changing
 upstream state, and their successful object appears in `structuredContent` and,
 by default, as an identical JSON text copy. Local stdio helpers also accept
-optional absolute `outputPath`; when set, that object is saved as JSON and the tool returns a file
-receipt instead. Because this can overwrite a local file, stdio helper tools
+optional absolute `outputPath`; when set, that object is saved as compact JSON
+with a trailing newline and the tool returns a file receipt instead.
+Because this can overwrite a local file, stdio helper tools
 advertise `readOnlyHint: false` and `destructiveHint: true` for their complete
 argument contract. HTTP helpers reject `outputPath` and retain
 `readOnlyHint: true` and `destructiveHint: false`. Both transports advertise
@@ -748,10 +749,11 @@ JSON and multipart-upload tools, including writes, accept optional `outputPath`:
 {"inputs":{"issue":"ABC-123"},"outputPath":"/home/me/work/issue.json"}
 ```
 
-The adapter saves the complete successful broker envelope as JSON, including
-each selected rich-text value at its declared field. It returns a
-small receipt in `structuredContent` and the optional text copy instead of the
-saved result.
+The adapter saves the complete successful broker envelope as compact JSON with
+a trailing newline, including each selected rich-text value at its declared
+field. Whitespace inside strings is preserved; use `jq . issue.json` for an
+indented view. It returns a small receipt in `structuredContent` and the optional
+text copy instead of the saved result.
 The receipt keeps correlation/status identifiers, sets `operationStatus` to
 `succeeded` for confirmed success, and adds
 `output: {status, path, size, sha256, contentType, sensitive}`. `size` is the actual
@@ -809,8 +811,9 @@ Download tools require `outputPath` with an absolute local destination. The
 adapter streams into a private temporary file, verifies the advertised length
 and digest when present, and atomically replaces the destination. The tool
 returns broker metadata plus the same `output` receipt; file bytes never go
-onto MCP stdout. JSON reads use the same private temporary-file and atomic
-replacement handling. Denied or failed reads and incomplete transfers leave an
+onto MCP stdout. Downloaded bytes are preserved even when the content is JSON.
+JSON reads use the same private temporary-file and atomic replacement handling.
+Denied or failed reads and incomplete transfers leave an
 existing destination intact. If parent-directory synchronization fails after
 replacement, the reported local error indicates that the file was replaced.
 

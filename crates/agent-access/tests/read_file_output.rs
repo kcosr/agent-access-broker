@@ -1,9 +1,28 @@
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::process::Command;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{method, path},
 };
+
+fn json_line(bytes: &[u8]) -> Value {
+    assert_eq!(bytes.last(), Some(&b'\n'), "JSON must end with a newline");
+    assert_eq!(
+        bytes.iter().filter(|&&byte| byte == b'\n').count(),
+        1,
+        "JSON must occupy one line"
+    );
+    serde_json::from_slice(bytes).unwrap()
+}
+
+fn assert_receipt_bytes(receipt: &Value, bytes: &[u8]) {
+    assert_eq!(receipt["output"]["size"], bytes.len() as u64);
+    assert_eq!(
+        receipt["output"]["sha256"],
+        format!("{:x}", Sha256::digest(bytes))
+    );
+}
 
 fn catalog() -> Value {
     json!({
@@ -190,7 +209,7 @@ async fn mutation_file_output_reports_success_and_local_failure_without_repeatin
                 "{surface}: {}",
                 String::from_utf8_lossy(&output.stderr)
             );
-            let receipt: Value = serde_json::from_slice(printed).unwrap();
+            let receipt = json_line(printed);
             assert_eq!(
                 receipt["operationStatus"],
                 if unverified {
@@ -223,10 +242,9 @@ async fn mutation_file_output_reports_success_and_local_failure_without_repeatin
                 assert!(destination.is_dir());
             } else {
                 assert_eq!(receipt["output"]["sensitive"], true);
-                assert_eq!(
-                    serde_json::from_slice::<Value>(&std::fs::read(destination).unwrap()).unwrap(),
-                    response
-                );
+                let bytes = std::fs::read(destination).unwrap();
+                assert_eq!(json_line(&bytes), response);
+                assert_receipt_bytes(&receipt, &bytes);
             }
             assert_eq!(
                 std::fs::read_dir(directory.path()).unwrap().count(),
@@ -300,7 +318,7 @@ async fn mutation_denial_and_uncertain_response_do_not_claim_success_or_touch_ou
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn multipart_upload_responses_can_be_saved_by_typed_and_send_commands() {
-    for surface in ["typed", "send"] {
+    for surface in ["typed", "send_file", "send_stderr"] {
         let broker = MockServer::start().await;
         let mut catalog = catalog();
         let action = &mut catalog["services"][0]["actions"][0];
@@ -316,7 +334,11 @@ async fn multipart_upload_responses_can_be_saved_by_typed_and_send_commands() {
             .respond_with(ResponseTemplate::new(200).set_body_json(catalog))
             .mount(&broker)
             .await;
-        let response = json!({"decision":"allow","agentRequestId":"agent","brokerRequestId":"broker","result":{"uploaded":true}});
+        let response = json!({"decision":"allow","agentRequestId":"agent","brokerRequestId":"broker","result":{"uploaded":true,"details":{"text":"  lead \t café\n\"quoted\" \\ trail  "}}});
+        let expected_bytes = concat!(
+            r#"{"agentRequestId":"agent","brokerRequestId":"broker","decision":"allow","result":{"details":{"text":"  lead \t café\n\"quoted\" \\ trail  "},"uploaded":true}}"#,
+            "\n"
+        ).as_bytes();
         Mock::given(method("POST"))
             .and(path("/v1/invoke/jira/attachment.add"))
             .respond_with(ResponseTemplate::new(200).set_body_json(response.clone()))
@@ -337,7 +359,12 @@ async fn multipart_upload_responses_can_be_saved_by_typed_and_send_commands() {
                 .arg("--output")
                 .arg(&destination);
         } else {
-            command.args(["send", "--request-json", &json!({"version":"agent-access.send.v2","kind":"invoke","service":"jira","action":"attachment.add","inputs":{"issue":"ABC-1"},"files":[{"role":"attachment","path":upload}],"output":{"type":"file","path":destination},"metadataOutput":{"type":"file","path":metadata}}).to_string()]);
+            let metadata_output = if surface == "send_file" {
+                json!({"type":"file","path":metadata})
+            } else {
+                json!({"type":"stderr"})
+            };
+            command.args(["send", "--request-json", &json!({"version":"agent-access.send.v2","kind":"invoke","service":"jira","action":"attachment.add","inputs":{"issue":"ABC-1"},"files":[{"role":"attachment","path":upload}],"output":{"type":"file","path":destination},"metadataOutput":metadata_output}).to_string()]);
         }
         let output = command.output().unwrap();
         assert!(
@@ -345,15 +372,24 @@ async fn multipart_upload_responses_can_be_saved_by_typed_and_send_commands() {
             "{surface}: {}",
             String::from_utf8_lossy(&output.stderr)
         );
-        assert_eq!(
-            serde_json::from_slice::<Value>(&std::fs::read(destination).unwrap()).unwrap(),
-            response
-        );
-        let receipt: Value = if surface == "typed" {
-            serde_json::from_slice(&output.stdout).unwrap()
-        } else {
-            serde_json::from_slice(&std::fs::read(metadata).unwrap()).unwrap()
+        let bytes = std::fs::read(destination).unwrap();
+        assert_eq!(bytes, expected_bytes);
+        assert_eq!(json_line(&bytes), response);
+        let receipt = match surface {
+            "typed" => json_line(&output.stdout),
+            "send_file" => {
+                assert!(output.stdout.is_empty());
+                assert!(output.stderr.is_empty());
+                json_line(&std::fs::read(metadata).unwrap())
+            }
+            "send_stderr" => {
+                assert!(output.stdout.is_empty());
+                assert!(!metadata.exists());
+                json_line(&output.stderr)
+            }
+            _ => unreachable!(),
         };
+        assert_receipt_bytes(&receipt, &bytes);
         assert_eq!(receipt["operationStatus"], "succeeded");
         assert_eq!(receipt["output"]["status"], "succeeded");
         assert!(receipt.get("result").is_none());
@@ -401,11 +437,9 @@ async fn send_stdout_is_emitted_before_metadata_destination_failure() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(
-        serde_json::from_slice::<Value>(&output.stdout).unwrap(),
-        response
-    );
-    let failure: Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(json_line(&output.stdout), response);
+    let failure = json_line(&output.stderr);
+    assert_receipt_bytes(&failure, &output.stdout);
     assert_eq!(failure["operationStatus"], "succeeded");
     assert_eq!(failure["output"]["status"], "succeeded");
     assert_eq!(failure["metadataOutput"]["status"], "failed");

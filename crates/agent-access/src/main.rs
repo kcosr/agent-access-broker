@@ -4987,13 +4987,13 @@ async fn main() -> Result<()> {
     if let Err(error) = &result
         && let Some(failure) = error.downcast_ref::<output::ResponseContentFailure>()
     {
-        eprintln!("{}", serde_json::to_string_pretty(&failure.details)?);
+        eprintln!("{}", serde_json::to_string(&failure.details)?);
         std::process::exit(5);
     }
     if let Err(error) = &result
         && let Some(failure) = error.downcast_ref::<output::LocalOutputFailure>()
     {
-        eprintln!("{}", serde_json::to_string_pretty(&failure.details)?);
+        eprintln!("{}", serde_json::to_string(&failure.details)?);
         std::process::exit(failure.exit_code);
     }
     result
@@ -11107,7 +11107,7 @@ async fn run_send_download(
             if let Some(metadata_output) = metadata_output {
                 write_send_metadata(Some(metadata_output), &metadata, prepared.metadata.take())?;
             } else {
-                println!("{}", serde_json::to_string_pretty(&metadata)?);
+                println!("{}", serde_json::to_string(&metadata)?);
             }
             std::process::exit(cli_exit_code_for_http_status(status));
         }
@@ -11175,7 +11175,7 @@ fn finish_send_json(
         Some(SendOutput::Stdout) => {
             // Preserve the complete send envelope; metadata never repeats result content.
             if metadata.is_some() {
-                let mut bytes = serde_json::to_vec_pretty(&value)?;
+                let mut bytes = serde_json::to_vec(&value)?;
                 bytes.push(b'\n');
                 let summary = output::FileOutput::new(
                     Path::new("-"),
@@ -11221,7 +11221,7 @@ fn write_send_metadata(
     let Some(metadata_output) = metadata_output else {
         return Ok(());
     };
-    let formatted = serde_json::to_string_pretty(metadata)?;
+    let formatted = serde_json::to_string(metadata)?;
     match metadata_output {
         SendMetadataOutput::Stderr => {
             eprintln!("{formatted}");
@@ -11231,8 +11231,10 @@ fn write_send_metadata(
                 Some(reserved) => reserved,
                 None => output::AtomicOutput::new(&path)?,
             };
+            let mut bytes = formatted.into_bytes();
+            bytes.push(b'\n');
             reserved
-                .write_response(formatted.as_bytes(), "application/json", false)
+                .write_response(&bytes, "application/json", false)
                 .map_err(|error| output::LocalOutputFailure::metadata(metadata, &path, error))?;
         }
     }
@@ -11273,7 +11275,7 @@ async fn run_send_http(
     let response_shape = response_shape_for_route(&route_spec);
     let (status, value) =
         send_broker_json_method_shape(ctx, method, &path, body, response_shape).await?;
-    println!("{}", serde_json::to_string_pretty(&value)?);
+    println!("{}", serde_json::to_string(&value)?);
     exit_for_broker_status(status, &value);
 }
 
@@ -16018,7 +16020,7 @@ async fn run_attachment_download(
     if status < 400 && output == Path::new("-") {
         std::process::exit(cli_exit_code_for_http_status(status));
     }
-    println!("{}", serde_json::to_string_pretty(&metadata)?);
+    println!("{}", serde_json::to_string(&metadata)?);
     exit_for_broker_status(status, &metadata);
 }
 
@@ -16595,7 +16597,7 @@ enum ResponseShape {
 }
 
 fn print_value_and_exit(status: u16, value: serde_json::Value) -> ! {
-    match serde_json::to_string_pretty(&value) {
+    match serde_json::to_string(&value) {
         Ok(output) => println!("{output}"),
         Err(error) => {
             eprintln!("failed to format broker response: {error}");
@@ -16664,7 +16666,7 @@ fn print_invoke_value_and_exit(status: u16, value: serde_json::Value) -> ! {
     if status >= 400 && is_mutation_verification_failure(&value) {
         eprintln!(
             "{}",
-            serde_json::to_string_pretty(&value).expect("JSON value is serializable")
+            serde_json::to_string(&value).expect("JSON value is serializable")
         );
         exit_for_broker_status(status, &value);
     }
@@ -19222,9 +19224,19 @@ Details"}}});
         )
         .unwrap()
         .unwrap();
+        let bytes = fs::read(&destination).unwrap();
         assert_eq!(
-            serde_json::from_slice::<serde_json::Value>(&fs::read(&destination).unwrap()).unwrap(),
+            bytes,
+            b"{\"brokerRequestId\":\"request-1\",\"decision\":\"allow\",\"result\":{\"description\":{\"format\":\"markdown\",\"value\":\"# Issue\\nDetails\"}}}\n"
+        );
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&bytes).unwrap(),
             envelope
+        );
+        assert_eq!(receipt["output"]["size"], bytes.len());
+        assert_eq!(
+            receipt["output"]["sha256"],
+            format!("{:x}", Sha256::digest(&bytes))
         );
         assert_eq!(receipt["output"]["contentType"], "application/json");
         assert_eq!(receipt["output"]["sensitive"], true);
@@ -21047,7 +21059,7 @@ upload_spool_dir = "upload-spool"
             envelope["result"]["safeLocators"],
             serde_json::json!({"discussionId": "discussion-1", "noteId": 12})
         );
-        let rendered = serde_json::to_string_pretty(&envelope).unwrap();
+        let rendered = serde_json::to_string(&envelope).unwrap();
         assert!(rendered.contains("mutation_verification_failed"));
         assert!(rendered.contains("mutation_readback"));
         assert!(rendered.contains("safeLocators"));
@@ -21094,7 +21106,7 @@ upload_spool_dir = "upload-spool"
                 envelope["result"],
                 serde_json::json!({"inputCategory": category})
             );
-            let rendered = serde_json::to_string_pretty(&envelope).unwrap();
+            let rendered = serde_json::to_string(&envelope).unwrap();
             assert!(rendered.contains(category));
             assert!(!rendered.contains("src/lib.rs"));
             assert!(!rendered.contains("secret review body"));

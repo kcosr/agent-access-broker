@@ -894,6 +894,12 @@ async fn provisioning_token_file_denials_cleanup_but_uncertain_writes_preserve_r
         assert_eq!(output_path.exists(), uncertain, "{case}");
         if uncertain {
             assert!(output.stdout.is_empty(), "{case}");
+            assert!(output.stderr.ends_with(b"\n"), "{case}");
+            assert_eq!(
+                output.stderr.iter().filter(|&&byte| byte == b'\n').count(),
+                1,
+                "{case}"
+            );
             let error: Value = serde_json::from_slice(&output.stderr).unwrap();
             assert_eq!(error["reasonCode"], "mutation_verification_failed");
             assert!(error["result"]["safeLocators"].is_object());

@@ -48,10 +48,14 @@ Running the HTTP broker service is the job of the separate
 `agent-access-broker` binary. See [local MCP](mcp.md) for client configuration,
 individual action tools, and local file inputs and transfers.
 
-Provider invocation output is pretty-printed JSON. Local `config validate` and
-`auth token ...` commands print plain status lines; `auth git-credential ...`
+CLI-generated JSON is compact, with one trailing newline, on stdout, stderr and
+local output files. This includes responses, receipts and structured errors;
+whitespace inside JSON strings is preserved. For an indented view, pipe JSON
+stdout to `jq .` or run `jq . result.json` on a saved file. Local `config validate`
+and `auth token ...` commands print plain status lines; `auth git-credential ...`
 speaks Git's credential-helper protocol. Successful stream downloads to explicit
-stdout write raw bytes. `mcp serve` reserves stdout exclusively for MCP messages.
+stdout write raw bytes, including when the downloaded content is JSON.
+`mcp serve` reserves stdout exclusively for MCP messages.
 
 ## Save action results to a file
 
@@ -73,10 +77,10 @@ agent-access spec catalog --output-format json --output catalog.json
 agent-access services list --output services.json
 ```
 
-Typed JSON actions and `invoke` save the same successful representation they
-would print: the complete JSON envelope with selected rich-text values. Generic
-`invoke --output`
-also saves every catalog-declared raw download, including native and imported
+Typed JSON actions and `invoke` save the same compact JSON they would print:
+the complete envelope with selected rich-text values and a trailing newline.
+Generic `invoke --output` also saves every catalog-declared raw download,
+including native and imported
 command downloads. It fetches the current caller catalog once for planning,
 selects the action's declared I/O, reserves the destination, and negotiates raw
 bytes with the Broker. Missing actions or failed discovery prevent invocation.
@@ -191,7 +195,7 @@ Every command below targets the broker over HTTP except `config validate`,
 
 ### `auth`
 
-- `auth status` — `GET /v1/me`. Prints the identity summary as pretty JSON,
+- `auth status` — `GET /v1/me`. Prints the identity summary as compact JSON,
   including `brokerToken.readOnly` for an issued invocation token (true or false),
   path-only `readOnlyAccess` behind fingerprint-aware ingress and, for a person
   with a Microsoft sign-in, `microsoftMembership` (group evidence expiry and
@@ -240,7 +244,7 @@ arguments.
 ### `broker`
 
 - `broker status` — `GET /v1/broker/status`. Prints the authenticated Broker's
-  immutable build identity and contract versions as pretty JSON.
+  immutable build identity and contract versions as compact JSON.
 
 The response names the running assembly (`assembly.name`, `version`,
 `qualification` and `source`), the linked `host` and `sdk` packages, every
@@ -593,7 +597,9 @@ A file destination returns the receipt described above to stdout, or to
 `metadataOutput` when selected; raw downloads also retain broker metadata. `"output":{"type":"stdout"}` writes only the normal payload,
 unless `metadataOutput` selects stderr or a separate file. `metadataOutput`
 requires `output`; two file destinations must be different. These settings also
-apply to mutations and multipart-upload responses.
+apply to mutations and multipart-upload responses. JSON payloads and metadata
+use compact JSON with a trailing newline in every destination; raw download
+payloads retain their original bytes.
 HTTP-kind `send` requests do not support them. A file sink rejects the bare path
 `-`: use `{"type":"stdout"}` for stdout or `./-` for a file literally named `-`.
 `send --output PATH` supplies the
