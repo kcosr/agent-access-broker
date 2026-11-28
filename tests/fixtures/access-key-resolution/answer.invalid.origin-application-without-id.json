@@ -1,0 +1,23 @@
+{
+  "active": true,
+  "subject": {
+    "kind": "user",
+    "id": "bob"
+  },
+  "usernameIncarnation": "n1-91aa",
+  "groups": [],
+  "types": [
+    {
+      "name": "inference",
+      "validUntil": "2026-11-27T10:00:00Z"
+    },
+    {
+      "name": "container-egress",
+      "validUntil": "2026-11-27T10:00:00Z"
+    }
+  ],
+  "origin": "application",
+  "application": null,
+  "keyId": "ak_01HZXK4AA",
+  "expiresAt": "2026-11-27T10:00:00Z"
+}

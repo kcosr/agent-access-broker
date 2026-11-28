@@ -33,8 +33,12 @@ mod tests {
             auto_migrate: true,
             require_registered_principal_for_invocation: false,
         };
+        let previous_end = MANAGED_STORE_MIGRATIONS
+            .iter()
+            .position(|migration| migration.version == MANAGED_STORE_CONTENT_RESOURCES_VERSION)
+            .unwrap();
         let previous = ManagedStoreMigrationCatalog {
-            migrations: &MANAGED_STORE_MIGRATIONS[..MANAGED_STORE_MIGRATIONS.len() - 1],
+            migrations: &MANAGED_STORE_MIGRATIONS[..=previous_end],
         };
         let old = ManagedStore::open_with_catalog(
             &config,
@@ -96,13 +100,13 @@ mod tests {
         assert!(current.migration_applied_this_open(MANAGED_STORE_RESOURCE_BROWSER_URLS_VERSION));
         let after = ledger(&config.path);
         assert_eq!(&after[..before.len()], before.as_slice());
-        assert_eq!(after.len(), before.len() + 1);
+        assert_eq!(after.len(), MANAGED_STORE_MIGRATIONS.len());
         assert_eq!(
-            after.last().unwrap().0,
+            after[before.len()].0,
             MANAGED_STORE_RESOURCE_BROWSER_URLS_VERSION
         );
         assert_eq!(
-            after.last().unwrap().1,
+            after[before.len()].1,
             sha256_hex(include_str!("resource_browser_urls.sql").as_bytes())
         );
         assert_eq!(current.policy_revision().unwrap(), revision);

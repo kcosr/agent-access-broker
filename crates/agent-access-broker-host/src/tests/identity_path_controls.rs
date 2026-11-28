@@ -200,6 +200,7 @@ async fn fixture() -> Fixture {
             execution_context: Some("default".into()),
             allowed_execution_contexts: None,
             allow_forwarded_identity: true,
+            allow_access_key_resolution: false,
         },
     );
     config.managed_store = Some(ManagedStoreConfig {

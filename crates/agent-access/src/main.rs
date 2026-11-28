@@ -1,3 +1,6 @@
+mod access_key_commands;
+#[cfg(test)]
+mod access_key_types_tests;
 mod credential_input;
 mod discovery;
 mod gitlab_provisioning;
@@ -1025,6 +1028,21 @@ enum AdminCommand {
         #[command(subcommand)]
         command: AdminAuditCommand,
     },
+    /// View and set people's usernames and how each is decided, and confirm listed names.
+    Usernames {
+        #[command(subcommand)]
+        command: access_key_commands::AdminAccountUsernamesCommand,
+    },
+    /// Issue access keys for people and service accounts; list and revoke any access key.
+    AccessKeys {
+        #[command(subcommand)]
+        command: access_key_commands::AdminAccessKeysCommand,
+    },
+    /// Show the configured access key types.
+    AccessKeyTypes {
+        #[command(subcommand)]
+        command: access_key_commands::AdminAccessKeyTypesCommand,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -1111,6 +1129,45 @@ fn agent_token_issuance_body(
         "mode": mode,
         "allowedExecutionContexts": sorted,
     })))
+}
+
+fn parse_access_key_type_id(value: &str) -> Result<String, String> {
+    agent_access_core::ExecutionContext::new(value)
+        .map(|id| id.to_string())
+        .map_err(|_| "access key type IDs must match [a-z][a-z0-9_-]{0,63}".to_string())
+}
+
+/// The complete `accessKeyTypes` object of an account (`deny` given) or a
+/// group (`deny` absent), when `--access-key-types` asks to replace it.
+fn access_key_types_body(
+    replace: bool,
+    allow: &[String],
+    deny: Option<&[String]>,
+) -> Result<Option<serde_json::Value>> {
+    if !replace {
+        return Ok(None);
+    }
+    let set = |access_key_types: &[String]| {
+        let mut sorted = BTreeSet::new();
+        for access_key_type in access_key_types {
+            parse_access_key_type_id(access_key_type).map_err(anyhow::Error::msg)?;
+            anyhow::ensure!(
+                sorted.insert(access_key_type.clone()),
+                "an access key type is named once in a list"
+            );
+        }
+        Ok(sorted)
+    };
+    let allow = set(allow)?;
+    let Some(deny) = deny else {
+        return Ok(Some(serde_json::json!({ "allow": allow })));
+    };
+    let deny = set(deny)?;
+    anyhow::ensure!(
+        allow.is_disjoint(&deny),
+        "--access-key-type-allow and --access-key-type-deny cannot name the same access key type"
+    );
+    Ok(Some(serde_json::json!({ "allow": allow, "deny": deny })))
 }
 
 #[derive(Debug, Subcommand)]
@@ -1389,6 +1446,17 @@ enum AdminGroupsCommand {
             value_parser = parse_agent_token_issuance_context
         )]
         agent_token_issuance_contexts: Vec<String>,
+        /// Replace the access key types this group lets its members hold with the
+        /// --access-key-type-allow access key types given; alone, the group allows none.
+        #[arg(long)]
+        access_key_types: bool,
+        /// A configured access key type the group's members may hold; repeat for each.
+        #[arg(
+            long = "access-key-type-allow",
+            requires = "access_key_types",
+            value_parser = parse_access_key_type_id
+        )]
+        access_key_type_allow: Vec<String>,
     },
     Update {
         group: String,
@@ -1415,6 +1483,17 @@ enum AdminGroupsCommand {
             value_parser = parse_agent_token_issuance_context
         )]
         agent_token_issuance_contexts: Vec<String>,
+        /// Replace the access key types this group lets its members hold with the
+        /// --access-key-type-allow access key types given; alone, the group allows none.
+        #[arg(long)]
+        access_key_types: bool,
+        /// A configured access key type the group's members may hold; repeat for each.
+        #[arg(
+            long = "access-key-type-allow",
+            requires = "access_key_types",
+            value_parser = parse_access_key_type_id
+        )]
+        access_key_type_allow: Vec<String>,
     },
     Enable {
         group: String,
@@ -1468,7 +1547,8 @@ enum AdminExternalGroupBindingsCommand {
 
 #[derive(Debug, Subcommand)]
 enum AdminPrincipalAccessCommand {
-    /// Set the account role, personal self-service, or agent token issuance permission.
+    /// Set the account role, personal self-service, agent token issuance permission,
+    /// or access key types.
     Set {
         principal: String,
         #[arg(long, value_parser = ["user", "auditor", "service_policy_manager", "admin"])]
@@ -1487,6 +1567,26 @@ enum AdminPrincipalAccessCommand {
             value_parser = parse_agent_token_issuance_context
         )]
         agent_token_issuance_contexts: Vec<String>,
+        /// Replace the account's access key type setting with the --access-key-type-allow and
+        /// --access-key-type-deny access key types given; alone, every type follows its groups.
+        #[arg(long)]
+        access_key_types: bool,
+        /// A configured access key type the account may hold whatever its groups allow;
+        /// repeat for each.
+        #[arg(
+            long = "access-key-type-allow",
+            requires = "access_key_types",
+            value_parser = parse_access_key_type_id
+        )]
+        access_key_type_allow: Vec<String>,
+        /// A configured access key type the account may not hold whatever its groups
+        /// allow; repeat for each.
+        #[arg(
+            long = "access-key-type-deny",
+            requires = "access_key_types",
+            value_parser = parse_access_key_type_id
+        )]
+        access_key_type_deny: Vec<String>,
     },
 }
 
@@ -12313,6 +12413,15 @@ async fn run_admin_command(ctx: &CliContext<'_>, command: &AdminCommand) -> Resu
         AdminCommand::Credentials { command } => run_admin_credentials_command(ctx, command).await,
         AdminCommand::Policy { command } => run_admin_policy_command(ctx, command).await,
         AdminCommand::Audit { command } => audit_commands::run_admin_audit(ctx, command).await,
+        AdminCommand::Usernames { command } => {
+            access_key_commands::run_admin_account_usernames(ctx, command).await
+        }
+        AdminCommand::AccessKeys { command } => {
+            access_key_commands::run_admin_access_keys(ctx, command).await
+        }
+        AdminCommand::AccessKeyTypes { command } => {
+            access_key_commands::run_admin_access_key_types(ctx, command).await
+        }
     }
 }
 
@@ -12674,6 +12783,9 @@ async fn run_admin_principals_command(
                 self_service_enabled,
                 agent_token_issuance,
                 agent_token_issuance_contexts,
+                access_key_types,
+                access_key_type_allow,
+                access_key_type_deny,
             } => {
                 let mut body = serde_json::Map::new();
                 if let Some(role) = role {
@@ -12688,9 +12800,16 @@ async fn run_admin_principals_command(
                 )) {
                     body.insert("agentTokenIssuance".into(), setting);
                 }
+                if let Some(setting) = require_cli_input(access_key_types_body(
+                    *access_key_types,
+                    access_key_type_allow,
+                    Some(access_key_type_deny),
+                )) {
+                    body.insert("accessKeyTypes".into(), setting);
+                }
                 if body.is_empty() {
                     require_cli_input::<()>(Err(anyhow::anyhow!(
-                        "access set requires --role, --self-service-enabled, or --agent-token-issuance"
+                        "access set requires --role, --self-service-enabled, --agent-token-issuance, or --access-key-types"
                     )));
                 }
                 run_broker_json_method(
@@ -12935,6 +13054,8 @@ async fn run_admin_groups_command(
             auto_enroll_new_microsoft_users,
             agent_token_issuance,
             agent_token_issuance_contexts,
+            access_key_types,
+            access_key_type_allow,
         } => {
             let mut body = serde_json::json!({
                 "groupId": group,
@@ -12948,6 +13069,13 @@ async fn run_admin_groups_command(
             )) {
                 body["agentTokenIssuance"] = setting;
             }
+            if let Some(setting) = require_cli_input(access_key_types_body(
+                *access_key_types,
+                access_key_type_allow,
+                None,
+            )) {
+                body["accessKeyTypes"] = setting;
+            }
             run_broker_json_method(ctx, reqwest::Method::POST, "/v1/admin/groups", Some(body)).await
         }
         AdminGroupsCommand::Update {
@@ -12959,6 +13087,8 @@ async fn run_admin_groups_command(
             auto_enroll_new_microsoft_users,
             agent_token_issuance,
             agent_token_issuance_contexts,
+            access_key_types,
+            access_key_type_allow,
         } => {
             let mut body = serde_json::Map::new();
             if *clear_display_name {
@@ -12983,9 +13113,16 @@ async fn run_admin_groups_command(
             )) {
                 body.insert("agentTokenIssuance".into(), setting);
             }
+            if let Some(setting) = require_cli_input(access_key_types_body(
+                *access_key_types,
+                access_key_type_allow,
+                None,
+            )) {
+                body.insert("accessKeyTypes".into(), setting);
+            }
             if body.is_empty() {
                 require_cli_input::<()>(Err(anyhow::anyhow!(
-                    "admin groups update requires at least one of --display-name, --clear-display-name, --description, --clear-description, --auto-enroll-new-microsoft-users, or --agent-token-issuance"
+                    "admin groups update requires at least one of --display-name, --clear-display-name, --description, --clear-description, --auto-enroll-new-microsoft-users, --agent-token-issuance, or --access-key-types"
                 )));
             }
             run_broker_json_method(

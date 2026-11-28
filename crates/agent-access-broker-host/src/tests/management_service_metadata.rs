@@ -421,6 +421,7 @@ async fn token_options_offer_no_mcp_endpoint_when_tokens_are_not_bearer_credenti
                 execution_context: Some("internal".to_string()),
                 allowed_execution_contexts: None,
                 allow_forwarded_identity: true,
+                allow_access_key_resolution: false,
             },
         );
     })

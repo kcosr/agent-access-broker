@@ -70,6 +70,10 @@ mod broker;
 mod cloudbees_plain_schemas;
 mod config_render;
 pub(crate) use broker::{ConfigDoc, TestBroker, TestProvider, with_provider_instances};
+mod access_key_management;
+mod access_key_resolve;
+mod access_key_types;
+mod account_usernames;
 mod confluence_plain_schemas;
 mod confluence_read_presentation;
 mod conformance;
@@ -16711,6 +16715,8 @@ fn fake_config(audit_file: &str) -> BrokerConfig {
         command_imports: Default::default(),
         oauth: Default::default(),
         applications: Default::default(),
+        access_key_types: Default::default(),
+        usernames: Default::default(),
         deployment: DeploymentConfig {
             enable_fake_service: true,
             ..DeploymentConfig::default()
@@ -16910,6 +16916,7 @@ fn install_context_caller(config: &mut BrokerConfig) {
                     .clone(),
             ),
             allow_forwarded_identity: false,
+            allow_access_key_resolution: false,
         },
     );
 }

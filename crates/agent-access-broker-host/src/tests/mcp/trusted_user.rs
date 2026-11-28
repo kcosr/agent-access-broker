@@ -140,6 +140,7 @@ async fn fixture_with(
                         execution_context: Some("default".into()),
                         allowed_execution_contexts: None,
                         allow_forwarded_identity: name == "relay",
+                        allow_access_key_resolution: false,
                     },
                 );
             }

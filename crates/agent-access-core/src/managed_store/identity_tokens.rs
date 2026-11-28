@@ -283,6 +283,13 @@ fn set_token(
             "identity token must be 32-4096 RFC 9110 token bytes",
         ));
     }
+    // An access key registered here would be accepted by fingerprint
+    // whatever its expiry or revocation.
+    if has_access_key_prefix(token) {
+        return Err(input_invalid(
+            "identity token must not start with the reserved access-key prefix",
+        ));
+    }
     let fingerprint = format!("sha256:{}", sha256_hex(token.as_bytes()));
     let encrypted = encrypt(ring, principal, ring.active_key_id(), token)?;
     // Only the secret columns change, so the path settings survive rotation.
@@ -331,6 +338,13 @@ pub(super) fn check_ready(
         let token = decrypt(ring, &p, &k, &n, &c)?;
         if format!("sha256:{}", sha256_hex(token.as_bytes())) != h {
             return Err(ManagedStoreError::CredentialDecryptFailed);
+        }
+        // A value stored before the prefix was reserved is refused here, so
+        // the Broker does not serve while it could be accepted by fingerprint.
+        if has_access_key_prefix(&token) {
+            return Err(ManagedStoreError::CredentialInvalid(format!(
+                "the identity token of principal {p} starts with the reserved access-key prefix; remove or replace it"
+            )));
         }
     }
     Ok(())
@@ -416,6 +430,53 @@ mod tests {
                 &test_execution_contexts(),
             )
             .unwrap();
+    }
+    #[test]
+    fn inventory_refuses_the_access_key_prefix_on_write_and_at_readiness() {
+        let (_dir, store, ring) = store();
+        user(&store, "alice");
+        let before = store.identity_token_metadata("alice").unwrap();
+        // A well-formed access key, and any other value with its prefix.
+        for token in [
+            "aab_ak_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0U1v".to_string(),
+            format!("aab_ak_{}", "x".repeat(40)),
+            format!("aab_ak_{}", "y".repeat(25)),
+        ] {
+            assert!(matches!(
+                store.set_identity_token("alice", &token, &ring),
+                Err(ManagedStoreError::InputInvalid(message)) if message.contains("access-key prefix")
+            ));
+        }
+        assert_eq!(store.identity_token_metadata("alice").unwrap(), before);
+        store.check_ready(Some(&ring)).unwrap();
+
+        // A value stored before the prefix was reserved keeps the store from
+        // being ready, so it cannot be accepted by fingerprint.
+        let stored = "aab_ak_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0U1v";
+        let encrypted = encrypt(&ring, "alice", ring.active_key_id(), stored).unwrap();
+        store
+            .connection
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE principal_identity_tokens SET fingerprint=?2, key_id=?3, nonce=?4,
+                 ciphertext=?5 WHERE principal_id=?1",
+                params![
+                    "alice",
+                    format!("sha256:{}", sha256_hex(stored.as_bytes())),
+                    encrypted.key_id,
+                    encrypted.nonce,
+                    encrypted.ciphertext
+                ],
+            )
+            .unwrap();
+        assert!(matches!(
+            store.check_ready(Some(&ring)),
+            Err(ManagedStoreError::CredentialInvalid(message))
+                if message.contains("alice") && !message.contains(stored)
+        ));
+        store.remove_identity_token("alice").unwrap();
+        store.check_ready(Some(&ring)).unwrap();
     }
     #[test]
     fn generated_inventory_is_uuid_encrypted_unique_and_pause_survives_rotation() {

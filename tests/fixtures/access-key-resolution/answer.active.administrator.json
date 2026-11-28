@@ -1,0 +1,19 @@
+{
+  "active": true,
+  "subject": {
+    "kind": "service_account",
+    "id": "nightly-evals"
+  },
+  "usernameIncarnation": "n1-0001",
+  "groups": [],
+  "types": [
+    {
+      "name": "inference",
+      "validUntil": "2026-12-20T00:00:00Z"
+    }
+  ],
+  "origin": "administrator",
+  "application": null,
+  "keyId": "ak_01HZXK5BB",
+  "expiresAt": "2026-12-20T00:00:00Z"
+}

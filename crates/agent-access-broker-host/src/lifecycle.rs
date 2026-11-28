@@ -792,8 +792,9 @@ async fn drain_lifecycle(
         .admission_owners
         .drain(remaining.max(SHUTDOWN_DRAIN_FLOOR))
         .await;
-    // Application token owners have no preflight record: their completion
-    // audit is the only one, so they finish before the audit writers close.
+    // Detached mutation owners (application tokens, sign-ins, access key
+    // mints and the management mutations that hold a lease) finish before
+    // the audit writers close: a mint's completion audit is its only record.
     let unfinished_application_owners = state
         .application_owners
         .drain(

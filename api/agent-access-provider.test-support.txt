@@ -1870,6 +1870,13 @@ pub agent_access_provider::ReasonCode::AuditUnavailable
 pub agent_access_provider::ReasonCode::BodyFormatUnsupported
 pub agent_access_provider::ReasonCode::BodyMalformed
 pub agent_access_provider::ReasonCode::BodySizeDenied
+pub agent_access_provider::ReasonCode::BrokerAccessKeyAnswerTooLarge
+pub agent_access_provider::ReasonCode::BrokerAccessKeyDenied
+pub agent_access_provider::ReasonCode::BrokerAccessKeyNotFound
+pub agent_access_provider::ReasonCode::BrokerAccountUsernameConflict
+pub agent_access_provider::ReasonCode::BrokerAccountUsernameDenied
+pub agent_access_provider::ReasonCode::BrokerAccountUsernameNotFound
+pub agent_access_provider::ReasonCode::BrokerCallerAccessKeyResolutionDenied
 pub agent_access_provider::ReasonCode::BrokerProviderContractFailed
 pub agent_access_provider::ReasonCode::BrokerTokenClassDenied
 pub agent_access_provider::ReasonCode::BrokerTokenExpired

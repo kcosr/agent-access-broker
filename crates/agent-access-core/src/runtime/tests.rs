@@ -1,5 +1,7 @@
 use super::*;
 use agent_access_provider::test_support::{basic_credential, bearer_credential};
+#[path = "access_key_credential_tests.rs"]
+mod access_key_credential_tests;
 #[path = "connection_tests.rs"]
 mod connection;
 #[path = "credential_discovery_tests.rs"]
@@ -437,6 +439,7 @@ fn runtime_with_replaced_config(runtime: &BrokerRuntime, config: BrokerConfig) -
         credential_key_ring: runtime.credential_key_ring.clone(),
         trusted_callers: runtime.trusted_callers.clone(),
         applications: runtime.applications.clone(),
+        access_key_types: runtime.access_key_types.clone(),
         broker_token_hasher: runtime.broker_token_hasher.clone(),
         local_password_hasher: runtime.local_password_hasher.clone(),
         browser_csrf_key: runtime.browser_csrf_key.clone(),
@@ -4748,6 +4751,7 @@ fn install_test_callers(runtime: &mut BrokerRuntime, fixed: bool, forwarding: bo
             allowed_execution_contexts: (!fixed)
                 .then(|| vec!["external".into(), "internal".into()]),
             allow_forwarded_identity: forwarding,
+            allow_access_key_resolution: false,
         },
     );
     config.execution_context = Some(crate::ExecutionContextConfig {
@@ -8278,6 +8282,7 @@ async fn per_user_credential_mode_is_selected_and_unconfigured_mode_fails_closed
         credential_key_ring: None,
         trusted_callers: Arc::new(Vec::new()),
         applications: runtime.applications.clone(),
+        access_key_types: runtime.access_key_types.clone(),
         broker_token_hasher: None,
         local_password_hasher: None,
         browser_csrf_key: None,
@@ -8826,6 +8831,8 @@ pub(super) fn base_fake_config() -> BrokerConfig {
         command_imports: Default::default(),
         oauth: Default::default(),
         applications: Default::default(),
+        access_key_types: Default::default(),
+        usernames: Default::default(),
         deployment,
         network: crate::NetworkConfig::default(),
         identity: IdentityConfig {
@@ -10156,6 +10163,7 @@ fn trusted_caller_credentials_are_distinct_and_rotation_changes_private_binding(
         execution_context: Some("default".into()),
         allowed_execution_contexts: None,
         allow_forwarded_identity: false,
+        allow_access_key_resolution: false,
     };
     config
         .identity

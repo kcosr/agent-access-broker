@@ -99,6 +99,7 @@ async fn fixture_start(
                 execution_context: Some("default".into()),
                 allowed_execution_contexts: None,
                 allow_forwarded_identity: name == "relay",
+                allow_access_key_resolution: false,
             },
         );
     }
@@ -345,6 +346,7 @@ async fn asserted_relay_fixture() -> (Fixture, Arc<ContextProvider>, PathBuf) {
                     execution_context: None,
                     allowed_execution_contexts: Some(vec!["internal".into(), "external".into()]),
                     allow_forwarded_identity: false,
+                    allow_access_key_resolution: false,
                 },
             );
             config.audit = Some(agent_access_core::AuditConfig::new(

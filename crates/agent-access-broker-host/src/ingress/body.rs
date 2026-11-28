@@ -68,7 +68,13 @@ pub(crate) async fn admit_public_body(
     let static_asset = matches!(*request.method(), Method::GET | Method::HEAD)
         && request.body().is_end_stream()
         && (path == "/ui" || path.starts_with("/ui/"));
-    if probe || static_asset || path == "/mcp" || path.starts_with("/mcp/") {
+    // Access key resolution has its own admission, pool and body bound; it takes
+    // nothing from the shared, anonymous-body or per-source capacity. Only a
+    // POST is one: any other method on the path was refused before this.
+    let access_key_resolution =
+        *request.method() == Method::POST && path == crate::handlers::access_keys::RESOLVE_PATH;
+    if probe || static_asset || access_key_resolution || path == "/mcp" || path.starts_with("/mcp/")
+    {
         return next.run(request).await;
     }
     admit_body(state, request, next, false).await

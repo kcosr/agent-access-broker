@@ -1,0 +1,9 @@
+{
+  "active": false,
+  "keyId": "ak_7Qm2xYp4Lw9Rt3Nv",
+  "owner": {
+    "kind": "user",
+    "id": "alice"
+  },
+  "reason": "revoked"
+}

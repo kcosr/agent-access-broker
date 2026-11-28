@@ -3462,6 +3462,8 @@ pub(super) fn test_forwarding_config(
         command_imports: Default::default(),
         oauth: Default::default(),
         applications: Default::default(),
+        access_key_types: Default::default(),
+        usernames: Default::default(),
         deployment: DeploymentConfig::default(),
         network: NetworkConfig::default(),
         execution_context: None,

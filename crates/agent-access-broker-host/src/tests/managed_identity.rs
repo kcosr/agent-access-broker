@@ -91,6 +91,7 @@ async fn fixture_serving(configure: impl FnOnce(&mut BrokerConfig), served: Serv
             execution_context: Some("default".into()),
             allowed_execution_contexts: None,
             allow_forwarded_identity: true,
+            allow_access_key_resolution: false,
         },
     );
     config.identity.sources = vec![IdentitySourceConfig {
@@ -772,6 +773,7 @@ async fn trusted_caller_gateway_rejection_is_audited_and_rate_limited_without_ch
                 execution_context: Some("default".into()),
                 allowed_execution_contexts: None,
                 allow_forwarded_identity: true,
+                allow_access_key_resolution: false,
             },
         );
         config

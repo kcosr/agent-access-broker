@@ -144,7 +144,16 @@ pub(crate) async fn start_reloadable_state(
     state.listener_tls_files = listener_tls_files;
     #[cfg(test)]
     let state = hooks.customize_state(state);
-    Ok(Arc::new(state))
+    let state = Arc::new(state);
+    // Existing accounts that follow their email get their names here, when
+    // the feature is first configured. It runs beside serving and never
+    // stops it: a failure is audited and tried again at the next reload.
+    crate::handlers::management::account_usernames::fill_missing_after_publication(
+        &state,
+        state.current(),
+        "startup",
+    );
+    Ok(state)
 }
 
 struct CandidateAdmission {
@@ -1129,7 +1138,7 @@ impl Drop for ReloadProgressGuard<'_> {
 impl ReloadableState {
     /// Reloads as SIGUSR2 requests, audited as the system, and returns the
     /// outcome.
-    pub(crate) async fn reload_from_signal(&self) -> ConfigOperationResponse {
+    pub(crate) async fn reload_from_signal(self: &Arc<Self>) -> ConfigOperationResponse {
         let source = SourceContext {
             listener: "signal".to_string(),
             remote: "process".to_string(),
@@ -1156,7 +1165,7 @@ impl ReloadableState {
     }
 
     pub(crate) async fn reload(
-        &self,
+        self: &Arc<Self>,
         trigger: ReloadTrigger,
         agent_request_id: String,
         broker_request_id: String,
@@ -1462,6 +1471,15 @@ impl ReloadableState {
                     })
                     .in_current_span()
                     .with_current_subscriber(),
+                );
+                // The people who follow their email and hold no name are
+                // named under this generation's settings, in an owner of its
+                // own that takes the fence one bounded batch at a time once
+                // this reload has let it go.
+                crate::handlers::management::account_usernames::fill_missing_after_publication(
+                    self,
+                    new_snapshot.clone(),
+                    "reload",
                 );
                 let (_mutation_guard, application_tokens) = match finalization.await {
                     Ok((fence, outcome)) => (Some(fence), outcome),

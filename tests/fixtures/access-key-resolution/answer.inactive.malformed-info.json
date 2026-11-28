@@ -1,0 +1,9 @@
+{
+  "active": false,
+  "keyId": "not a key id",
+  "owner": {
+    "kind": "user",
+    "id": ""
+  },
+  "reason": 7
+}

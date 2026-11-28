@@ -1,8 +1,11 @@
-//! Detached owners whose completion audit is their only record: the
-//! application token mint and revocation owners and a reload's token
-//! reconciliation. Each holds a lease from before it can outlive its waiter
-//! until its store work and audit are done, and shutdown drains the leases
-//! before the audit writers close.
+//! Detached owners whose store work must not commit after the audit writers
+//! close: the application token mint and revocation owners, a reload's token
+//! reconciliation, a successful sign-in, an access key mint, and the
+//! management mutations that run through `committed_identity_mutation`
+//! (usernames, access key revocation, identity access and bindings,
+//! application access). Each holds a lease from before it can
+//! outlive its waiter until its store work and audit are done, and shutdown
+//! drains the leases before the audit writers close.
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::Notify;
@@ -51,7 +54,7 @@ impl OwnerDrain {
             tracing::error!(
                 event = "application_owner_shutdown_unfinalized",
                 count = unfinished,
-                "application token owners did not finish within the shutdown budget; their store work may commit without its audit record"
+                "detached mutation owners did not finish within the shutdown budget; their store work may commit without its audit record"
             );
         }
         unfinished

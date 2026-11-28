@@ -1,7 +1,7 @@
 mod trusted_callers;
 pub use trusted_callers::{
-    AdmittedIdentity, CALLER_AUTHORIZATION_HEADER, CallerSecurityBinding, IngressAdmission,
-    USER_HEADER, parse_assertion_bearer,
+    AccessKeyResolutionCallerRefusal, AdmittedIdentity, CALLER_AUTHORIZATION_HEADER,
+    CallerSecurityBinding, IngressAdmission, USER_HEADER, parse_assertion_bearer,
 };
 use trusted_callers::{ResolvedTrustedCaller, load_trusted_callers};
 mod action_eligibility;
@@ -30,7 +30,9 @@ pub use command_authority::{
 mod command_dispatch;
 mod containment;
 use containment::{candidate_is_universe, containment_contract_error};
+mod access_keys;
 mod discovery;
+
 mod gateway_access;
 mod gateway_verification;
 mod import_control;
@@ -614,6 +616,8 @@ pub enum IdentityFailure {
     CallerAuthenticationInvalid,
     CallerIdentityForwardingDenied,
     CallerUserAssertionDenied,
+    /// The caller lacks `allow_access_key_resolution`.
+    CallerAccessKeyResolutionDenied,
     AssertionInvalid,
     AssertionUnsupported,
     AssertionDenied,
@@ -646,6 +650,7 @@ impl IdentityFailure {
             | Self::CallerAuthenticationInvalid
             | Self::CallerIdentityForwardingDenied
             | Self::CallerUserAssertionDenied
+            | Self::CallerAccessKeyResolutionDenied
             | Self::ExecutionContextRequired
             | Self::ExecutionContextInvalid
             | Self::ExecutionContextDenied => "caller.authenticate",
@@ -660,6 +665,9 @@ impl IdentityFailure {
             Self::CallerAuthenticationInvalid => ReasonCode::CallerAuthenticationInvalid,
             Self::CallerIdentityForwardingDenied => ReasonCode::CallerIdentityForwardingDenied,
             Self::CallerUserAssertionDenied => ReasonCode::CallerUserAssertionDenied,
+            Self::CallerAccessKeyResolutionDenied => {
+                ReasonCode::BrokerCallerAccessKeyResolutionDenied
+            }
             Self::AssertionInvalid => ReasonCode::IdentityAssertionInvalid,
             Self::AssertionUnsupported => ReasonCode::IdentityAssertionUnsupported,
             Self::AssertionDenied => ReasonCode::IdentityAssertionDenied,
@@ -684,6 +692,7 @@ impl IdentityFailure {
             Self::CallerAuthenticationInvalid => "caller authentication is invalid",
             Self::CallerIdentityForwardingDenied => "caller may not forward identity",
             Self::CallerUserAssertionDenied => "caller may not assert a user identity",
+            Self::CallerAccessKeyResolutionDenied => "caller may not resolve access keys",
             Self::AssertionInvalid => "identity assertion is invalid",
             Self::AssertionUnsupported => "identity assertion is unsupported on this route",
             Self::AssertionDenied => "identity assertion is denied",
@@ -1948,6 +1957,8 @@ pub struct BrokerRuntime {
     trusted_callers: Arc<Vec<ResolvedTrustedCaller>>,
     /// `[applications]` with their loaded client secrets.
     applications: Arc<crate::RegisteredApplications>,
+    /// `[access_key_types]`: what access keys may carry in this generation.
+    access_key_types: Arc<crate::AccessKeyTypes>,
     broker_token_hasher: Option<BrokerTokenHasher>,
     local_password_hasher: Option<LocalPasswordHasher>,
     browser_csrf_key: Option<BrowserCsrfKey>,
@@ -2399,8 +2410,26 @@ impl BrokerRuntime {
             .map(CredentialKeyRing::load)
             .transpose()
             .map_err(runtime_managed_store_error)?;
+        let access_key_types = Arc::new(crate::AccessKeyTypes::from_config(&config)?);
         if let Some(store) = &managed_store {
             store.configure_identity_token_encryption(credential_key_ring.clone());
+            store.configure_account_usernames(crate::AccountUsernamePolicy::from_config(&config)?);
+            // A saved setting never names an access key type this configuration
+            // does not define, at startup and at every reload. The refusal is
+            // the configuration's: it says which type cannot be removed yet
+            // and who still names it.
+            let referenced = store
+                .access_key_types_still_referenced(&access_key_types)
+                .map_err(runtime_managed_store_error)?;
+            if !referenced.is_empty() {
+                return Err(RuntimeError::Config(ConfigError::Invalid {
+                    errors: referenced
+                        .iter()
+                        .take(10)
+                        .map(crate::AccessKeyTypeStillReferenced::message)
+                        .collect(),
+                }));
+            }
         }
         let oauth = if config.oauth.registrations.is_empty() {
             None
@@ -2647,6 +2676,7 @@ impl BrokerRuntime {
             oauth,
             trusted_callers,
             applications,
+            access_key_types,
             broker_token_hasher,
             local_password_hasher,
             browser_csrf_key,
@@ -3218,6 +3248,11 @@ impl BrokerRuntime {
     /// This generation's registered client applications.
     pub fn applications(&self) -> &crate::RegisteredApplications {
         &self.applications
+    }
+
+    /// This generation's access key types: what access keys may carry.
+    pub fn access_key_types(&self) -> &crate::AccessKeyTypes {
+        &self.access_key_types
     }
 
     pub fn local_password_hasher(&self) -> Option<&LocalPasswordHasher> {
@@ -8173,6 +8208,11 @@ impl StaticPrincipalsSource {
     /// principal with its ID, as classless management resolves it, and none
     /// without one. A store that cannot answer fails the resolution.
     fn resolve(&self, token: &str) -> Result<SourceResolution, IdentityFailure> {
+        // No static principal is configured with an access key, and none
+        // is admitted with one.
+        if crate::has_access_key_prefix(token) {
+            return Ok(SourceResolution::NoMatch);
+        }
         let Some(identity) = self.tokens.get(token) else {
             return Ok(SourceResolution::NoMatch);
         };
@@ -8308,6 +8348,14 @@ fn load_identity_sources(
                             return Err(RuntimeError::Config(ConfigError::Invalid {
                                 errors: vec![format!(
                                     "identity.sources.{}.principals.{}.token_refs must resolve to non-empty secrets",
+                                    source.name, principal.principal
+                                )],
+                            }));
+                        }
+                        if crate::has_access_key_prefix(&token) {
+                            return Err(RuntimeError::Config(ConfigError::Invalid {
+                                errors: vec![format!(
+                                    "identity.sources.{}.principals.{}.token_refs must not use the reserved access-key prefix",
                                     source.name, principal.principal
                                 )],
                             }));
@@ -8975,6 +9023,9 @@ fn managed_store_failure_message(error: &ManagedStoreError) -> &'static str {
         }
         ManagedStoreError::ApplicationAccessDenied(_) => "application access is denied",
         ManagedStoreError::ApplicationAccessNotFound => "application access was not found",
+        ManagedStoreError::AccountUsernameRefused(refused) => refused.message(),
+        ManagedStoreError::AccessKeyRefused(refused) => refused.message(),
+        ManagedStoreError::AccessKeyNotFound => "access key was not found",
         ManagedStoreError::AttestedIdentityDenied => "managed identity assertion is denied",
         ManagedStoreError::SelfServiceDisabled => "self-service is disabled",
         ManagedStoreError::TokenIssuanceDenied { category } => category.message(),
@@ -9220,6 +9271,23 @@ fn audit_unavailable_response(
     action: String,
     resource_scopes: ResourceScopes,
     _error: RuntimeError,
+) -> BrokerResponse<Value> {
+    audit_unavailable_envelope(
+        agent_request_id,
+        broker_request_id,
+        service,
+        action,
+        resource_scopes,
+    )
+}
+
+/// The 503 `audit_unavailable` envelope, which names no cause.
+fn audit_unavailable_envelope(
+    agent_request_id: String,
+    broker_request_id: String,
+    service: String,
+    action: String,
+    resource_scopes: ResourceScopes,
 ) -> BrokerResponse<Value> {
     let reason_code = ReasonCode::AuditUnavailable;
     BrokerResponse {

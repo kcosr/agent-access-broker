@@ -59,6 +59,9 @@ pub(crate) struct ReloadableState {
     pub(crate) shared_ingress: Arc<IngressGuards>,
     /// Independent, bounded service-detail control capacity.
     pub(crate) service_detail_ingress: Arc<IngressGuards>,
+    /// The access key resolution route's own concurrency pool and
+    /// per-caller rate windows.
+    pub(crate) access_key_resolution_ingress: Arc<IngressGuards>,
     /// Per-(principal, service) invocation windows; history survives reloads.
     pub(crate) shared_invocations: Arc<InvocationLimiter>,
     pub(crate) admission_owners: Arc<crate::admission::AdmissionRegistry>,
@@ -86,6 +89,27 @@ pub(crate) struct ReloadableState {
     /// publication, before its store work.
     #[cfg(test)]
     pub(crate) application_reconciliation_barrier: Mutex<Option<Arc<McpBlockingBarrier>>>,
+    /// Blocks a sign-in's owner after its external or password work and
+    /// before its fenced store completion.
+    #[cfg(test)]
+    pub(crate) sign_in_completion_barrier: Mutex<Option<Arc<McpBlockingBarrier>>>,
+    /// Blocks an access key resolution's store lookup inside its blocking
+    /// task, and reports when that task has released the route's capacity.
+    #[cfg(test)]
+    pub(crate) access_key_resolution_store_barrier: Mutex<Option<Arc<McpBlockingBarrier>>>,
+    /// Replaces the resolution answer's size limit.
+    #[cfg(test)]
+    pub(crate) access_key_resolution_answer_cap: Mutex<Option<usize>>,
+    /// Blocks an access key mint's owner before its fenced store call.
+    #[cfg(test)]
+    pub(crate) access_key_mint_barrier: Mutex<Option<Arc<McpBlockingBarrier>>>,
+    /// Replaces the number of accounts one batch of the username fill
+    /// examines.
+    #[cfg(test)]
+    pub(crate) account_username_fill_batch_size: Mutex<Option<usize>>,
+    /// Blocks the username fill before each batch after its first.
+    #[cfg(test)]
+    pub(crate) account_username_fill_barrier: Mutex<Option<Arc<McpBlockingBarrier>>>,
     #[cfg(test)]
     pub(crate) gateway_dispatch_barrier:
         Mutex<Option<(GatewayDispatchPhase, Arc<McpAdmissionBarrier>)>>,
@@ -781,6 +805,7 @@ impl ReloadableState {
             reload_in_progress: AtomicBool::new(false),
             shared_ingress: Arc::new(IngressGuards::new()),
             service_detail_ingress: Arc::new(IngressGuards::new()),
+            access_key_resolution_ingress: Arc::new(IngressGuards::new()),
             shared_invocations: Arc::new(InvocationLimiter::new(
                 snapshot
                     .runtime
@@ -804,6 +829,18 @@ impl ReloadableState {
             mcp_admission_barrier: Mutex::new(None),
             #[cfg(test)]
             application_reconciliation_barrier: Mutex::new(None),
+            #[cfg(test)]
+            sign_in_completion_barrier: Mutex::new(None),
+            #[cfg(test)]
+            access_key_resolution_store_barrier: Mutex::new(None),
+            #[cfg(test)]
+            access_key_resolution_answer_cap: Mutex::new(None),
+            #[cfg(test)]
+            access_key_mint_barrier: Mutex::new(None),
+            #[cfg(test)]
+            account_username_fill_batch_size: Mutex::new(None),
+            #[cfg(test)]
+            account_username_fill_barrier: Mutex::new(None),
             #[cfg(test)]
             gateway_dispatch_barrier: Mutex::new(None),
             #[cfg(test)]

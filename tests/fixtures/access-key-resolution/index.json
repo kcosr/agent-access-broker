@@ -1,0 +1,183 @@
+{
+  "contract": "POST /v1/access-keys/resolve",
+  "keyGrammar": "aab_ak_ followed by 43 characters of [A-Za-z0-9_-]",
+  "limits": {
+    "requestBodyBytes": 4096,
+    "answerBytes": 16384,
+    "groups": 64,
+    "types": 16
+  },
+  "requests": {
+    "valid": [
+      "request.valid.json"
+    ],
+    "endpointMustAnswer400": [
+      {
+        "file": "request.invalid.unknown-member.json",
+        "why": "unknown member"
+      },
+      {
+        "file": "request.invalid.missing-key.json",
+        "why": "key is required"
+      },
+      {
+        "file": "request.invalid.malformed-key.json",
+        "why": "key does not have the access key shape"
+      },
+      {
+        "file": "request.invalid.other-prefix.json",
+        "why": "not an access key"
+      },
+      {
+        "file": "request.invalid.array-root.json",
+        "why": "the request body must be a JSON object, not a positional array"
+      }
+    ]
+  },
+  "answers": {
+    "callerAcceptsAsSubject": [
+      "answer.active.portal.json",
+      "answer.active.application.json",
+      "answer.active.administrator.json",
+      "answer.active.administrator-user.json",
+      "answer.active.never.json",
+      "answer.active.never-finite-type.json"
+    ],
+    "callerTreatsAsInactive": [
+      "answer.inactive.json",
+      "answer.inactive.stored-revoked.json",
+      "answer.inactive.stored-no-username.json",
+      "answer.inactive.stored-service-account.json",
+      "answer.inactive.unrecognised-reason.json",
+      "answer.inactive.malformed-info.json",
+      "answer.inactive.reason-only.json",
+      "answer.inactive.unexpected-member.json"
+    ],
+    "callerTreatsAsUnavailable": [
+      {
+        "file": "answer.invalid.unknown-member.json",
+        "why": "unknown member"
+      },
+      {
+        "file": "answer.invalid.missing-expires.json",
+        "why": "expiresAt is required"
+      },
+      {
+        "file": "answer.invalid.no-types.json",
+        "why": "an active answer has 1 to 16 types"
+      },
+      {
+        "file": "answer.invalid.valid-until-after-expiry.json",
+        "why": "validUntil later than expiresAt"
+      },
+      {
+        "file": "answer.invalid.subject-id-grammar.json",
+        "why": "subject id outside the caller's principal grammar"
+      },
+      {
+        "file": "answer.invalid.subject-kind.json",
+        "why": "subject kind must be user or service_account"
+      },
+      {
+        "file": "answer.invalid.too-many-groups.json",
+        "why": "more than 64 groups"
+      },
+      {
+        "file": "answer.invalid.key-id-grammar.json",
+        "why": "keyId must be ak_ plus 1 to 60 of [A-Za-z0-9_-]"
+      },
+      {
+        "file": "answer.invalid.origin-application-without-id.json",
+        "why": "origin application needs an application id"
+      },
+      {
+        "file": "answer.invalid.origin-portal-with-application.json",
+        "why": "application must be null unless origin is application"
+      },
+      {
+        "file": "answer.invalid.origin-unknown.json",
+        "why": "origin must be portal, administrator or application"
+      },
+      {
+        "file": "answer.invalid.type-name-grammar.json",
+        "why": "type name outside [a-z][a-z0-9_-]{0,63}"
+      },
+      {
+        "file": "answer.invalid.expires-not-rfc3339.json",
+        "why": "a string expiresAt must be RFC 3339 UTC"
+      },
+      {
+        "file": "answer.invalid.active-not-boolean.json",
+        "why": "active must be a boolean"
+      },
+      {
+        "file": "answer.invalid.array-inactive.json",
+        "why": "the answer must be a JSON object; [false] is not the inactive form"
+      },
+      {
+        "file": "answer.invalid.array-active.json",
+        "why": "the answer must be a JSON object, not a positional array of member values"
+      },
+      {
+        "file": "answer.invalid.array-subject.json",
+        "why": "subject must be an object"
+      },
+      {
+        "file": "answer.invalid.array-type.json",
+        "why": "each type must be an object"
+      },
+      {
+        "file": "answer.invalid.type-unknown-member.json",
+        "why": "a type item is exactly {name, validUntil}; any other member, including contexts, is unknown"
+      },
+      {
+        "file": "answer.invalid.duplicate-type.json",
+        "why": "type names must be distinct within the list"
+      },
+      {
+        "file": "answer.invalid.null-valid-until-with-expiry.json",
+        "why": "validUntil must be a string when expiresAt is a string"
+      }
+    ],
+    "endpointInactiveForms": {
+      "unknownOrMalformedKey": "answer.inactive.json",
+      "storedKey": [
+        "answer.inactive.stored-revoked.json",
+        "answer.inactive.stored-no-username.json",
+        "answer.inactive.stored-service-account.json"
+      ]
+    }
+  },
+  "statusMapping": {
+    "200": "active or inactive per body",
+    "400": "unavailable",
+    "401": "unavailable",
+    "403": "unavailable",
+    "429": "unavailable",
+    "503": "unavailable",
+    "timeout": "unavailable",
+    "redirect": "unavailable, not followed"
+  },
+  "notes": [
+    "The endpoint's tests must show it emits only the active schema, the bare inactive form for a value that is not a stored key, or the stored-key inactive form ({active:false, keyId, owner, reason}, with owner null when the owner has no usable username and reason from inactiveReasons).",
+    "The caller's tests must show every callerTreatsAsUnavailable answer is refused as unavailable and never remembered as not active, and every callerTreatsAsInactive answer is not active, logging the informational members it can validate; a missing, unknown or malformed informational member never turns a not-active answer into unavailable.",
+    "Each repository vendors a byte-identical copy of this folder; the copies are compared when the milestone is integrated.",
+    "Every object in a request or answer must be a JSON object. A positional array must never be accepted in place of one, even where a parser library would allow it.",
+    "The answer carries no execution contexts. A type item is exactly {name, validUntil}; the caller's own rules decide where a type works.",
+    "Active expiresAt is required and is an RFC 3339 UTC string or null. Every validUntil is required; it may be null only when expiresAt is null. A string validUntil must not exceed a string expiresAt. Inactive forms are unchanged."
+  ],
+  "inactiveReasons": [
+    "revoked",
+    "expired",
+    "principal_disabled",
+    "identity_access_paused",
+    "identity_access_missing",
+    "origin_unsupported",
+    "no_account_username",
+    "account_username_awaiting_confirmation",
+    "account_username_reserved",
+    "username_incarnation_changed",
+    "group_limit_exceeded",
+    "no_access_key_type"
+  ]
+}

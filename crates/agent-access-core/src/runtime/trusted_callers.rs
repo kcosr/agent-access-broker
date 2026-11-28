@@ -35,6 +35,15 @@ enum IngressIdentity {
     },
 }
 
+/// A refused caller of access key resolution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccessKeyResolutionCallerRefusal {
+    pub failure: IdentityFailure,
+    /// The configured caller whose credential was presented, when only the
+    /// capability is missing. A missing or unknown credential names nobody.
+    pub caller: Option<String>,
+}
+
 /// Authenticated caller attributes resolved against a single runtime snapshot.
 /// The private binding must only be used in a keyed session-owner signature.
 #[derive(Clone)]
@@ -147,6 +156,13 @@ pub(super) fn load_trusted_callers(
                 ),
             });
         }
+        if crate::has_access_key_prefix(&credential) {
+            return Err(RuntimeError::ManagedStore {
+                message: format!(
+                    "trusted caller {name} credential uses the reserved access-key prefix"
+                ),
+            });
+        }
         if callers
             .iter()
             .any(|other| bool::from(credential.as_bytes().ct_eq(other.credential.as_bytes())))
@@ -163,7 +179,8 @@ pub(super) fn load_trusted_callers(
             caller.context_mode == TrustedCallerContextMode::Fixed,
             caller.execution_context,
             caller.allowed_execution_contexts,
-            caller.allow_forwarded_identity
+            caller.allow_forwarded_identity,
+            caller.allow_access_key_resolution
         ])
         .to_string();
         let mut digest = Sha256::new();
@@ -270,6 +287,74 @@ impl BrokerRuntime {
             }
         }
         Ok(())
+    }
+
+    /// Authenticates the trusted caller of an access key resolution and
+    /// nothing else: no principal, context or forwarded identity is admitted.
+    /// The caller presents its `caller_authorization` credential and must
+    /// have `allow_access_key_resolution`. Returns the caller's configured name.
+    /// A refusal names the configured caller too, when the credential was
+    /// one's and only the capability is missing.
+    pub fn authenticate_access_key_resolution_caller(
+        &self,
+        headers: &HeaderMap,
+    ) -> Result<String, AccessKeyResolutionCallerRefusal> {
+        let unmatched = |failure| AccessKeyResolutionCallerRefusal {
+            failure,
+            caller: None,
+        };
+        self.validate_ingress_security_headers(headers, false)
+            .map_err(unmatched)?;
+        let mut credentials = headers.get_all(CALLER_AUTHORIZATION_HEADER).iter();
+        let Some(raw) = credentials.next() else {
+            return Err(unmatched(IdentityFailure::CallerAuthenticationRequired));
+        };
+        if credentials.next().is_some() {
+            return Err(unmatched(IdentityFailure::CallerAuthenticationInvalid));
+        }
+        let caller = raw
+            .to_str()
+            .ok()
+            .and_then(|raw| raw.strip_prefix("Bearer "))
+            .and_then(|credential| {
+                self.match_caller(
+                    credential,
+                    TrustedCallerCredentialTransport::CallerAuthorization,
+                )
+            })
+            .ok_or_else(|| unmatched(IdentityFailure::CallerAuthenticationInvalid))?;
+        if !caller.config.allow_access_key_resolution {
+            return Err(AccessKeyResolutionCallerRefusal {
+                failure: IdentityFailure::CallerAccessKeyResolutionDenied,
+                caller: Some(caller.name),
+            });
+        }
+        Ok(caller.name)
+    }
+
+    /// The header an access key resolution request may not carry, when it
+    /// carries one: any header under which this configuration accepts or
+    /// asserts an identity. That is every configured identity source's
+    /// header, `Authorization`, a browser session's `Cookie`, a forwarded
+    /// identity fingerprint, an asserted username and an execution
+    /// context. The caller of a resolution speaks for itself only. The name
+    /// is returned in lower case.
+    pub fn access_key_resolution_forbidden_header(&self, headers: &HeaderMap) -> Option<String> {
+        [
+            "authorization",
+            "cookie",
+            IDENTITY_HEADER,
+            USER_HEADER,
+            crate::EXECUTION_CONTEXT_HEADER,
+        ]
+        .into_iter()
+        .chain(
+            self.identity_sources
+                .iter()
+                .map(|source| source.audit.token_header.as_str()),
+        )
+        .find(|name| headers.contains_key(*name))
+        .map(str::to_ascii_lowercase)
     }
 
     pub fn admit_ingress(&self, headers: &HeaderMap) -> Result<IngressAdmission, IdentityFailure> {

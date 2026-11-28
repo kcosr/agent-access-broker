@@ -16,14 +16,15 @@ use crate::handlers::management::credentials::{
 };
 use crate::state::AppState;
 use agent_access_core::{
-    BrokerConfig, BrokerRuntime, BrokerTokenClass, BrokerTokenIssueRequest, BrokerTokenRecord,
-    DEFAULT_EXECUTION_CONTEXT, EffectiveGroupMembershipRecord, ExternalGroupBindingCreateRequest,
-    GroupMemberRecord, GroupPatchRequest, GroupRecord, GroupWriteRequest, IdentityContext,
-    LocalPasswordWriteRequest, LoginMethodRecord, ManagedPolicyGrantRecord, ManagedStoreError,
-    OidcLoginMethodLinkRequest, OidcMembershipRenewalRecord, PrincipalAccessPatchRequest,
-    PrincipalPatchRequest, PrincipalRecord, PrincipalRole, PrincipalWriteRequest,
-    RightGrantRequest, broker_token_ttl_options_allow_never, broker_token_ttl_options_allow_ttl,
-    parse_ttl_seconds,
+    AccessKeyTypesWrite, BrokerConfig, BrokerRuntime, BrokerTokenClass, BrokerTokenIssueRequest,
+    BrokerTokenRecord, DEFAULT_EXECUTION_CONTEXT, EffectiveGroupMembershipRecord,
+    ExternalGroupBindingCreateRequest, GroupAccessKeyTypes, GroupMemberRecord, GroupPatchRequest,
+    GroupRecord, GroupWriteRequest, IdentityContext, LocalPasswordWriteRequest, LoginMethodRecord,
+    ManagedPolicyGrantRecord, ManagedStoreError, OidcLoginMethodLinkRequest,
+    OidcMembershipRenewalRecord, PrincipalAccessPatchRequest, PrincipalPatchRequest,
+    PrincipalRecord, PrincipalRole, PrincipalWriteRequest, RightGrantRequest,
+    broker_token_ttl_options_allow_never, broker_token_ttl_options_allow_ttl,
+    has_broker_secret_prefix, parse_ttl_seconds,
 };
 use agent_access_provider::ReasonCode;
 use axum::Json;
@@ -42,7 +43,7 @@ use url::form_urlencoded;
 use uuid::Uuid;
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(remote = "Self", rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct PrincipalCreateBody {
     // Retain explicit null so Microsoft creation cannot treat it as omission.
     #[serde(default, deserialize_with = "deserialize_present")]
@@ -60,9 +61,12 @@ pub(crate) struct PrincipalCreateBody {
     #[serde(default)]
     agent_token_issuance: agent_access_core::PrincipalAgentTokenIssuanceSetting,
 }
+// The body is an object: creation names a person from the email it carries,
+// so an array of its members in order is refused.
+agent_access_core::deserialize_object_only!(PrincipalCreateBody);
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(remote = "Self", rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct PrincipalAccessBody {
     #[serde(default, deserialize_with = "deserialize_present")]
     role: Option<PrincipalRole>,
@@ -70,7 +74,11 @@ pub(crate) struct PrincipalAccessBody {
     self_service_enabled: Option<bool>,
     #[serde(default, deserialize_with = "deserialize_present")]
     agent_token_issuance: Option<agent_access_core::PrincipalAgentTokenIssuanceSetting>,
+    #[serde(default, deserialize_with = "deserialize_present")]
+    access_key_types: Option<agent_access_core::PrincipalAccessKeyTypes>,
 }
+// The body is an object: an array of its members in order is refused.
+agent_access_core::deserialize_object_only!(PrincipalAccessBody);
 
 /// Reads an optional field while preserving its presence. Explicit `null` is
 /// rejected unless `T` itself accepts it.
@@ -87,7 +95,7 @@ fn default_user_kind() -> String {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(remote = "Self", rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct PrincipalPatchBody {
     #[serde(default, deserialize_with = "deserialize_nullable_string_patch")]
     display_name: Option<Option<String>>,
@@ -95,9 +103,12 @@ pub(crate) struct PrincipalPatchBody {
     email: Option<Option<String>>,
     status: Option<String>,
 }
+// The body is an object: its email renames a person who follows it, so an
+// array of its members in order is refused.
+agent_access_core::deserialize_object_only!(PrincipalPatchBody);
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(remote = "Self", rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct GroupCreateBody {
     group_id: String,
     display_name: Option<String>,
@@ -106,10 +117,13 @@ pub(crate) struct GroupCreateBody {
     auto_enroll_new_microsoft_users: Option<bool>,
     #[serde(default, deserialize_with = "deserialize_present")]
     agent_token_issuance: Option<agent_access_core::GroupAgentTokenIssuanceSetting>,
+    #[serde(default, deserialize_with = "deserialize_present")]
+    access_key_types: Option<agent_access_core::GroupAccessKeyTypes>,
 }
+agent_access_core::deserialize_object_only!(GroupCreateBody);
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(remote = "Self", rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct GroupPatchBody {
     #[serde(default, deserialize_with = "deserialize_nullable_string_patch")]
     display_name: Option<Option<String>>,
@@ -120,7 +134,10 @@ pub(crate) struct GroupPatchBody {
     auto_enroll_new_microsoft_users: Option<bool>,
     #[serde(default, deserialize_with = "deserialize_present")]
     agent_token_issuance: Option<agent_access_core::GroupAgentTokenIssuanceSetting>,
+    #[serde(default, deserialize_with = "deserialize_present")]
+    access_key_types: Option<agent_access_core::GroupAccessKeyTypes>,
 }
+agent_access_core::deserialize_object_only!(GroupPatchBody);
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -895,13 +912,37 @@ pub(crate) async fn admin_groups_list(
         Err(response) => return *response,
     };
     if context.snapshot.runtime.config().identity.authority == "toml" {
-        let groups = toml_group_records(context.snapshot.runtime.config());
+        // TOML groups carry no access key types: they allow nothing.
+        let groups = toml_group_records(context.snapshot.runtime.config())
+            .into_iter()
+            .map(|group| with_access_key_types(json!(group), &GroupAccessKeyTypes::default()))
+            .collect::<Vec<_>>();
         return management_success_response(&context, operation, None, json!(groups)).await;
     }
-    match management_store_call(&context, |store| store.list_groups()).await {
-        Ok(groups) => management_success_response(&context, operation, None, json!(groups)).await,
+    match management_store_call(&context, |store| {
+        Ok((store.list_groups()?, store.group_access_key_types()?))
+    })
+    .await
+    {
+        Ok((groups, mut access)) => {
+            let groups = groups
+                .into_iter()
+                .map(|group| {
+                    let access = access.remove(&group.group_id).unwrap_or_default();
+                    with_access_key_types(json!(group), &access)
+                })
+                .collect::<Vec<_>>();
+            management_success_response(&context, operation, None, json!(groups)).await
+        }
         Err(error) => management_store_error_response(&context, operation, None, error).await,
     }
+}
+
+/// A principal's or group's JSON with its access key type setting, which the
+/// stored records do not carry.
+fn with_access_key_types(mut record: Value, access: &impl Serialize) -> Value {
+    record["accessKeyTypes"] = json!(access);
+    record
 }
 
 pub(crate) async fn admin_groups_get(
@@ -923,6 +964,15 @@ pub(crate) async fn admin_groups_get(
         Ok(context) => context,
         Err(response) => return *response,
     };
+    if has_broker_secret_prefix(&group) {
+        return super::identity_access::invalid_input(
+            &context,
+            operation,
+            None,
+            "group must be an identifier, not a Broker secret",
+        )
+        .await;
+    }
     let target = Some(json!({"group": group}));
     if context.snapshot.runtime.config().identity.authority == "toml" {
         let Some(record) = toml_group_record(context.snapshot.runtime.config(), &group) else {
@@ -941,8 +991,11 @@ pub(crate) async fn admin_groups_get(
         let subject = group_subject(&group);
         let policy_references = toml_policy_references(context.snapshot.runtime.config(), &subject);
         let section = direct_group_policy_section(&record, subject, policy_references);
-        let detail = group_detail(record, members, vec![section]);
-        return management_success_response(&context, operation, target, json!(detail)).await;
+        let detail = with_access_key_types(
+            json!(group_detail(record, members, vec![section])),
+            &GroupAccessKeyTypes::default(),
+        );
+        return management_success_response(&context, operation, target, detail).await;
     }
     let managed_policy = context.snapshot.runtime.config().policy.authority == "managed";
     let group_for_store = group.clone();
@@ -954,11 +1007,15 @@ pub(crate) async fn admin_groups_get(
         } else {
             Vec::new()
         };
-        Ok((record, members, policy_grants))
+        let access = store
+            .group_access_key_types()?
+            .remove(&group_for_store)
+            .unwrap_or_default();
+        Ok((record, members, policy_grants, access))
     })
     .await
     {
-        Ok((record, members, policy_grants)) => {
+        Ok((record, members, policy_grants, access)) => {
             let subject = group_subject(&record.group_id);
             let policy_references =
                 if context.snapshot.runtime.config().policy.authority == "managed" {
@@ -967,8 +1024,9 @@ pub(crate) async fn admin_groups_get(
                     toml_policy_references(context.snapshot.runtime.config(), &subject)
                 };
             let section = direct_group_policy_section(&record, subject, policy_references);
-            let detail = group_detail(record, members, vec![section]);
-            management_success_response(&context, operation, target, json!(detail)).await
+            let detail =
+                with_access_key_types(json!(group_detail(record, members, vec![section])), &access);
+            management_success_response(&context, operation, target, detail).await
         }
         Err(error) => management_store_error_response(&context, operation, target, error).await,
     }
@@ -1028,6 +1086,9 @@ fn group_write_audit_target(group: &str, auto_enroll: Option<bool>) -> Value {
 
 /// Keep the committed change and its supplemental audit in one owner task,
 /// even when the HTTP caller stops waiting after the managed-store commit.
+/// The owner holds a shutdown-drain lease from before it is spawned until its
+/// store work and completion audit are done, so shutdown waits for it before
+/// the audit writers close.
 pub(crate) async fn committed_group_mutation<F>(
     state: AppState,
     context: ManagementContext,
@@ -1046,45 +1107,62 @@ where
     let context = Arc::new(context);
     let owner_context = context.clone();
     let owner_target = target.clone();
-    let owner = tokio::spawn(async move {
-        let context = owner_context;
-        match management_token_store_call(&state, &context, move |store, _, environment| {
-            mutate(store, environment)
-        })
-        .await
-        {
-            Ok(result) => {
-                let mut completion = json!({"group": result.group.group_id});
-                if let Some(change) = result.auto_enrollment_change {
-                    completion["autoEnrollNewMicrosoftUsers"] = json!({
-                        "previous": change.previous, "current": change.current,
+    let lease = state.reloadable.application_owners.register();
+    let owner = tokio::spawn(
+        async move {
+            let _lease = lease;
+            let context = owner_context;
+            match management_token_store_call(&state, &context, move |store, _, environment| {
+                mutate(store, environment)
+            })
+            .await
+            {
+                Ok(result) => {
+                    let mut completion = json!({"group": result.group.group_id});
+                    if let Some(change) = result.auto_enrollment_change {
+                        completion["autoEnrollNewMicrosoftUsers"] = json!({
+                            "previous": change.previous, "current": change.current,
+                        });
+                    }
+                    if let Some(change) = result.agent_token_issuance_change {
+                        completion["agentTokenIssuance"] = json!({
+                            "previous": change.previous, "current": change.current,
+                        });
+                    }
+                    let access = result.access_key_types.unwrap_or_else(|| {
+                        agent_access_core::AccessKeyTypesChange {
+                            previous: GroupAccessKeyTypes::default(),
+                            current: GroupAccessKeyTypes::default(),
+                        }
                     });
-                }
-                if let Some(change) = result.agent_token_issuance_change {
-                    completion["agentTokenIssuance"] = json!({
-                        "previous": change.previous, "current": change.current,
-                    });
-                }
-                if completion.as_object().is_some_and(|value| value.len() > 1) {
-                    management_committed_write_audit_completion(
+                    if access.previous != access.current {
+                        completion["accessKeyTypes"] = json!({
+                            "previous": access.previous, "current": access.current,
+                        });
+                    }
+                    if completion.as_object().is_some_and(|value| value.len() > 1) {
+                        management_committed_write_audit_completion(
+                            &context,
+                            operation,
+                            Some(completion),
+                        )
+                        .await;
+                    }
+                    management_pre_audited_success_response(
                         &context,
                         operation,
-                        Some(completion),
+                        owner_target,
+                        with_access_key_types(json!(result.group), &access.current),
                     )
-                    .await;
                 }
-                management_pre_audited_success_response(
-                    &context,
-                    operation,
-                    owner_target,
-                    json!(result.group),
-                )
-            }
-            Err(error) => {
-                management_store_error_response(&context, operation, owner_target, error).await
+                Err(error) => {
+                    management_store_error_response(&context, operation, owner_target, error).await
+                }
             }
         }
-    });
+        .in_current_span()
+        .with_current_subscriber(),
+    );
     match owner.await {
         Ok(response) => response,
         Err(_) => {
@@ -1118,6 +1196,15 @@ pub(crate) async fn admin_groups_create(
         Ok(context) => context,
         Err(response) => return *response,
     };
+    if has_broker_secret_prefix(&body.group_id) {
+        return super::identity_access::invalid_input(
+            &context,
+            operation,
+            None,
+            "group must be an identifier, not a Broker secret",
+        )
+        .await;
+    }
     let target = Some(group_write_audit_target(
         &body.group_id,
         body.auto_enroll_new_microsoft_users,
@@ -1139,13 +1226,16 @@ pub(crate) async fn admin_groups_create(
         .await;
     }
     let actor = context.identity.principal.clone();
+    // The mutation runs under the reload fence, so these are the
+    // access key types of the generation in force when it writes.
+    let runtime = context.snapshot.runtime.clone();
     committed_group_mutation(
         state,
         context,
         operation,
         target,
         move |store, environment| {
-            store.create_group_with_effect(
+            store.create_group_with_access(
                 GroupWriteRequest {
                     group_id: body.group_id,
                     display_name: body.display_name,
@@ -1156,6 +1246,12 @@ pub(crate) async fn admin_groups_create(
                     agent_token_issuance: body.agent_token_issuance.unwrap_or_default(),
                     created_by: actor,
                 },
+                body.access_key_types
+                    .as_ref()
+                    .map(|setting| AccessKeyTypesWrite {
+                        setting,
+                        configured: runtime.access_key_types(),
+                    }),
                 environment.contexts(),
             )
         },
@@ -1183,6 +1279,15 @@ pub(crate) async fn admin_groups_patch(
         Ok(context) => context,
         Err(response) => return *response,
     };
+    if has_broker_secret_prefix(&group) {
+        return super::identity_access::invalid_input(
+            &context,
+            operation,
+            None,
+            "group must be an identifier, not a Broker secret",
+        )
+        .await;
+    }
     let target = Some(group_write_audit_target(
         &group,
         body.auto_enroll_new_microsoft_users,
@@ -1205,13 +1310,14 @@ pub(crate) async fn admin_groups_patch(
     }
     let actor = context.identity.principal.clone();
     let group_for_store = group.clone();
+    let runtime = context.snapshot.runtime.clone();
     committed_group_mutation(
         state,
         context,
         operation,
         target,
         move |store, environment| {
-            store.patch_group_with_effect(
+            store.patch_group_with_access(
                 GroupPatchRequest {
                     group_id: group_for_store,
                     display_name: body.display_name,
@@ -1221,6 +1327,12 @@ pub(crate) async fn admin_groups_patch(
                     agent_token_issuance: body.agent_token_issuance,
                     updated_by: actor,
                 },
+                body.access_key_types
+                    .as_ref()
+                    .map(|setting| AccessKeyTypesWrite {
+                        setting,
+                        configured: runtime.access_key_types(),
+                    }),
                 environment.contexts(),
             )
         },
@@ -1531,7 +1643,10 @@ pub(crate) async fn admin_external_group_binding_delete(
 
 /// Keep principal creation/access changes and their captured completion receipt
 /// together after the HTTP waiter disconnects. Completion remains best effort.
-pub(crate) async fn committed_principal_mutation<F>(
+/// The owner holds a shutdown-drain lease from before it is spawned until its
+/// store work and completion audit are done, so shutdown waits for it before
+/// the audit writers close.
+pub(crate) async fn committed_principal_mutation<F, R>(
     state: AppState,
     context: ManagementContext,
     operation: &'static str,
@@ -1542,15 +1657,18 @@ where
     F: FnOnce(
             agent_access_core::ManagedStore,
             agent_access_core::AgentTokenIssuanceEnvironment,
-        ) -> Result<(PrincipalRecord, Value), ManagedStoreError>
+        ) -> Result<(R, Value), ManagedStoreError>
         + Send
         + 'static,
+    R: Serialize + Send + 'static,
 {
     let context = Arc::new(context);
     let owner_context = context.clone();
     let owner_target = target.clone();
+    let lease = state.reloadable.application_owners.register();
     let owner = tokio::spawn(
         async move {
+            let _lease = lease;
             let context = owner_context;
             match management_token_store_call(&state, &context, move |store, _, environment| {
                 mutate(store, environment)
@@ -1614,6 +1732,20 @@ pub(crate) async fn admin_principals_create(
         Ok(context) => context,
         Err(response) => return *response,
     };
+    if body
+        .principal_id
+        .as_ref()
+        .and_then(|id| id.as_deref())
+        .is_some_and(has_broker_secret_prefix)
+    {
+        return super::identity_access::invalid_input(
+            &context,
+            operation,
+            None,
+            "principalId must be an identifier, not a Broker secret",
+        )
+        .await;
+    }
     let principal_id = match (&body.principal_id, &body.microsoft_enrollment) {
         (None, Some(_)) => Ok(format!("usr-{}", Uuid::new_v4())),
         (Some(Some(principal_id)), None) => Ok(principal_id.clone()),
@@ -1666,7 +1798,7 @@ pub(crate) async fn admin_principals_create(
             } else {
                 None
             };
-            let principal = store.create_principal_with_microsoft_enrollment(
+            let created = store.create_principal_with_effect(
                 PrincipalWriteRequest {
                     principal_id,
                     kind: body.kind,
@@ -1682,10 +1814,16 @@ pub(crate) async fn admin_principals_create(
                 provider_generation,
                 environment.contexts(),
             )?;
+            let principal = created.principal;
             let mut completion = json!({
                 "principal": principal.principal_id,
                 "agentTokenIssuance": principal.agent_token_issuance,
             });
+            // The name derived for a new person, captured in the creation's
+            // transaction.
+            if let Some(name) = &created.derived_account_username {
+                completion["derivedAccountUsername"] = name.audit_details();
+            }
             if let Some(enrollment) = &principal.microsoft_enrollment {
                 completion.as_object_mut().expect("audit object").extend(
                     super::microsoft_enrollments::audit_target(enrollment)
@@ -1719,11 +1857,21 @@ pub(crate) async fn admin_principals_get(
         Ok(context) => context,
         Err(response) => return *response,
     };
+    if has_broker_secret_prefix(&principal) {
+        return super::identity_access::invalid_input(
+            &context,
+            operation,
+            None,
+            "principal must be an identifier, not a Broker secret",
+        )
+        .await;
+    }
     let target = Some(json!({"principal": principal}));
     let managed_policy = context.snapshot.runtime.config().policy.authority == "managed";
     let principal_for_store = principal.clone();
     let resolved_at = Utc::now().to_rfc3339();
     let environment = context.snapshot.runtime.agent_token_issuance_environment();
+    let runtime = context.snapshot.runtime.clone();
     match management_store_call(&context, move |store| {
         let mut principal = store.principal(&principal_for_store)?;
         let membership = store.effective_membership_at(&principal_for_store, &resolved_at)?;
@@ -1735,11 +1883,29 @@ pub(crate) async fn admin_principals_get(
         };
         let issuance_policy =
             store.agent_token_issuance_policy(&principal_for_store, &environment)?;
-        Ok((principal, membership, policy_grants, issuance_policy))
+        let access_key_facts = (
+            store.principal_access_key_types(&principal_for_store)?,
+            store.access_key_type_policy(runtime.access_key_types(), &principal_for_store)?,
+            // People and service accounts have a username; other kinds
+            // have none.
+            matches!(principal.kind.as_str(), "user" | "service_account")
+                .then(|| store.principal_account_username(&principal_for_store))
+                .transpose()?,
+            // Why no access key of the account can resolve now, when the
+            // cause is in the account.
+            store.access_key_account_problem(&principal_for_store)?,
+        );
+        Ok((
+            principal,
+            membership,
+            policy_grants,
+            issuance_policy,
+            access_key_facts,
+        ))
     })
     .await
     {
-        Ok((principal, membership, policy_grants, issuance_policy)) => {
+        Ok((principal, membership, policy_grants, issuance_policy, access_key_facts)) => {
             let subject = principal_subject(&principal.principal_id);
             let active_policy_group_subjects = membership
                 .policy_groups
@@ -1782,6 +1948,10 @@ pub(crate) async fn admin_principals_get(
             );
             let mut detail = json!(detail);
             detail["agentTokenIssuancePolicy"] = json!(issuance_policy);
+            detail["accessKeyTypes"] = json!(access_key_facts.0);
+            detail["accessKeyTypePolicy"] = json!(access_key_facts.1);
+            detail["accountUsername"] = json!(access_key_facts.2);
+            detail["accessKeyProblem"] = json!(access_key_facts.3);
             management_success_response(&context, operation, target, detail).await
         }
         Err(error) => management_store_error_response(&context, operation, target, error).await,
@@ -1945,6 +2115,15 @@ pub(crate) async fn admin_principals_patch(
         Ok(context) => context,
         Err(response) => return *response,
     };
+    if has_broker_secret_prefix(&principal) {
+        return super::identity_access::invalid_input(
+            &context,
+            operation,
+            None,
+            "principal must be an identifier, not a Broker secret",
+        )
+        .await;
+    }
     let target = Some(json!({"principal": principal}));
     if body.display_name.is_none() && body.email.is_none() && body.status.is_none() {
         return management_context_error_response(
@@ -1976,21 +2155,44 @@ pub(crate) async fn admin_principals_patch(
         return *response;
     }
     let principal_for_store = principal.clone();
-    match management_store_call(&context, move |store| {
-        store.patch_principal(PrincipalPatchRequest {
-            principal_id: principal_for_store,
-            display_name: body.display_name,
-            email: body.email,
-            status: body.status,
-        })
-    })
+    let actor = context.identity.principal.clone();
+    // A changed email renames a person whose username follows it, in the
+    // same transaction. The owner runs under the reload fence, so the
+    // derivation applies the settings of the generation in force, and it
+    // writes the completion record that carries the rename.
+    super::identity_access::committed_identity_mutation(
+        state,
+        context,
+        operation,
+        target,
+        move |store| {
+            let patch = store.patch_principal_with_account_username(
+                PrincipalPatchRequest {
+                    principal_id: principal_for_store,
+                    display_name: body.display_name,
+                    email: body.email,
+                    status: body.status,
+                },
+                &actor,
+            )?;
+            let mut completion = json!({"principal": patch.principal.principal_id});
+            let mut result = json!(patch.principal);
+            // What the email change did to the person's name, also when
+            // that is nothing; null when no person's email changed. The
+            // audit record carries it only when something was written.
+            result["accountUsernameChange"] = match &patch.account_username_change {
+                Some(change) => {
+                    if change.changed() {
+                        completion["accountUsername"] = change.audit_details();
+                    }
+                    change.outcome()
+                }
+                None => Value::Null,
+            };
+            Ok((result, completion))
+        },
+    )
     .await
-    {
-        Ok(principal) => {
-            management_pre_audited_success_response(&context, operation, target, json!(principal))
-        }
-        Err(error) => management_store_error_response(&context, operation, target, error).await,
-    }
 }
 
 pub(crate) async fn admin_principal_access_patch(
@@ -2013,17 +2215,27 @@ pub(crate) async fn admin_principal_access_patch(
         Ok(context) => context,
         Err(response) => return *response,
     };
+    if has_broker_secret_prefix(&principal) {
+        return super::identity_access::invalid_input(
+            &context,
+            operation,
+            None,
+            "principal must be an identifier, not a Broker secret",
+        )
+        .await;
+    }
     let target = Some(json!({"principal": principal}));
     if body.role.is_none()
         && body.self_service_enabled.is_none()
         && body.agent_token_issuance.is_none()
+        && body.access_key_types.is_none()
     {
         return management_context_error_response(
             &context,
             StatusCode::BAD_REQUEST,
             operation,
             ReasonCode::InputInvalid,
-            "at least one of role, selfServiceEnabled, or agentTokenIssuance is required",
+            "at least one of role, selfServiceEnabled, agentTokenIssuance, or accessKeyTypes is required",
             target,
         )
         .await;
@@ -2034,13 +2246,16 @@ pub(crate) async fn admin_principal_access_patch(
         return *response;
     }
     let actor = context.identity.principal.clone();
+    // The mutation runs under the reload fence, so these are the
+    // access key types of the generation in force when it writes.
+    let runtime = context.snapshot.runtime.clone();
     committed_principal_mutation(
         state,
         context,
         operation,
         target,
         move |store, environment| {
-            let change = store.patch_principal_access(
+            let change = store.patch_principal_access_with_access_key_types(
                 PrincipalAccessPatchRequest {
                     principal_id: principal,
                     role: body.role,
@@ -2048,12 +2263,23 @@ pub(crate) async fn admin_principal_access_patch(
                     agent_token_issuance: body.agent_token_issuance,
                     actor,
                 },
+                body.access_key_types
+                    .as_ref()
+                    .map(|setting| AccessKeyTypesWrite {
+                        setting,
+                        configured: runtime.access_key_types(),
+                    }),
                 environment.contexts(),
             )?;
+            let access = change
+                .access_key_types
+                .ok_or_else(|| ManagedStoreError::Unavailable("access key types".into()))?;
             let completion = json!({
                     "principal": change.principal.principal_id,
                     "previousAgentTokenIssuance": change.previous_agent_token_issuance,
                     "agentTokenIssuance": change.principal.agent_token_issuance,
+                    "previousAccessKeyTypes": access.previous,
+                    "accessKeyTypes": access.current,
                     "previousRole": change.previous_role,
                     "role": change.principal.role,
                     "previousSelfServiceEnabled": change.previous_self_service_enabled,
@@ -2061,7 +2287,10 @@ pub(crate) async fn admin_principal_access_patch(
                     "removedServices": change.removed_services,
                     "revokedAdminTokenIds": change.revoked_admin_token_ids,
             });
-            Ok((change.principal, completion))
+            Ok((
+                with_access_key_types(json!(change.principal), &access.current),
+                completion,
+            ))
         },
     )
     .await

@@ -11,10 +11,10 @@ use crate::observability;
 use crate::state::{AppState, RequestPermits, RuntimeSnapshot};
 use agent_access_core::{
     ApiCatalog, BrokerResponse, BrokerTokenClass, EXECUTION_CONTEXT_HEADER, ErrorBody,
-    ExecutionContext, GovernedOperationContext, IdentityContext, OperationContext, PolicyReadScope,
-    PolicyWriteScope, PrincipalRole, RenderAuthMode, ResponseEnvelope, RouteAccess, RouteFeature,
-    SourceContext, empty_catalog, http_route_specs, new_broker_request_id, openapi_from_catalog,
-    send_schema_from_catalog,
+    ExecutionContext, GovernedOperationContext, HttpRouteSpec, IdentityContext, OperationContext,
+    PolicyReadScope, PolicyWriteScope, PrincipalRole, RenderAuthMode, ResponseEnvelope,
+    RouteAccess, RouteFeature, SourceContext, empty_catalog, http_route_specs,
+    new_broker_request_id, openapi_from_catalog, send_schema_from_catalog,
 };
 use agent_access_provider::{Decision, ReasonCode, ResourceScopes};
 use axum::Json;
@@ -466,7 +466,7 @@ fn render_catalog(context: &SpecContext, access: &SpecAccess) -> ApiCatalog {
     catalog.resource_types = context.snapshot.runtime.resource_type_metadata();
     catalog.routes = http_route_specs(context.snapshot.runtime.resource_types())
         .into_iter()
-        .filter(|route| route_visible(context, access, route.access))
+        .filter(|route| route_visible(context, access, route))
         .filter(|route| {
             route
                 .required_feature
@@ -488,6 +488,8 @@ pub(crate) fn route_feature_available(snapshot: &RuntimeSnapshot, feature: Route
                     .audit_store()
                     .is_some_and(|store| store.supports_queries())
         }
+        RouteFeature::Applications => !snapshot.runtime.applications().is_empty(),
+        RouteFeature::AccessKeys => !snapshot.runtime.access_key_types().is_empty(),
     }
 }
 
@@ -499,8 +501,8 @@ fn should_resolve_execution_context(access: &SpecAccess) -> bool {
     !access.visibility_all && access.can_agent_invoke
 }
 
-fn route_visible(context: &SpecContext, access: &SpecAccess, route_access: RouteAccess) -> bool {
-    match route_access {
+fn route_visible(context: &SpecContext, access: &SpecAccess, route: &HttpRouteSpec) -> bool {
+    match route.access {
         RouteAccess::Authenticated | RouteAccess::Spec => true,
         RouteAccess::AgentInvoke => access.visibility_all || access.can_agent_invoke,
         RouteAccess::BrowserManagement => {
@@ -518,11 +520,13 @@ fn route_visible(context: &SpecContext, access: &SpecAccess, route_access: Route
         RouteAccess::UserTokenManagement => {
             access.visibility_all || access.can_user_token_management
         }
-        // Not gated by self-service; listed while applications are registered.
+        // Not gated by self-service. Each route names the feature it needs:
+        // a registered application, or a configured access key type. A
+        // route that takes a browser session only is offered to one alone.
         RouteAccess::AccountManagement => {
-            !context.snapshot.runtime.applications().is_empty()
-                && (access.visibility_all
-                    || token_class(context) == Some(BrokerTokenClass::UserManage))
+            access.visibility_all
+                || (token_class(context) == Some(BrokerTokenClass::UserManage)
+                    && (!route.browser_session_only || context.browser_session.is_some()))
         }
         RouteAccess::PolicyRead => access.can_policy_read,
         RouteAccess::PolicyWrite => access.can_policy_write,

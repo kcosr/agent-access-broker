@@ -1,0 +1,9 @@
+{
+  "active": false,
+  "keyId": "ak_Bj3Ds6Ly1Gk8Qp4X",
+  "owner": {
+    "kind": "user",
+    "id": "bob"
+  },
+  "reason": "a_reason_added_later"
+}

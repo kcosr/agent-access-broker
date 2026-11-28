@@ -47,6 +47,7 @@ use crate::handlers::management::user::{
     user_retained_credential_delete, user_token_get, user_token_issue, user_token_options,
     user_token_pause, user_token_resume, user_token_revoke, user_tokens_list,
 };
+use crate::handlers::management::{access_keys, account_usernames};
 use crate::handlers::management::{identity_access, identity_bindings, identity_tokens};
 use crate::handlers::oidc::{microsoft_oidc_callback, microsoft_oidc_start};
 use crate::handlers::portal::{portal_asset, portal_index};
@@ -142,6 +143,41 @@ pub(crate) fn public_router(state: Arc<ReloadableState>) -> (Router, crate::mcp:
         )
         .route(applications::METADATA_PATH, get(applications::metadata))
         .route(applications::AUTHORIZE_PATH, get(applications::authorize))
+        .route(
+            crate::handlers::access_keys::RESOLVE_PATH,
+            post(crate::handlers::access_keys::resolve),
+        )
+        .route(
+            "/v1/access-keys",
+            get(access_keys::list_own).post(access_keys::issue_own),
+        )
+        .route("/v1/access-keys/options", get(access_keys::options_own))
+        .route("/v1/access-keys/{key_id}", delete(access_keys::revoke_own))
+        .route("/v1/admin/access-keys", get(access_keys::admin_list))
+        .route(
+            "/v1/admin/access-keys/{key_id}",
+            delete(access_keys::admin_revoke),
+        )
+        .route(
+            "/v1/admin/principals/{principal}/access-keys",
+            post(access_keys::admin_issue),
+        )
+        .route(
+            "/v1/admin/access-key-types",
+            get(access_keys::admin_access_key_types),
+        )
+        .route(
+            "/v1/admin/account-usernames",
+            get(account_usernames::admin_list),
+        )
+        .route(
+            "/v1/admin/principals/{principal}/account-username",
+            get(account_usernames::admin_get).put(account_usernames::admin_set),
+        )
+        .route(
+            "/v1/admin/principals/{principal}/account-username/confirm",
+            post(account_usernames::admin_confirm),
+        )
         .route(applications::TOKEN_PATH, post(applications::token))
         .route(applications::REVOKE_PATH, post(applications::revoke))
         .route(
@@ -570,6 +606,18 @@ async fn verify_caller_ingress(
     mut request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
+    if request.uri().path() == crate::handlers::access_keys::RESOLVE_PATH {
+        // Only a POST is a resolution. Any other method is refused here,
+        // before anything is checked, taken or recorded, with one answer
+        // whatever the request carries: it reaches no handler, spends no
+        // capacity and says nothing about a credential.
+        if request.method() != axum::http::Method::POST {
+            return crate::handlers::access_keys::method_not_allowed();
+        }
+        // Access key resolution authenticates its caller itself, and
+        // nothing else.
+        return next.run(request).await;
+    }
     let snapshot = state.current();
     let mcp = crate::mcp::is_mcp_route(&request);
     // Legacy MCP has a deliberately finite transport error for all trailers.
@@ -615,26 +663,16 @@ async fn verify_caller_ingress(
     }
 }
 
-/// Canonical pre-protocol admission errors, shared by router validation and MCP
-/// live-proof checks. Generate correlation before any JSON-RPC body is parsed.
-pub(crate) async fn admission_failure_response(
-    app_state: &AppState,
-    snapshot: Arc<RuntimeSnapshot>,
+/// The correlation and source of a request refused before any identity is
+/// admitted. Browser, health and MCP requests need not carry an agent request
+/// ID: one is generated when it is absent or malformed, and no other header
+/// is trusted, so the source is the peer address alone.
+pub(crate) fn admission_failure_correlation(
     headers: &axum::http::HeaderMap,
     remote: Option<std::net::SocketAddr>,
-    failure: agent_access_core::IdentityFailure,
-) -> axum::response::Response {
-    use crate::handlers::common::{
-        acquire_global_concurrency_guard, check_auth_source_rate_guard, envelope_response,
-    };
-    use agent_access_core::{
-        IdentityContext, OperationContext, SourceContext, new_broker_request_id,
-    };
+) -> (String, agent_access_core::SourceContext) {
+    use agent_access_core::new_broker_request_id;
     use agent_access_provider::REQUEST_ID_HEADER;
-    use axum::response::IntoResponse;
-    crate::observability::record_execution_context_failure(failure.reason_code().as_str());
-    // Browser, health and MCP requests need not carry an agent request ID. For rejected
-    // ingress, generate correlation when absent or malformed without trusting other headers.
     let mut ids = headers.get_all(REQUEST_ID_HEADER).iter();
     let supplied_id = ids
         .next()
@@ -650,7 +688,7 @@ pub(crate) async fn admission_failure_response(
     let agent_request_id = supplied_id
         .map(str::to_owned)
         .unwrap_or_else(new_broker_request_id);
-    let source = SourceContext {
+    let source = agent_access_core::SourceContext {
         listener: "http".into(),
         remote: remote
             .map(|addr| addr.to_string())
@@ -658,6 +696,24 @@ pub(crate) async fn admission_failure_response(
         proxy_chain: Vec::new(),
         agent_request_id_generated: Some(supplied_id.is_none()),
     };
+    (agent_request_id, source)
+}
+
+/// Canonical pre-protocol admission errors, shared by router validation and MCP
+/// live-proof checks. Generate correlation before any JSON-RPC body is parsed.
+pub(crate) async fn admission_failure_response(
+    app_state: &AppState,
+    snapshot: Arc<RuntimeSnapshot>,
+    headers: &axum::http::HeaderMap,
+    remote: Option<std::net::SocketAddr>,
+    failure: agent_access_core::IdentityFailure,
+) -> axum::response::Response {
+    use crate::handlers::common::{
+        acquire_global_concurrency_guard, check_auth_source_rate_guard, envelope_response,
+    };
+    use axum::response::IntoResponse;
+    crate::observability::record_execution_context_failure(failure.reason_code().as_str());
+    let (agent_request_id, source) = admission_failure_correlation(headers, remote);
     let service = "broker".to_string();
     let action = crate::handlers::management::audit_actions::CALLER_AUTHENTICATE.to_string();
     let _permit = match acquire_global_concurrency_guard(
@@ -679,23 +735,43 @@ pub(crate) async fn admission_failure_response(
         app_state,
         &snapshot,
         &agent_request_id,
-        service.clone(),
-        action.clone(),
+        service,
+        action,
         &source,
     )
     .await
     {
         return admission_response_headers(envelope_response(*response).into_response());
     }
+    admitted_admission_failure_response(&snapshot, agent_request_id, source, None, failure).await
+}
+
+/// The audited refusal of a request whose caller or identity admission
+/// failed, once the capacity of the route that refuses it has been charged.
+/// `caller` is the configured trusted caller whose credential the request
+/// presented, when it presented one.
+pub(crate) async fn admitted_admission_failure_response(
+    snapshot: &RuntimeSnapshot,
+    agent_request_id: String,
+    source: agent_access_core::SourceContext,
+    caller: Option<String>,
+    failure: agent_access_core::IdentityFailure,
+) -> axum::response::Response {
+    use crate::handlers::common::envelope_response;
+    use agent_access_core::{IdentityContext, OperationContext, new_broker_request_id};
+    use axum::response::IntoResponse;
     let response = snapshot
         .runtime
         .ingress_error_response_for_operation(
             OperationContext {
                 agent_request_id,
                 broker_request_id: new_broker_request_id(),
-                identity: IdentityContext::anonymous(),
-                service,
-                action,
+                identity: IdentityContext {
+                    caller_id: caller,
+                    ..IdentityContext::anonymous()
+                },
+                service: "broker".to_string(),
+                action: crate::handlers::management::audit_actions::CALLER_AUTHENTICATE.to_string(),
                 source,
             },
             failure,
@@ -704,7 +780,9 @@ pub(crate) async fn admission_failure_response(
     admission_response_headers(envelope_response(response).into_response())
 }
 
-fn admission_response_headers(mut response: axum::response::Response) -> axum::response::Response {
+pub(crate) fn admission_response_headers(
+    mut response: axum::response::Response,
+) -> axum::response::Response {
     use axum::http::{HeaderValue, StatusCode};
     response
         .headers_mut()

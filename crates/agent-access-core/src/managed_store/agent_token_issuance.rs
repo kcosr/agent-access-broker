@@ -1,7 +1,7 @@
 use super::*;
 
 /// The administrator-owned principal setting. Inheritance grants nothing by itself.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PrincipalAgentTokenIssuance {
     #[default]
@@ -12,7 +12,7 @@ pub enum PrincipalAgentTokenIssuance {
 }
 
 /// Effective permission, also used for a managed group's contribution.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, Default, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentTokenIssuanceMode {
     #[default]
@@ -47,6 +47,29 @@ issuance_enum_text!(PrincipalAgentTokenIssuance, "principal agent token issuance
 issuance_enum_text!(AgentTokenIssuanceMode, "group agent token issuance is invalid", {
     Disabled => "disabled", ReadOnly => "read_only", WriteCapable => "write_capable"
 });
+
+/// Reads a mode from a string only. The derived form of an enum also reads
+/// an object with the variant as its one key, so `{"read_only": null}`
+/// would be a mode.
+macro_rules! issuance_mode_from_string {
+    ($name:ident, [$($text:literal),+ $(,)?]) => {
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                let text = String::deserialize(deserializer)?;
+                text.parse()
+                    .map_err(|_| serde::de::Error::unknown_variant(&text, &[$($text),+]))
+            }
+        }
+    };
+}
+issuance_mode_from_string!(
+    PrincipalAgentTokenIssuance,
+    ["inherit", "disabled", "read_only", "write_capable"]
+);
+issuance_mode_from_string!(
+    AgentTokenIssuanceMode,
+    ["disabled", "read_only", "write_capable"]
+);
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -163,7 +186,9 @@ macro_rules! configured_setting {
                     mode: $mode,
                     allowed_execution_contexts: Vec<String>,
                 }
-                let wire = Wire::deserialize(deserializer)?;
+                // An object only: an array of the two members in order
+                // is not a setting.
+                let wire: Wire = crate::object_only(deserializer)?;
                 Self::new(wire.mode, wire.allowed_execution_contexts)
                     .map_err(serde::de::Error::custom)
             }
