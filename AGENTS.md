@@ -1233,7 +1233,8 @@ requires Python 3.11+ and its SQLite 3.43+ library with working FTS5
 0.52.0 for the public API gate, cargo-nextest 0.9.150 or newer for the Rust
 test gate, and `openssl` on `PATH` for Unix listener TLS. Preflight also requires
 and records `cargo-audit` (tested 0.22.2); the online advisory gate runs
-`cargo audit --deny warnings` with dated exceptions in `.cargo/audit.toml`.
+`python3 -B scripts/check-advisories.py`, enforcing the inline `review-by`
+dates in `.cargo/audit.toml` before running `cargo audit --deny warnings`.
 Advisory GitHub Actions run on pushes, pull requests and weekly. The driver records
 `openssl version` before any gate starts and rejects Cargo target runners,
 including through configuration includes. The public API gate checks the candidate

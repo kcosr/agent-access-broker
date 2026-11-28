@@ -21,4 +21,4 @@ jobs:
       - name: Install cargo-audit
         run: cargo install cargo-audit --version 0.22.2 --locked
       - name: Audit locked dependencies
-        run: cargo audit --deny warnings
+        run: python3 -B scripts/check-advisories.py

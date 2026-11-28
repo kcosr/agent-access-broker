@@ -12,6 +12,8 @@ mod imports;
 mod mcp_output;
 #[path = "mcp_stdio/names.rs"]
 mod names;
+#[path = "mcp_stdio/nonconforming.rs"]
+mod nonconforming;
 #[path = "mcp_stdio/output_content.rs"]
 mod output_content;
 #[path = "mcp_stdio/rate_wait.rs"]

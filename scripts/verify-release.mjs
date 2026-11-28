@@ -129,7 +129,7 @@ export function qualificationPlan({ root, outputDir, commit, target, platform = 
     + "const browser = await chromium.launch({headless:true}); "
     + "console.log(JSON.stringify({chromium:browser.version(),headlessLaunch:'passed'})); await browser.close();";
   const checks = [
-    { id: "dependency-advisories", command: [cargo, "audit", "--deny", "warnings"] },
+    { id: "dependency-advisories", command: [python, "-B", "scripts/check-advisories.py", "--cargo", cargo] },
     { id: "portal-dependencies", command: npmCommand(platform, "--prefix", "apps/portal", "ci") },
     { id: "browser-prerequisites", command: [node, "--input-type=module", "-e", browserProbe] },
     { id: "node-tests", command: [node, "--test", ...nodeTests] },

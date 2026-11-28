@@ -424,7 +424,7 @@ schema and integrity checks, and workspace crates retain debug assertions.
 
 ```bash
 cargo fmt --check
-cargo audit --deny warnings
+python3 -B scripts/check-advisories.py
 cargo nextest run --locked --workspace
 cargo test --locked --workspace --doc --no-fail-fast
 cargo build --locked
@@ -453,6 +453,8 @@ Install the tested advisory tool with
 RustSec advisory database, checks the committed lockfile including yanked
 crates, and fails on warnings. It needs network access. Dated exceptions and
 their review conditions live in [`.cargo/audit.toml`](../.cargo/audit.toml).
+Use `python3 -B scripts/check-advisories.py` to enforce those review deadlines
+before the audit, as described in [release readiness](release-readiness.md#qualify-the-candidate).
 GitHub Actions runs the audit on pushes, pull requests and weekly, and
 [release qualification](release-readiness.md#qualify-the-candidate) requires it.
 

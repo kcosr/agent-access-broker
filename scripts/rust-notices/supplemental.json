@@ -13,11 +13,11 @@
     "version": "1.0.0"
   },
   "libsqlite3-sys": {
-    "checksum": "f6c19a05435c21ac299d71b6a9c13db3e3f47c520517d58990a462a1397a61db",
+    "checksum": "14a5f01b87b92705d07b433c06f96cbc764637d81a0bffb5734ce17cf0f9a2b3",
     "files": [],
     "reason": "Bundled SQLite sqlite3.c copyright disclaimer/blessing is separate from the Rust wrapper MIT license. All packaged native license files are also retained.",
     "sqlite_notice": true,
-    "version": "0.38.1"
+    "version": "0.39.1"
   },
   "mac": {
     "checksum": "c41e0c4fef86961ac6d6f8a82609f55f31b05e4fce149ac5710e439df7619ba4",
@@ -54,18 +54,6 @@
     "files": [],
     "reason": "Preserve per-file native/source copyright and permission comments in addition to all packaged license files. Different architectures may use only a subset.",
     "version": "0.17.14"
-  },
-  "rmcp": {
-    "checksum": "5b6317cd8c13e3ec9033cf2aa5aa92cd743f0f4f8a93cddc42ea0ae6ce3b8898",
-    "files": [
-      {
-        "file": "rmcp-LICENSE.txt",
-        "sha256": "0382b0057770ca05e9c350a50aa3b1c1fea84da0bc81d723bf00b9aa841be58a",
-        "url": "https://raw.githubusercontent.com/modelcontextprotocol/rust-sdk/9427a929959e665e0d12e9395f674026baf4bd48/LICENSE"
-      }
-    ],
-    "reason": "Crate omits license; full upstream license at .cargo_vcs_info.json revision includes Apache/MIT transition terms.",
-    "version": "3.4.1"
   },
   "unicode-general-category": {
     "checksum": "0b993bddc193ae5bd0d623b49ec06ac3e9312875fdae725a975c51db1cc1677f",
