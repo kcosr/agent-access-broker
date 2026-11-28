@@ -8,6 +8,7 @@ pub(super) mod advertisement;
 mod content_formats;
 mod defaults;
 pub(super) mod names;
+mod nonconforming;
 pub(super) mod output_schemas;
 mod rate_wait;
 mod trusted_user;

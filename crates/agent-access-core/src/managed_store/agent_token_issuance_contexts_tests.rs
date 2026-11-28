@@ -717,10 +717,10 @@ fn issuance_context_current_schema_validation_uses_one_snapshot_during_policy_wr
         .structural_validation;
     let task = thread::spawn(move || {
         VALIDATION_WAIT.with(|slot| *slot.borrow_mut() = Some((blocked, released)));
-        let conn = reader.connection.lock().unwrap();
+        let mut conn = reader.connection.lock().unwrap();
         conn.trace_v2(
             rusqlite::trace::TraceEventCodes::SQLITE_TRACE_STMT,
-            Some(|event| {
+            Some(|event: rusqlite::trace::TraceEvent<'_>| {
                 if let rusqlite::trace::TraceEvent::Stmt(_, sql) = event
                     && sql.starts_with(
                         "SELECT execution_context FROM principal_agent_token_issuance_contexts",
@@ -736,7 +736,8 @@ fn issuance_context_current_schema_validation_uses_one_snapshot_during_policy_wr
                     });
                 }
             }),
-        );
+        )
+        .unwrap();
         validate_current_schema(&conn)
     });
     ready

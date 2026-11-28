@@ -56,6 +56,21 @@ category headings from the release.
 
 ## Qualify the candidate
 
+Qualification requires `cargo-audit` (tested version 0.22.2, installed with
+`cargo install --locked --version 0.22.2 cargo-audit`). Preflight records its
+version and fails if it is unavailable. The required `dependency-advisories`
+gate runs `python3 -B scripts/check-advisories.py`, which first rejects missing
+or expired exception review dates, then runs `cargo audit --deny warnings`
+against `Cargo.lock`, refreshing the
+RustSec database and checking for yanked crates. Network access to the advisory
+database and crates.io index is required; a failed fetch fails qualification.
+Reviewed, dated exceptions are recorded in [`.cargo/audit.toml`](../.cargo/audit.toml).
+Each ignored ID has an inline `# review-by: YYYY-MM-DD`; it remains valid through
+that UTC date and fails the gate on the following day. Review the rationale
+and dates with dependency changes. The advisory
+workflow runs this same audit on pushes, pull requests and weekly; it does not
+replace qualification of the final release commit.
+
 Use the pinned Rust/Cargo 1.99.1 toolchain in `rust-toolchain.toml`, Node.js 24.18.0,
 npm 11.16.0, and Python 3.11 or newer. The workspace crates declare
 `rust-version = "1.99"`; the tested Node.js and npm versions do not establish

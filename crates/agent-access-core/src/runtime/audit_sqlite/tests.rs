@@ -191,17 +191,19 @@ impl Drop for SliceTimer {
 static TRACED_STATEMENTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 static TRACED_PATH: Mutex<Option<std::path::PathBuf>> = Mutex::new(None);
 
-pub(super) fn trace_if_requested(path: &std::path::Path, conn: &Connection) {
+pub(super) fn trace_if_requested(path: &std::path::Path, mut conn: Connection) -> Connection {
     if TRACED_PATH.lock().unwrap().as_deref() == Some(path) {
         conn.trace_v2(
             rusqlite::trace::TraceEventCodes::SQLITE_TRACE_STMT,
-            Some(|event| {
+            Some(|event: rusqlite::trace::TraceEvent<'_>| {
                 if let rusqlite::trace::TraceEvent::Stmt(_, sql) = event {
                     TRACED_STATEMENTS.lock().unwrap().push(sql.to_string());
                 }
             }),
-        );
+        )
+        .unwrap();
     }
+    conn
 }
 
 #[test]

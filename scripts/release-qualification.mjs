@@ -1,6 +1,7 @@
 import { parseVersion } from "./release-plan.mjs";
 
 export const REQUIRED_RELEASE_CHECKS = Object.freeze([
+  "dependency-advisories",
   "rust-format", "crate-boundaries", "public-api", "rust-tests", "rust-doctests", "rust-build", "downstream-consumer", "rust-clippy", "unix-signals",
   "portal-dependencies", "node-tests", "rust-notice-tests", "release-prerequisite-tests", "launcher-tests",
   "audit-demo-tests", "doc-links", "changelog", "broker-sample", "broker-production-sample",

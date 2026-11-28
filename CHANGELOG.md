@@ -551,6 +551,16 @@ All notable changes to this project are documented in this file.
 
 ### Changed
 
+- **MCP rejects nonconforming envelopes and media types more strictly.** HTTP
+  `Accept` and `Content-Type` match exact media types without case sensitivity;
+  `application/json-rpc` as a content type returns 415. Messages combining
+  `method` with `result` or `error`, even `null`, return HTTP 400 or stdio
+  JSON-RPC error -32600. A first stdio request missing required `_meta` receives
+  an error while the process keeps running. A stdio frame
+  of exactly 16 MiB, excluding its newline, is dropped without a reply and the
+  process keeps serving subsequent frames.
+  ([#128](https://github.com/kcosr/agent-access-broker/pull/128))
+
 - CLI JSON responses, receipts and structured errors now use compact JSON with
   a trailing newline on stdout, stderr and in local files, including stdio MCP
   `outputPath` and `send` metadata files. Saved JSON sizes and hashes reflect
@@ -683,6 +693,15 @@ All notable changes to this project are documented in this file.
   ([#53](https://github.com/kcosr/agent-access-broker/pull/53))
 
 ### Fixed
+
+- **Dependency upgrades clear published security advisories.** Updated bundled
+  SQLite, MCP, QUIC, URL and filesystem dependencies. Release qualification requires an online
+  dependency audit; the same audit runs on pushes, pull requests and weekly.
+  Exceptions for RSA verification through OpenID Connect and the supported
+  Chrono API fail the audit after their review dates. Rust notices include the
+  current SQLite blessing and rmcp's packaged license. See
+  [release readiness](docs/release-readiness.md).
+  ([#128](https://github.com/kcosr/agent-access-broker/pull/128))
 
 - **Completed mutations retain their outcome when response formatting fails.**
   Body-bearing native writes provide a nonserialized recovery receipt; failed

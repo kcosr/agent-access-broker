@@ -1,0 +1,16 @@
+[advisories]
+ignore = [
+    # Reviewed 2026-11-28: openidconnect 4.1 requires rsa 0.9; its current
+    # release cannot use the patched rsa 0.10. Production uses RSA public-key
+    # verification of identity tokens, not private-key signing or decryption.
+    # Private RSA signing occurs only in synthetic OIDC test fixtures.
+    # Remove when openidconnect supports rsa 0.10; re-review before adding
+    # any production RSA private-key operation.
+    "RUSTSEC-2023-0071", # review-by: 2027-02-28
+    # Reviewed 2026-11-28: Chrono is unmaintained, with no patched release.
+    # openidconnect, oauth2, rmcp and schemars still require it, and DateTime
+    # appears in the supported provider SDK. Replacing direct uses would
+    # break that API without removing the transitive dependency.
+    # Re-review upstream replacement options at the deadline below.
+    "RUSTSEC-2026-0543", # review-by: 2027-02-28
+]

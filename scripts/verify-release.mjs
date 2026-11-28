@@ -19,6 +19,18 @@ const PROVENANCE_VARIABLES = ["AGENT_ACCESS_BUILD_COMMIT", "AGENT_ACCESS_BUILD_P
 const stamp = () => new Date().toISOString();
 export const MINIMUM_NEXTEST_VERSION = "0.9.150";
 
+export function inspectCargoAuditToolchain(root, { cargo = "cargo", env = process.env, run = execFileSync } = {}) {
+  const required = "cargo-audit is required for the dependency-advisories gate; install it with cargo install --locked --version 0.22.2 cargo-audit";
+  let version;
+  try {
+    version = run(cargo, ["audit", "--version"], {
+      cwd: root, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+  } catch { throw new Error(required); }
+  if (!version) throw new Error(required);
+  return version;
+}
+
 export function inspectOpenSslToolchain(root, { platform = process.platform, env = process.env, run = execFileSync } = {}) {
   if (platform === "win32") return null;
   const required = "OpenSSL is required for the Unix listener-tls gate; install OpenSSL and ensure openssl version succeeds on PATH before running qualification";
@@ -117,6 +129,7 @@ export function qualificationPlan({ root, outputDir, commit, target, platform = 
     + "const browser = await chromium.launch({headless:true}); "
     + "console.log(JSON.stringify({chromium:browser.version(),headlessLaunch:'passed'})); await browser.close();";
   const checks = [
+    { id: "dependency-advisories", command: [python, "-B", "scripts/check-advisories.py", "--cargo", cargo] },
     { id: "portal-dependencies", command: npmCommand(platform, "--prefix", "apps/portal", "ci") },
     { id: "browser-prerequisites", command: [node, "--input-type=module", "-e", browserProbe] },
     { id: "node-tests", command: [node, "--test", ...nodeTests] },
@@ -219,6 +232,7 @@ export function runQualification({ root = ROOT, outputDir, env = process.env } =
       python: capture(root, "python3", ["--version"], baseEnv),
       publicApi: inspectPublicApiToolchain({ env: baseEnv }),
       nextest: inspectNextestToolchain(root, { cargo: toolchain.cargoPath, env: baseEnv }),
+      cargoAudit: inspectCargoAuditToolchain(root, { cargo: toolchain.cargoPath, env: baseEnv }),
     };
     const provenancePlan = provenanceBuildPlan(report.commit, { root, env: baseEnv, toolchain });
     const cargoEnv = { ...provenancePlan.env };

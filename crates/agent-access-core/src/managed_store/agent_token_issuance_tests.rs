@@ -733,7 +733,7 @@ fn issuance_old_token(
 
 fn issuance_table_columns(conn: &Connection, table: &str) -> String {
     let statement = conn.prepare(&format!("SELECT * FROM {table} LIMIT 0")).unwrap();
-    statement.column_names().into_iter().map(|column| format!("\"{}\"", column.replace('"', "\"\"")))
+    statement.column_names().map(|column| format!("\"{}\"", column.replace('"', "\"\"")))
         .collect::<Vec<_>>().join(", ")
 }
 

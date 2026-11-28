@@ -9,7 +9,7 @@ import test from "node:test";
 import { REQUIRED_RELEASE_CHECKS, validateQualification } from "./release-qualification.mjs";
 import { assertNoGitOverrides } from "./release-environment.mjs";
 import { assertQualificationSource, assertUnixSignalTestExecuted, parseQualificationArguments, qualificationOutputDirectory,
-  clearNextestJUnit, inspectNextestToolchain, inspectOpenSslToolchain, MINIMUM_NEXTEST_VERSION, preserveNextestJUnit,
+  clearNextestJUnit, inspectCargoAuditToolchain, inspectNextestToolchain, inspectOpenSslToolchain, MINIMUM_NEXTEST_VERSION, preserveNextestJUnit,
   qualificationPlan, runQualification } from "./verify-release.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -24,6 +24,45 @@ const temporary = (t) => {
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   return directory;
 };
+
+test("advisory preflight records cargo-audit and explains missing installations", () => {
+  const inspect = (output) => inspectCargoAuditToolchain(root, {
+    cargo: "/fixture/cargo",
+    run(command, args, options) {
+      assert.equal(command, "/fixture/cargo");
+      assert.deepEqual(args, ["audit", "--version"]);
+      assert.equal(options.cwd, root);
+      if (output instanceof Error) throw output;
+      return output;
+    },
+  });
+  assert.equal(inspect("cargo-audit 0.22.2\n"), "cargo-audit 0.22.2");
+  for (const output of [new Error("ENOENT"), "\n"]) {
+    assert.throws(() => inspect(output), /cargo-audit is required.*cargo install/);
+  }
+});
+
+test("advisory qualification fetches current findings and is mandatory for publication", (t) => {
+  const plan = qualificationPlan({ root, outputDir: temporary(t), commit, target: nativeTarget, cargo: "fixture-cargo" });
+  assert.deepEqual(plan[0], {
+    id: "dependency-advisories", command: ["python3", "-B", "scripts/check-advisories.py", "--cargo", "fixture-cargo"],
+  });
+  for (const status of ["failed", "skipped", "not-applicable"]) {
+    const report = qualified();
+    Object.assign(report.checks.find((entry) => entry.id === "dependency-advisories"), { status });
+    assert.throws(() => validateQualification(report, { commit, version }), /dependency-advisories/);
+  }
+  const oldReport = qualified();
+  oldReport.checks = oldReport.checks.filter((entry) => entry.id !== "dependency-advisories");
+  assert.throws(() => validateQualification(oldReport, { commit, version }), /missing required/);
+});
+
+test("advisory exceptions have enforced, tested review deadlines", () => {
+  execFileSync(process.platform === "win32" ? "python" : "python3",
+    ["-B", "scripts/check-advisories.test.py"], { cwd: root, stdio: "pipe" });
+  const workflow = readFileSync(path.join(root, ".github/workflows/advisories.yml"), "utf8");
+  assert.match(workflow, /run: python3 -B scripts\/check-advisories\.py/);
+});
 
 test("OpenSSL preflight records its version and explains unavailable Unix installations", () => {
   const env = { PATH: "/fixture/bin" };

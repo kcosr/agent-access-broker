@@ -413,7 +413,6 @@ fn schema_030_upgrades_to_031_with_rows_unchanged() {
                 .unwrap();
             let projection = statement
                 .column_names()
-                .into_iter()
                 .map(|column| format!("\"{}\"", column.replace('"', "\"\"")))
                 .collect::<Vec<_>>()
                 .join(", ");
