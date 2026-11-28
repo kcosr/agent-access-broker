@@ -29,6 +29,12 @@
     line-height: 1.4;
     color: var(--wb-muted);
   }
+  .wb-field-focus-hint {
+    display: none;
+  }
+  .wb-field:focus-within > .wb-field-focus-hint {
+    display: block;
+  }
   .wb-field-error {
     display: flex;
     align-items: flex-start;

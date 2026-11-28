@@ -22,7 +22,7 @@ import {
   useToast
 } from "../workbench";
 import { credentialStatus, identityDisplayName } from "../lib/helpers";
-import { useConfigStatus, useConsoleData, usePolicyStatus } from "../data/queries";
+import { useConfigStatus, useConsoleData, useOwnAccessKeysNav, usePolicyStatus } from "../data/queries";
 import { useAuthActions } from "../mutations/auth";
 import { useActiveRoute, useSelfSubject } from "./active-route";
 import { usePalette } from "./palette";
@@ -43,14 +43,14 @@ export function PortalPage({ sidebar, drawer, children }: { sidebar?: ReactNode;
 }
 
 /** Admin | My access: navigation links with the segmented look. */
-function SpaceSwitch({ space }: { space: SpaceKey }) {
+function SpaceSwitch({ space, landing }: { space: SpaceKey; landing: string }) {
   return (
     <SegLinks
       label="Space"
       size="sm"
       items={[
         { href: ROUTE.policies, label: "Admin", current: space === "admin" },
-        { href: ROUTE.access, label: "My access", current: space === "self" }
+        { href: landing, label: "My access", current: space === "self" }
       ]}
     />
   );
@@ -63,13 +63,14 @@ export function PortalTopBar() {
   const { openPalette } = usePalette();
   const locked = Boolean(session.passwordChangeRequired);
   const space: SpaceKey = route?.space ?? (hasAdminSpace(session) ? "admin" : "self");
-  const tabs = locked ? [] : spaceTabs(space, session);
+  const keys = useOwnAccessKeysNav(!locked);
+  const tabs = locked ? [] : spaceTabs(space, session, keys);
   const attention = useCredentialAttention(!locked && space === "self" && canUseSelfService(session));
   return (
     <TopBar>
       <SidebarToggle />
       <Brand name="Agent Access Broker" icon="shield" href={landingPath(session)} />
-      {!locked && hasAdminSpace(session) && canUseSelfService(session) ? <SpaceSwitch space={space} /> : null}
+      {!locked && hasAdminSpace(session) && (canUseSelfService(session) || keys) ? <SpaceSwitch space={space} landing={canUseSelfService(session) ? ROUTE.access : ROUTE.keys} /> : null}
       {tabs.length ? (
         <NavTabs label={space === "admin" ? "Admin" : "My access"}>
           {tabs.map((tab) => (

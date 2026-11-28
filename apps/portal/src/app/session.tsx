@@ -98,9 +98,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       queryClient.removeQueries({ predicate: (query) => query.queryKey.includes(previous) });
       // A completed agent-token response still belongs to the same signed-in
       // viewer when only their capabilities changed during issuance.
-      setModal((current) => current?.type === "reveal" && current.viewerPrincipal && session.authenticated && !session.passwordChangeRequired && current.viewerPrincipal === session.principal ? current : null);
+      setModal((current) => (current?.type === "reveal" || current?.type === "accessKeyReveal") && current.viewerPrincipal && session.authenticated && !session.passwordChangeRequired && current.viewerPrincipal === session.principal ? current : null);
     }
   }, [session, queryClient, setModal]);
+  // A required password change locks the portal, also when a refreshed
+  // session changes no capability: no dialog, and no one-time secret, stays
+  // open over the lock.
+  useEffect(() => {
+    if (session.authenticated && session.passwordChangeRequired) setModal(null);
+  }, [session.authenticated, session.passwordChangeRequired, setModal]);
   const authorizationRefresh = useRef<Promise<Session> | null>(null);
 
   /** Global consequences of a failure; true when the failure was a session change. */

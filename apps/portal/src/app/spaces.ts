@@ -6,7 +6,7 @@ import { canManagePolicies, canViewActivity, canViewAudit } from "../lib/helpers
 import { ROUTE } from "./paths";
 
 export type SpaceKey = "admin" | "self";
-export type TabKey = "access" | "tokens" | "credentials" | "activity" | "account" | "policies" | "principals" | "catalog" | "audit" | "system";
+export type TabKey = "access" | "tokens" | "keys" | "credentials" | "activity" | "account" | "policies" | "principals" | "catalog" | "audit" | "system";
 
 /** Route metadata: the space and tab a page belongs to, and who may open it. */
 export type PortalRouteHandle = {
@@ -21,10 +21,16 @@ export type SpaceTab = { key: TabKey; label: string; href: string; icon: IconNam
 
 export const SELF_TABS: SpaceTab[] = [
   { key: "access", label: "Access", href: ROUTE.access, icon: "shield-check" },
-  { key: "tokens", label: "Tokens", href: ROUTE.tokens, icon: "key" },
+  { key: "tokens", label: "Tokens", href: ROUTE.tokens, icon: "ticket" },
   { key: "credentials", label: "Credentials", href: ROUTE.credentials, icon: "lock" },
   { key: "activity", label: "Activity", href: ROUTE.activity, icon: "history", allow: canViewActivity }
 ];
+
+/**
+ * Access keys, after Tokens. Shown when the person's access key options say
+ * there is something to show, with or without self-service.
+ */
+export const KEYS_TAB: SpaceTab = { key: "keys", label: "Keys", href: ROUTE.keys, icon: "key" };
 
 export const ADMIN_TABS: SpaceTab[] = [
   { key: "policies", label: "Policies", href: ROUTE.policies, icon: "shield", allow: canManagePolicies },
@@ -33,8 +39,13 @@ export const ADMIN_TABS: SpaceTab[] = [
   { key: "audit", label: "Audit", href: ROUTE.audit, icon: "file-text", allow: canViewAudit }
 ];
 
-export function spaceTabs(space: SpaceKey, session: Session) {
-  return (space === "admin" ? ADMIN_TABS : canUseSelfService(session) ? SELF_TABS : []).filter((tab) => !tab.allow || tab.allow(session));
+/** The space's tabs; `keys` adds Keys to My access (from `useOwnAccessKeysNav`). */
+export function spaceTabs(space: SpaceKey, session: Session, keys = false) {
+  if (space === "admin") return ADMIN_TABS.filter((tab) => !tab.allow || tab.allow(session));
+  const tabs = canUseSelfService(session) ? SELF_TABS.filter((tab) => !tab.allow || tab.allow(session)) : [];
+  if (!keys) return tabs;
+  const after = tabs.findIndex((tab) => tab.key === "tokens");
+  return after < 0 ? [...tabs, KEYS_TAB] : [...tabs.slice(0, after + 1), KEYS_TAB, ...tabs.slice(after + 1)];
 }
 
 /** Administrators, auditors, and service policy managers work in Admin. */

@@ -276,7 +276,7 @@ export function TokenTable({ model, label = "Tokens" }: { model: TokenListModel;
     ) : (
       <EmptyState
         compact
-        icon="key"
+        icon="ticket"
         title={model.subject.administered ? "No agent tokens" : "No agent tokens yet"}
         actions={
           actions.issueBlocker() === null ? (
@@ -361,7 +361,7 @@ function AgentTokenDrawer({
       label={`Token ${record.name}`}
       kicker={
         <>
-          <Icon name="key" /> Agent token <span className="wb-num">{record.tokenId}</span>
+          <Icon name="ticket" /> Agent token <span className="wb-num">{record.tokenId}</span>
         </>
       }
       title={record.name}

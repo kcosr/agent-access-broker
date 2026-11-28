@@ -441,7 +441,7 @@ function PrincipalDrawer({ principal, onClose, returnFocus }: { principal: Princ
       }
       secondaryActions={[
         { id: "grants", label: "Grants", icon: "shield", href: paths.principal(principal.principalId, "grants") },
-        { id: "tokens", label: "Tokens", icon: "key", href: paths.principal(principal.principalId, "tokens") }
+        { id: "tokens", label: "Tokens", icon: "ticket", href: paths.principal(principal.principalId, "tokens") }
       ]}
     >
       <DrawerSection title="Details">

@@ -23,6 +23,16 @@ Existing tokens keep their stored restriction, shown as quiet **Read-only** text
 or a **Write-capable** warning. Disabling issuance leaves their previews and
 lifecycle controls available.
 
+While an access key type is configured, **My access > Keys** lists a person's
+access keys and issues new ones on its own page, showing each key once. It
+appears for a person who can issue a type or holds a key, independently of
+self-service, and otherwise says what an administrator must fix. Administrators
+set a person's username on **Overview**, choose for each access key type whether
+an account inherits it from its groups, allows or denies it, choose the types a
+managed group allows, and list, issue and revoke an account's keys on its
+**Keys** tab. **Catalog > Access key types** lists the configured types.
+See the [portal guide](../../docs/portal-guide/user.md#10-issue-and-revoke-an-access-key).
+
 On a managed group's Overview, administrators can select **Automatically add
 new Microsoft users**. Every enabled group with this setting receives new
 accounts created through Microsoft sign-in after the existing group admission

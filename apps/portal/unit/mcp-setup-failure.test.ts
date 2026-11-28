@@ -20,7 +20,7 @@ describe("a failing MCP setup", () => {
     const markup = renderToStaticMarkup(
       createElement(SecretRevealBody, { secretLabel: "Token", secret: TOKEN }, createElement(McpSetup, { url: "https://broker.example.com/mcp", token: TOKEN }))
     );
-    expect(markup).toContain(`aria-label="Token">${TOKEN}</pre>`);
+    expect(markup).toContain(`aria-label="Token" tabindex="0">${TOKEN}</pre>`);
     expect(markup).toContain("Copy this token now.");
     expect(markup).not.toContain("Connect an MCP client");
     expect(markup).not.toContain("AGENT_ACCESS_TOKEN");

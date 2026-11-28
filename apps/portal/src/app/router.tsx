@@ -6,7 +6,9 @@ import { AccessPage } from "../features/access/access-page";
 import { AccountPage } from "../features/account/account-page";
 import { AuthorizePage } from "../features/applications/authorize-page";
 import { ActivityPage, AuditPage } from "../features/audit/pages";
-import { CatalogPage, CatalogServicePage, ResourceGroupsPage, ResourcesPage } from "../features/catalog/pages";
+import { AccessKeyTypesPage, CatalogPage, CatalogServicePage, ResourceGroupsPage, ResourcesPage } from "../features/catalog/pages";
+import { AccessKeyIssuePage } from "../features/access-keys/key-issue-page";
+import { KeysPage } from "../features/access-keys/keys-page";
 import { CredentialsPage } from "../features/credentials/credentials-page";
 import { GrantEditorPage } from "../features/policies/grant-editor-page";
 import { PoliciesPage } from "../features/policies/policies-page";
@@ -42,6 +44,10 @@ export const portalRoutes: RouteObject[] = [
           page(ROUTE.tokenNew, self("tokens", canUseSelfService), <TokenEditorPage />),
           page(ROUTE.principalTokenNew, admin("principals", canWriteAdmin), <TokenEditorPage />),
           page(ROUTE.tokens, self("tokens", canUseSelfService), <TokensPage />),
+          // Not gated by self-service: the pages show themselves only when the person's options say so.
+          page(ROUTE.keys, self("keys"), <KeysPage />),
+          page(ROUTE.keyNew, self("keys"), <AccessKeyIssuePage />),
+          page(ROUTE.principalKeyNew, admin("principals", canWriteAdmin), <AccessKeyIssuePage />),
           page(ROUTE.credentials, self("credentials", canUseSelfService), <CredentialsPage />),
           page(ROUTE.activity, self("activity", canViewActivity), <ActivityPage />),
           page(ROUTE.account, self("account"), <AccountPage />),
@@ -57,6 +63,7 @@ export const portalRoutes: RouteObject[] = [
           page(ROUTE.catalogService, admin("catalog", canViewAdmin), <CatalogServicePage />),
           page(ROUTE.resources, admin("catalog", canViewAdmin), <ResourcesPage />),
           page(ROUTE.resourceGroups, admin("catalog", canViewAdmin), <ResourceGroupsPage />),
+          page(ROUTE.accessKeyTypes, admin("catalog", canViewAdmin), <AccessKeyTypesPage />),
           page(ROUTE.audit, admin("audit", canViewAudit), <AuditPage />),
           page(ROUTE.system, admin("system", canViewAdmin), <SystemPage />),
           { path: "*", element: <NotFoundPage /> }

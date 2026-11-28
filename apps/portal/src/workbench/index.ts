@@ -171,8 +171,14 @@ export type {
 
 // overlays
 export { Menu, Popover } from "./components/Popover";
+export { NavigationTab, NavigationTabs } from "./components/NavigationTabs";
+export type {
+  NavigationTabProps,
+  NavigationTabsProps,
+} from "./components/NavigationTabs";
 export type {
   PopoverInitialFocus,
+  MenuCheckbox,
   MenuEntry,
   MenuHeading,
   MenuItem,
@@ -195,6 +201,8 @@ export type {
   ModalProps,
 } from "./components/Modal";
 export { CommandPalette } from "./components/CommandPalette";
+export { ContextPanel } from "./components/ContextPanel";
+export type { ContextPanelProps } from "./components/ContextPanel";
 export type {
   CommandPaletteProps,
   PaletteItem,
@@ -207,6 +215,7 @@ export type { ToastFn, ToastOptions } from "./components/Toast";
 // states
 export {
   Banner,
+  CircularMeter,
   DraftBar,
   EmptyState,
   ErrorState,
@@ -220,6 +229,7 @@ export {
 } from "./components/States";
 export type {
   BannerProps,
+  CircularMeterProps,
   EmptyStateProps,
   ErrorStateProps,
   MeterProps,
@@ -248,6 +258,8 @@ export {
 export type { TileDelta } from "./components/Pages";
 export { CopyBlock } from "./components/CopyBlock";
 export type { CopyBlockProps } from "./components/CopyBlock";
+export { SyntaxTokens } from "./components/SyntaxTokens";
+export type { SyntaxToken, SyntaxLines } from "./components/SyntaxTokens";
 export { MediaFrame } from "./components/MediaFrame";
 export type { MediaFrameProps } from "./components/MediaFrame";
 export { MediaZoomControls } from "./components/MediaZoomControls";
@@ -312,6 +324,7 @@ export {
 export type { HotkeyOptions } from "./lib/hotkeys";
 export { computePosition, useAnchoredPosition } from "./lib/position";
 export { readStorage, writeStorage } from "./lib/storage";
+export { useMediaQuery } from "./lib/media";
 export { hasTextSelection, isPlainClick } from "./lib/dom";
 
 export { fitPaneWidths, usePaneResize } from "./lib/panes";

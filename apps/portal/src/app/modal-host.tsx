@@ -1,7 +1,7 @@
 // Renders the open app-wide modal with the data and mutations it needs.
 import type { ModalState } from "../app-types";
 import { tokenExecutionContextsSummary } from "../lib/helpers";
-import { ConfirmDialog, KeyValue, Time } from "../workbench";
+import { Chip, ConfirmDialog, KeyValue, Time } from "../workbench";
 import { SecretRevealModal } from "../components/secret-reveal";
 import { useManagementTokenActions } from "../mutations/tokens";
 import { ManagementTokenModal } from "../features/tokens/management-token-modal";
@@ -76,6 +76,29 @@ function OpenModal({ modal }: { modal: Exclude<ModalState, null> }) {
         </SecretRevealModal>
       );
     }
+    case "accessKeyReveal":
+      return (
+        <SecretRevealModal
+          // Another key never inherits this dialog's state, such as Copied.
+          key={modal.record.keyId}
+          title="Access key created"
+          secretLabel="Access key"
+          secret={modal.key}
+          onClose={closeModal}
+          details={
+            <KeyValue
+              labelWidth={120}
+              items={[
+                { label: "Owner", value: modal.ownerName === modal.record.principalId ? <span className="wb-num">{modal.record.principalId}</span> : <>{modal.ownerName} <span className="wb-num wb-muted">{modal.record.principalId}</span></> },
+                { label: "Gives access to", value: <span className="wb-inline pt-key-pills pt-key-pills--wrap">{modal.typeLabels.map((item) => <Chip key={item.id}>{item.label}</Chip>)}</span> },
+                { label: "Key ID", value: <span className="wb-num">{modal.record.keyId}</span> },
+                { label: "Username", value: <span className="wb-mono">{modal.username}</span> },
+                { label: "Expires", value: modal.record.expiresAt === null ? "Never" : <Time value={modal.record.expiresAt} format="datetime" /> }
+              ]}
+            />
+          }
+        />
+      );
     case "confirm":
       return (
         // Close only this confirmation: its action may already have opened the next dialog (a one-time secret).

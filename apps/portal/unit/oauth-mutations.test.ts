@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { PolicyGrantRecord } from "../src/types";
 
 const mocks = vi.hoisted(() => ({
-  oauthConnections: vi.fn(), admin: vi.fn(), console: vi.fn(), agentTokenOptions: vi.fn(), session: vi.fn(),
+  oauthConnections: vi.fn(), admin: vi.fn(), console: vi.fn(), agentTokenOptions: vi.fn(), session: vi.fn(), accessKeys: vi.fn(),
   disableGrant: vi.fn(), addMember: vi.fn(), addGroup: vi.fn(), setAccess: vi.fn(), configReload: vi.fn(),
   toast: vi.fn(), navigate: vi.fn()
 }));
@@ -43,19 +43,23 @@ test("disabling a grant refreshes personal OAuth eligibility", async () => {
   expect(mocks.oauthConnections).toHaveBeenCalledOnce();
 });
 
-test("membership changes through either principal or group controls refresh personal OAuth eligibility", async () => {
+test("membership changes through either principal or group controls refresh personal OAuth eligibility and access keys", async () => {
   await actionsFrom(useGroupActions).addMember("readers", "admin");
   expect(mocks.addMember).toHaveBeenCalledOnce();
   expect(mocks.oauthConnections).toHaveBeenCalledTimes(1);
+  // A group's access key types decide what the signed-in person may hold.
+  expect(mocks.accessKeys).toHaveBeenCalledTimes(1);
   await actionsFrom(usePrincipalActions).addGroup("admin", "readers");
   expect(mocks.addGroup).toHaveBeenCalledOnce();
   expect(mocks.oauthConnections).toHaveBeenCalledTimes(2);
+  expect(mocks.accessKeys).toHaveBeenCalledTimes(2);
 });
 
 test("self-service changes and configuration reloads refresh personal OAuth targets", async () => {
   await actionsFrom(usePrincipalActions).setAccess("admin", { selfServiceEnabled: false });
   expect(mocks.setAccess).toHaveBeenCalledOnce();
   expect(mocks.oauthConnections).toHaveBeenCalledTimes(1);
+  expect(mocks.accessKeys).toHaveBeenCalledOnce();
   await actionsFrom(useRuntimeActions).reload();
   expect(mocks.configReload).toHaveBeenCalledOnce();
   expect(mocks.oauthConnections).toHaveBeenCalledTimes(2);

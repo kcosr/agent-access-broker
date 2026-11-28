@@ -76,11 +76,11 @@ export function TokenEditorPage() {
   } else if (!canWriteSubject(session, subject) || !subject.principalId) {
     state = <EmptyState icon="lock" title="Token issuance unavailable">You do not have permission to issue tokens here.</EmptyState>;
   } else if ((!ttlPolicy || ttlPolicy.options.length === 0) && !initialized) {
-    state = <EmptyState icon="key" title="Token issuance unavailable">Token issuance policy is unavailable.</EmptyState>;
+    state = <EmptyState icon="ticket" title="Token issuance unavailable">Token issuance policy is unavailable.</EmptyState>;
   } else if (!options || (options.executionContexts.length === 0 && !initialized)) {
     state = <EmptyState icon="shield" title="No active grants">{subject.administered ? "This principal needs" : "You need"} an active policy grant before an execution-context-bound token can be issued.</EmptyState>;
   } else if (!initialized && tokenIssuanceBlocker(session, subject.administered, options)) {
-    state = <EmptyState icon="key" title="Token issuance unavailable">{tokenIssuanceBlocker(session, subject.administered, options)}</EmptyState>;
+    state = <EmptyState icon="ticket" title="Token issuance unavailable">{tokenIssuanceBlocker(session, subject.administered, options)}</EmptyState>;
   } else {
     initializedOwner.current = ownerKey;
     return <TokenEditor key={ownerKey} subject={subject} options={options} ttlPolicy={ttlPolicy ?? null} services={params.getAll("service")} returnTo={returnTo} header={<PageHeader title="Issue agent token" back={back} meta={meta} />} optionsError={query.error} optionsRefreshing={query.isFetching} retryOptions={() => { void query.refetch(); }} />;

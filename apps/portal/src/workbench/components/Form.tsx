@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useId, useRef } from "react";
 import type {
+  HTMLAttributes,
   InputHTMLAttributes,
   ReactNode,
   Ref,
@@ -76,10 +77,18 @@ export function useFieldControl(props: {
   };
 }
 
-export interface FieldProps {
+export interface FieldProps extends Omit<
+  HTMLAttributes<HTMLDivElement>,
+  "id" | "children" | "className"
+> {
   label: ReactNode;
   /** Help text under the control (aria-describedby). */
   hint?: ReactNode;
+  /**
+   * A longer explanation under the hint, shown while the field has focus
+   * (also aria-describedby).
+   */
+  focusHint?: ReactNode;
   /** Error text; marks the control aria-invalid. */
   error?: ReactNode;
   /** Adds "(optional)" after the label. */
@@ -90,22 +99,28 @@ export interface FieldProps {
   className?: string | undefined;
 }
 
-/** Label + control + hint + error, with the ids wired for the control inside. */
+/**
+ * Label + control + hint + error, with the ids wired for the control inside.
+ * Other props (data attributes, onBlur) go to the root element.
+ */
 export function Field({
   label,
   hint,
+  focusHint,
   error,
   optional,
   id,
   children,
   className,
+  ...rest
 }: FieldProps) {
   const auto = useId();
   const controlId = id ?? `wb-field-${auto}`;
   const hintId = hint ? `${controlId}-hint` : undefined;
+  const focusHintId = focusHint ? `${controlId}-focus-hint` : undefined;
   const errorId = error ? `${controlId}-error` : undefined;
   return (
-    <div className={cx("wb-field", className)}>
+    <div {...rest} className={cx("wb-field", className)}>
       <label className="wb-field-label" htmlFor={controlId}>
         {label}
         {optional ? (
@@ -118,7 +133,7 @@ export function Field({
       <FieldProvider
         value={{
           id: controlId,
-          describedBy: joinIds(errorId, hintId),
+          describedBy: joinIds(errorId, hintId, focusHintId),
           invalid: !!error,
         }}
       >
@@ -127,6 +142,11 @@ export function Field({
       {hint ? (
         <div className="wb-field-hint" id={hintId}>
           {hint}
+        </div>
+      ) : null}
+      {focusHint ? (
+        <div className="wb-field-hint wb-field-focus-hint" id={focusHintId}>
+          {focusHint}
         </div>
       ) : null}
       {error ? (

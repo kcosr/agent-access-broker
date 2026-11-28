@@ -1,8 +1,8 @@
 import { ROLE_LABELS } from "../../lib/capabilities";
 import { AdminButton, AdminIconButton } from "../../components/admin-access";
 // Admin › Principals › a user or service account: header with role actions
-// and URL-driven tabs (Overview, Access, Grants, Groups, Tokens, Credentials,
-// Limits, Activity). Replaces the former "Manage user" mode.
+// and URL-driven tabs (Overview, Access, Grants, Groups, Tokens, Keys,
+// Credentials, Limits, Activity). Replaces the former "Manage user" mode.
 import { SignInMethodBadges } from "./sign-in-methods";
 import { useId, type ReactNode } from "react";
 import { useLocation, useParams } from "react-router";
@@ -10,7 +10,7 @@ import type { PrincipalDetail } from "../../types";
 import { canViewAudit, identityDisplayName } from "../../lib/helpers";
 import { auditListPath } from "../../lib/audit";
 import { urlParam, urlStateSearch, useUrlState } from "../../lib/url-state";
-import { Avatar, Badge, Button, EmptyState, ErrorState, findRowTarget, GroupHeader, LinkTabs, List, ListFooter, Main, Menu, PageHeader, plural, SkeletonBlock } from "../../workbench";
+import { Avatar, Badge, Banner, Button, EmptyState, ErrorState, findRowTarget, GroupHeader, LinkTabs, List, ListFooter, Main, Menu, PageHeader, plural, SkeletonBlock } from "../../workbench";
 import { adminSubject } from "../../app/active-route";
 import { paths, type PrincipalTab } from "../../app/paths";
 import { useModal } from "../../app/modal";
@@ -18,8 +18,10 @@ import { useSession } from "../../app/session";
 import { PortalPage } from "../../app/top-bar";
 import { NotFoundPage } from "../../app/gate";
 import {
+  useAdminAccessKeyTypes,
   useAdminGroups,
   useAdminPrincipal,
+  useAdminPrincipalAccessKeys,
   useAdminUserDetail,
   useAdminLoginMethods,
   useConfigStatus,
@@ -37,11 +39,14 @@ import { GrantDrawer } from "../policies/policies-page";
 import { PrincipalActivity } from "../audit/principal-activity";
 import { GrantReferences, GrantReferencesToolbar, referenceRows } from "./policy-references";
 import { ManagementTokenDrawer, ManagementTokens, MANAGEMENT_TOKEN_STATE } from "./management-tokens";
+import { AccessKeyDrawer, AccessKeyTable, AccessKeyToolbar, useAccessKeyList } from "../access-keys/key-list";
+import { accessKeyAccountProblem, administeredAccessKeyTypes, administeredIssueBlocker } from "../../lib/access-keys";
+import { canWriteAdmin } from "../../lib/capabilities";
 import { PrincipalGroups, PrincipalGroupsToolbar } from "./principal-groups";
 import { PrincipalOverview } from "./principal-overview";
 import { ServiceLimitsTab } from "./service-limits";
 
-const TABS: PrincipalTab[] = ["overview", "access", "grants", "groups", "tokens", "credentials", "limits", "activity"];
+const TABS: PrincipalTab[] = ["overview", "access", "grants", "groups", "tokens", "keys", "credentials", "limits", "activity"];
 const GRANT_STATE = { grant: urlParam.text() };
 
 export function PrincipalPage() {
@@ -97,6 +102,8 @@ export function PrincipalPage() {
       return <GroupsTab {...props} />;
     case "tokens":
       return <TokensTab {...props} />;
+    case "keys":
+      return <KeysTab {...props} />;
     case "credentials":
       return <CredentialsTab {...props} />;
     case "limits":
@@ -132,7 +139,8 @@ function PrincipalFrame({
   const self = principal.principalId === session.principal;
   // Each grant once, whether it names the user, reaches them through groups, or both.
   const grantCount = referenceRows(principal.policyReferenceSections).length;
-  const tabs = TABS.filter((item) => item !== "activity" || canViewAudit(session)).map((item) => ({
+  const keysTab = useKeysTabShown(principal);
+  const tabs = TABS.filter((item) => (item !== "activity" || canViewAudit(session)) && (item !== "keys" || keysTab || tab === "keys")).map((item) => ({
     href: paths.principal(principal.principalId, item),
     label: item === "overview" ? "Overview" : item[0]!.toUpperCase() + item.slice(1),
     current: item === tab,
@@ -181,8 +189,8 @@ function PrincipalFrame({
               ...(!serviceAccount
                 ? [
                     { id: "access", label: "Account access", icon: "shield" as const, href: paths.principal(principal.principalId) },
-                    { id: "setup", label: "Issue setup token", icon: "key" as const, disabled: !active, onSelect: () => tokens.openIssueDialog(principal.principalId, "user_manage") },
-                    { id: "admin-token", label: "Issue admin token", icon: "key" as const, disabled: !active || !(admin || principal.role === "auditor"), onSelect: () => tokens.openIssueDialog(principal.principalId, "admin") },
+                    { id: "setup", label: "Issue setup token", icon: "ticket" as const, disabled: !active, onSelect: () => tokens.openIssueDialog(principal.principalId, "user_manage") },
+                    { id: "admin-token", label: "Issue admin token", icon: "ticket" as const, disabled: !active || !(admin || principal.role === "auditor"), onSelect: () => tokens.openIssueDialog(principal.principalId, "admin") },
                     { type: "separator" as const }
                   ]
                 : []),
@@ -329,6 +337,58 @@ function TokensTab(props: TabProps) {
         </section>
         {!serviceAccount ? <ManagementTokens principal={props.principal} tokens={detail.data?.userTokens ?? []} /> : null}
         <ListFooter />
+      </List>
+    </PrincipalFrame>
+  );
+}
+
+/**
+ * Keys sits beside Tokens for people and service accounts while an access key
+ * type is configured, and while the account holds keys from an earlier
+ * configuration.
+ */
+function useKeysTabShown(principal: PrincipalDetail) {
+  const holder = principal.kind === "user" || principal.kind === "service_account";
+  const types = useAdminAccessKeyTypes(holder);
+  const keys = useAdminPrincipalAccessKeys(principal.principalId, holder && types.data?.length === 0);
+  return holder && (Boolean(types.data?.length) || Boolean(keys.data?.length));
+}
+
+function KeysTab(props: TabProps) {
+  const { session } = useSession();
+  const { principal } = props;
+  const model = useAccessKeyList(adminSubject(principal.principalId));
+  const types = useAdminAccessKeyTypes();
+  const offered = administeredAccessKeyTypes(types.data ?? [], principal.accessKeyTypePolicy).offered.length;
+  // Why no key of the account can work, as the server states it: said above
+  // the list, and nothing is offered to issue. The keys still list and revoke.
+  const problem = accessKeyAccountProblem(principal);
+  // A failed read of the types offers nothing, even with a cached list.
+  const blocker = types.isError ? "The access key types could not be loaded." : types.data ? administeredIssueBlocker({ kind: principal.kind, offered })?.text ?? null : "Loading access key types…";
+  const explained = Boolean(blocker) && (types.isError || Boolean(types.data));
+  const issue = problem ? (
+    <Banner tone="warning" slim className="pt-key-blocker">{problem.text}</Banner>
+  ) : canWriteAdmin(session) ? (
+    <span className="pt-key-issue">
+      {explained ? <span className="wb-small wb-muted pt-key-blocker" id="access-key-issue-blocker">{blocker}</span> : null}
+      <Button variant="primary" icon="plus" href={blocker ? undefined : paths.principalAccessKeyNew(principal.principalId)} disabled={Boolean(blocker)} aria-describedby={explained ? "access-key-issue-blocker" : undefined}>Issue access key</Button>
+      {types.isError ? <Button icon="refresh" onClick={() => void types.refetch()} pending={types.isFetching}>Retry</Button> : null}
+    </span>
+  ) : null;
+  return (
+    <PrincipalFrame
+      {...props}
+      toolbar={<AccessKeyToolbar model={model} issue={issue} />}
+      drawer={model.open ? <AccessKeyDrawer model={model} /> : null}
+      refetching={model.query.isFetching && !model.loading}
+    >
+      <List full>
+        <AccessKeyTable
+          model={model}
+          label="Access keys"
+          empty={<EmptyState compact icon="key" title="No access keys">{principal.kind === "service_account" ? "A service account does not issue its own keys: issue one here for the types it is allowed." : "Keys this person issues, and keys issued for them here, appear with what each one gives access to."}</EmptyState>}
+        />
+        {model.shown.length > 0 ? <ListFooter /> : null}
       </List>
     </PrincipalFrame>
   );

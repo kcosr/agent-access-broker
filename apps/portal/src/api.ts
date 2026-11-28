@@ -1,4 +1,5 @@
-import type { GroupAgentTokenIssuanceSetting, PrincipalAgentTokenIssuanceSetting } from "./types";
+import type { GroupAccessKeyTypes, GroupAgentTokenIssuanceSetting, PrincipalAccessKeyTypes, PrincipalAgentTokenIssuanceSetting } from "./types";
+import type { AccessKeyIssueBody, AccessKeyOptions, AccessKeyType, AccessKeyView, AccountUsernameChange, AccountUsernameSetBody, IssuedAccessKey, PrincipalAccountUsername, RevokedAccessKey } from "./types";
 import type { ImportAcceptResult, ImportActionStatus, ImportChangeBlocked, ImportClassificationChange, ImportDefinition, ImportListResult, ImportPreviewResult, ImportPurpose, ImportRecordResult, ImportResourceTypeIds, ImportSelection, ImportServiceStatus, ImportVersions } from "./import-types";
 import type { ResourceLocationService, ResourceLocationRequest, NormalizedResourceLocation, CatalogMutation, ResourceRecord, ResourceGroupRecord, ResourceWriteBody, ResourceGroupWriteBody, ResourceUsedBy, EffectiveAccessResult, GrantEffectiveAccessBody, TokenEffectiveAccessBody } from "./types";
 import type {
@@ -409,7 +410,7 @@ export const brokerApi = {
     ),
   adminCreateGroup: (
     session: Session,
-    body: { groupId: string; displayName?: string; description?: string; autoEnrollNewMicrosoftUsers?: boolean; agentTokenIssuance?: GroupAgentTokenIssuanceSetting }
+    body: { groupId: string; displayName?: string; description?: string; autoEnrollNewMicrosoftUsers?: boolean; agentTokenIssuance?: GroupAgentTokenIssuanceSetting; accessKeyTypes?: GroupAccessKeyTypes }
   ) =>
     managementRequest<GroupRecord>(
       "/v1/admin/groups",
@@ -422,7 +423,7 @@ export const brokerApi = {
   adminPatchGroup: (
     session: Session,
     groupId: string,
-    body: { displayName?: string | null; description?: string | null; status?: string; autoEnrollNewMicrosoftUsers?: boolean; agentTokenIssuance?: GroupAgentTokenIssuanceSetting }
+    body: { displayName?: string | null; description?: string | null; status?: string; autoEnrollNewMicrosoftUsers?: boolean; agentTokenIssuance?: GroupAgentTokenIssuanceSetting; accessKeyTypes?: GroupAccessKeyTypes }
   ) =>
     managementRequest<GroupRecord>(
       `/v1/admin/groups/${enc(groupId)}`,
@@ -507,7 +508,8 @@ export const brokerApi = {
     principalId: string,
     body: { displayName?: string | null; email?: string | null; status?: string }
   ) =>
-    managementRequest<PrincipalRecord>(
+    // `accountUsernameChange` says what an email change did to a person's username; null when no person's email changed.
+    managementRequest<PrincipalRecord & { accountUsernameChange?: AccountUsernameChange | null }>(
       `/v1/admin/principals/${enc(principalId)}`,
       {
         method: "PATCH",
@@ -515,7 +517,7 @@ export const brokerApi = {
       },
       session
     ),
-  adminSetAccess: (session: Session, principalId: string, body: { role?: PrincipalRole; selfServiceEnabled?: boolean; agentTokenIssuance?: PrincipalAgentTokenIssuanceSetting }) =>
+  adminSetAccess: (session: Session, principalId: string, body: { role?: PrincipalRole; selfServiceEnabled?: boolean; agentTokenIssuance?: PrincipalAgentTokenIssuanceSetting; accessKeyTypes?: PrincipalAccessKeyTypes }) =>
     managementRequest<PrincipalRecord>(`/v1/admin/principals/${enc(principalId)}/access`, { method: "PATCH", body: JSON.stringify(body) }, session),
   adminAddGroup: (session: Session, principalId: string, group: string) =>
     managementRequest<{ ok: boolean }>(
@@ -844,6 +846,29 @@ export const brokerApi = {
     managementRequest<ApplicationAccess>(`/v1/admin/principals/${enc(principalId)}/application-access/${enc(accessId)}`, { method: "PATCH", body: JSON.stringify(body) }, session),
   adminRemoveApplicationAccess: (session: Session, principalId: string, accessId: string, expectedVersion: number) =>
     managementRequest<{ removed: true }>(`/v1/admin/principals/${enc(principalId)}/application-access/${enc(accessId)}?expectedVersion=${expectedVersion}`, { method: "DELETE" }, session),
+  // A person's own access keys: browser session only, not gated by self-service.
+  accessKeyOptions: (session: Session) =>
+    managementRequest<AccessKeyOptions>("/v1/access-keys/options", { cache: "no-store" }, session),
+  /** Every key the person owns, revoked and expired ones included. */
+  accessKeys: (session: Session) =>
+    managementRequest<{ keys: AccessKeyView[] }>("/v1/access-keys?includeRevoked=true&includeExpired=true", { cache: "no-store" }, session).then((result) => result.keys),
+  issueAccessKey: (session: Session, body: AccessKeyIssueBody) =>
+    managementRequest<IssuedAccessKey>("/v1/access-keys", { method: "POST", cache: "no-store", body: JSON.stringify(body) }, session),
+  revokeAccessKey: (session: Session, keyId: string) =>
+    managementRequest<RevokedAccessKey>(`/v1/access-keys/${enc(keyId)}`, { method: "DELETE" }, session),
+  adminAccessKeyTypes: (session: Session) =>
+    managementRequest<{ accessKeyTypes: AccessKeyType[] }>("/v1/admin/access-key-types", {}, session).then((result) => result.accessKeyTypes),
+  /** One account's keys, revoked and expired ones included. */
+  adminAccessKeys: (session: Session, principalId: string) =>
+    managementRequest<{ keys: AccessKeyView[] }>(`/v1/admin/access-keys?principal=${enc(principalId)}&includeRevoked=true&includeExpired=true`, { cache: "no-store" }, session).then((result) => result.keys),
+  adminIssueAccessKey: (session: Session, principalId: string, body: AccessKeyIssueBody) =>
+    managementRequest<IssuedAccessKey>(`/v1/admin/principals/${enc(principalId)}/access-keys`, { method: "POST", cache: "no-store", body: JSON.stringify(body) }, session),
+  adminRevokeAccessKey: (session: Session, keyId: string) =>
+    managementRequest<RevokedAccessKey>(`/v1/admin/access-keys/${enc(keyId)}`, { method: "DELETE" }, session),
+  adminSetAccountUsername: (session: Session, principalId: string, body: AccountUsernameSetBody) =>
+    managementRequest<PrincipalAccountUsername & { accountUsernameChange: AccountUsernameChange }>(`/v1/admin/principals/${enc(principalId)}/account-username`, { method: "PUT", body: JSON.stringify(body) }, session),
+  adminConfirmAccountUsername: (session: Session, principalId: string, accountUsername: string) =>
+    managementRequest<PrincipalAccountUsername>(`/v1/admin/principals/${enc(principalId)}/account-username/confirm`, { method: "POST", body: JSON.stringify({ accountUsername }) }, session),
   auditOptions: (session: Session, scope: "admin" | "self") =>
     managementRequest<AuditOptions>(scope === "admin" ? "/v1/admin/audit/options" : "/v1/audit/options", {}, session),
   /** One page of audit records. `params` are sent as given: callers omit empty filters. */

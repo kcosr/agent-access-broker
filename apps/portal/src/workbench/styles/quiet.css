@@ -633,7 +633,7 @@
     line-height: inherit;
   }
   [data-wb-style="quiet"] .wb-code,
-  [data-wb-style="quiet"] .wb-copy {
+  [data-wb-style="quiet"] .wb-copy:not(.wb-copy--plain) {
     background: var(--wb-surface);
   }
   [data-wb-style="quiet"] .wb-code-key {

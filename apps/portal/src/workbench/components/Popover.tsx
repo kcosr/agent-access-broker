@@ -29,6 +29,10 @@ export interface PopoverProps {
   onClose: () => void;
   /** Element the popover is attached to (focus returns to it on close). */
   anchorRef: RefObject<HTMLElement | null>;
+  /** Optional layout anchor, separate from the trigger used for focus and dismissal. */
+  positionRef?: RefObject<HTMLElement | null> | undefined;
+  /** Match the width of the layout anchor (or the trigger when no layout anchor is given). */
+  matchWidth?: boolean | undefined;
   placement?: Placement | undefined;
   /** Accessible name of the dialog. */
   label?: string | undefined;
@@ -60,6 +64,8 @@ export function Popover(props: PopoverProps) {
 function PopoverSurface({
   onClose,
   anchorRef,
+  positionRef = anchorRef,
+  matchWidth = false,
   placement = "bottom-start",
   label,
   role = "dialog",
@@ -73,9 +79,10 @@ function PopoverSurface({
   const ref = useRef<HTMLDivElement | null>(null);
   const { style, measured } = useAnchoredPosition(
     true,
-    anchorRef,
+    positionRef,
     ref,
     placement,
+    { matchWidth },
   );
   const layers = useLayer(true, onClose, true, ref);
   const owner = useOverlayOwner(ref);
@@ -210,6 +217,17 @@ export interface MenuItem {
   checked?: boolean | undefined;
 }
 
+/** An independent option that toggles without closing the menu. */
+export interface MenuCheckbox extends Omit<
+  MenuItem,
+  "type" | "checked" | "href" | "external"
+> {
+  type: "checkbox";
+  checked: boolean;
+  href?: never;
+  external?: never;
+}
+
 export interface MenuSeparator {
   type: "separator";
   id?: string | undefined;
@@ -222,7 +240,7 @@ export interface MenuHeading {
   sub?: ReactNode;
 }
 
-export type MenuEntry = MenuItem | MenuSeparator | MenuHeading;
+export type MenuEntry = MenuItem | MenuCheckbox | MenuSeparator | MenuHeading;
 
 export interface MenuTriggerProps {
   ref: RefObject<HTMLButtonElement | null>;
@@ -276,7 +294,12 @@ export function Menu({
     setOpen(true);
   };
 
-  const select = (item: MenuItem) => {
+  const select = (item: MenuItem | MenuCheckbox, target: HTMLButtonElement) => {
+    if (item.type === "checkbox") {
+      target.focus({ preventScroll: true });
+      item.onSelect?.();
+      return;
+    }
     setOpen(false);
     // Focus the trigger before the action so dialogs it opens return focus here.
     triggerRef.current?.focus({ preventScroll: true });
@@ -372,7 +395,11 @@ export function Menu({
               );
             }
             const role =
-              entry.checked === undefined ? "menuitem" : "menuitemradio";
+              entry.type === "checkbox"
+                ? "menuitemcheckbox"
+                : entry.checked === undefined
+                  ? "menuitem"
+                  : "menuitemradio";
             const cls = cx(
               "wb-menu-item",
               entry.danger && "wb-menu-item--danger",
@@ -380,7 +407,13 @@ export function Menu({
             const body = (
               <>
                 {entry.checked !== undefined ? (
-                  <span className="wb-menu-check">
+                  <span
+                    className={cx(
+                      "wb-menu-check",
+                      entry.type === "checkbox" && "wb-menu-checkbox",
+                    )}
+                    aria-hidden="true"
+                  >
                     {entry.checked ? <Icon name="check" /> : null}
                   </span>
                 ) : entry.icon ? (
@@ -434,8 +467,8 @@ export function Menu({
                 className={cls}
                 aria-checked={entry.checked}
                 aria-disabled={entry.disabled ? true : undefined}
-                onClick={() => {
-                  if (!entry.disabled) select(entry);
+                onClick={(event) => {
+                  if (!entry.disabled) select(entry, event.currentTarget);
                 }}
               >
                 {body}

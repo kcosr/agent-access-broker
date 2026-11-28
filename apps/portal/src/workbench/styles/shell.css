@@ -11,7 +11,13 @@
     background: var(--wb-page);
     color: var(--wb-fg);
   }
-  .wb-app > .wb-topbar {
+  /* AppShell's box around the top bar (inert with the page while the narrow
+     sidebar is open) lays nothing out itself. */
+  .wb-app-topbar {
+    display: contents;
+  }
+  .wb-app > .wb-topbar,
+  .wb-app > .wb-app-topbar > * {
     grid-column: 1 / -1;
     grid-row: 1;
   }
@@ -63,6 +69,107 @@
   }
   .wb-app-drawer.is-resizable > .wb-drawer {
     width: var(--wb-resized-drawer-w);
+  }
+
+  /* ---------- narrow (AppShell `narrow`): the sidebar opens over the page */
+  .wb-app--narrow {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .wb-app--narrow > :is(.wb-app-main, .wb-main) {
+    grid-column: 1;
+  }
+  .wb-narrow-bar {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 6px;
+    min-height: 48px;
+    padding: 0 12px 0 6px;
+    border-bottom: 1px solid var(--wb-border);
+    background: var(--wb-side);
+  }
+  .wb-narrow-bar > .wb-btn--icon {
+    width: 44px;
+    height: 44px;
+  }
+  .wb-app--narrow > .wb-sidebar-pane {
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: calc(var(--wb-z-overlay) - 1);
+    width: min(288px, 86vw);
+    box-shadow: var(--wb-shadow-pop);
+  }
+  .wb-app--narrow > .wb-narrow-scrim {
+    z-index: calc(var(--wb-z-overlay) - 2);
+  }
+  .wb-app--narrow .wb-sidebar-resize {
+    display: none;
+  }
+  /* narrowMenu="sheet": the open sidebar fills the viewport below a bar
+     whose Close menu button takes Menu's place. */
+  .wb-app--narrow.wb-app--menu-sheet > .wb-sidebar-pane {
+    inset: 0;
+    flex-direction: column;
+    width: auto;
+    background: var(--wb-page);
+    box-shadow: none;
+    animation: wb-fade var(--wb-dur-fast) var(--wb-ease);
+  }
+  .wb-menu-sheet-bar {
+    display: flex;
+    flex: none;
+    align-items: center;
+    min-height: calc(48px + env(safe-area-inset-top, 0px));
+    padding: env(safe-area-inset-top, 0px)
+      calc(12px + env(safe-area-inset-right, 0px)) 0
+      calc(6px + env(safe-area-inset-left, 0px));
+    border-bottom: 1px solid var(--wb-border);
+    background: var(--wb-side);
+  }
+  .wb-menu-sheet-bar > .wb-btn--icon {
+    width: 44px;
+    height: 44px;
+  }
+  .wb-app--menu-sheet > .wb-sidebar-pane > .wb-sidebar {
+    padding-right: calc(10px + env(safe-area-inset-right, 0px));
+    padding-bottom: calc(24px + env(safe-area-inset-bottom, 0px));
+    padding-left: calc(10px + env(safe-area-inset-left, 0px));
+  }
+  .wb-app--menu-sheet > .wb-sidebar-pane > .wb-sidebar:has(> .wb-side-foot) {
+    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  }
+  /* Touch-sized rows and foot controls. */
+  .wb-app--narrow .wb-side-item {
+    height: 40px;
+  }
+  .wb-app--narrow .wb-side-foot .wb-btn {
+    min-height: 44px;
+  }
+  /* On phones and touch screens (as touch.css), the bar and the sheet's bar
+     are taller, and icon buttons in them show larger icons. */
+  @media (max-width: 760px), (pointer: coarse) {
+    .wb-narrow-bar {
+      min-height: 54px;
+    }
+    .wb-menu-sheet-bar {
+      min-height: calc(54px + env(safe-area-inset-top, 0px));
+    }
+    :is(.wb-narrow-bar, .wb-menu-sheet-bar) .wb-btn--icon .wb-icon {
+      width: 20px;
+      height: 20px;
+    }
+    /* The narrow sidebar's foot reads at the bar's size too. */
+    .wb-app--narrow .wb-side-foot .wb-btn {
+      font-size: var(--wb-fs-15);
+    }
+    .wb-app--narrow .wb-side-foot .wb-btn .wb-icon {
+      width: 16px;
+      height: 16px;
+    }
+    .wb-app--narrow .wb-side-foot .wb-btn--icon .wb-icon {
+      width: 20px;
+      height: 20px;
+    }
   }
 
   /* ---------- skip link: off-screen until focused */

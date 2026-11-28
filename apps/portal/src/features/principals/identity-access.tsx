@@ -6,6 +6,7 @@ import { useModal } from "../../app/modal";
 import { AdminButton, AdminForm, AdminOnly } from "../../components/admin-access";
 import { FormError } from "../../components/form";
 import { useAdminApplicationAccess, useIdentityAccess, useIdentityBindings, useIdentityToken } from "../../data/queries";
+import { usePortalInvalidation } from "../../data/invalidation";
 import { applicationAccessName, applicationAccessState, applicationLevelSummary, liveTokenSummary } from "../../lib/applications";
 import { canWriteAdmin } from "../../lib/capabilities";
 import { errorMessage } from "../../lib/helpers";
@@ -20,6 +21,7 @@ const applicationConflictMessage = "Application access changed. Review the refre
 export function IdentityAccessSection({ principalId, principalActive }: { principalId: string; principalActive: boolean }) {
   const { session, attempt } = useSession();
   const queryClient = useQueryClient();
+  const invalidate = usePortalInvalidation();
   const toast = useToast();
   const query = useIdentityAccess(principalId);
   const [pending, setPending] = useState(false);
@@ -33,6 +35,10 @@ export function IdentityAccessSection({ principalId, principalActive }: { princi
     try {
       const result = await attempt((current) => brokerApi.adminSetIdentityAccess(current, principalId, { paused: !access.paused, expectedVersion: access.version }));
       queryClient.setQueryData(portalQueryKeys.identityAccess(viewerKey(session), principalId), result);
+      // A pause stops every access key of the person, and a resume restores them:
+      // the account's views and the person's own (when it is the viewer) follow.
+      invalidate.admin();
+      invalidate.accessKeys();
       toast(result.paused ? "Identity access paused" : "Identity access resumed", { tone: "success" });
     } catch (failure) {
       if (failure instanceof ApiError && failure.status === 409) {

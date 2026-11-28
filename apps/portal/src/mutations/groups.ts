@@ -8,9 +8,9 @@ import { paths } from "../app/paths";
 import { useSession } from "../app/session";
 import { useModal } from "../app/modal";
 import { usePortalInvalidation } from "../data/invalidation";
-import type { GroupAgentTokenIssuanceSetting, GroupRecord } from "../types";
+import type { GroupAccessKeyTypes, GroupAgentTokenIssuanceSetting, GroupRecord } from "../types";
 
-export type GroupPatch = { displayName?: string | null; description?: string | null; status?: string; autoEnrollNewMicrosoftUsers?: boolean; agentTokenIssuance?: GroupAgentTokenIssuanceSetting };
+export type GroupPatch = { displayName?: string | null; description?: string | null; status?: string; autoEnrollNewMicrosoftUsers?: boolean; agentTokenIssuance?: GroupAgentTokenIssuanceSetting; accessKeyTypes?: GroupAccessKeyTypes };
 export type NewGroup = { groupId: string; displayName: string; description: string; autoEnrollNewMicrosoftUsers: boolean; agentTokenIssuance: GroupAgentTokenIssuanceSetting };
 
 export function groupProfilePatch(group: Pick<GroupRecord, "displayName" | "description" | "autoEnrollNewMicrosoftUsers">, draft: Omit<NewGroup, "groupId" | "agentTokenIssuance">): GroupPatch {
@@ -33,6 +33,8 @@ export function useGroupActions() {
       invalidate.oauthConnections();
       invalidate.admin();
       invalidate.agentTokenOptions();
+      // A group's access key types decide what its members may hold, the signed-in administrator included.
+      invalidate.accessKeys();
       void invalidate.session();
     }
 

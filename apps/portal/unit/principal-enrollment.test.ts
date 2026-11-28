@@ -6,7 +6,7 @@ import type { MicrosoftEnrollment } from "../src/types";
 const mocks = vi.hoisted(() => ({
   create: vi.fn(), patch: vi.fn(), addGroup: vi.fn(), enablePassword: vi.fn(),
   createEnrollment: vi.fn(), editEnrollment: vi.fn(), cancelEnrollment: vi.fn(),
-  toast: vi.fn(), navigate: vi.fn(), setModal: vi.fn(), admin: vi.fn(),
+  toast: vi.fn(), navigate: vi.fn(), setModal: vi.fn(), admin: vi.fn(), accessKeys: vi.fn(),
   oauthConnections: vi.fn(), agentTokenOptions: vi.fn(), session: vi.fn(), attempt: vi.fn()
 }));
 vi.mock("../src/api", () => ({ brokerApi: {
