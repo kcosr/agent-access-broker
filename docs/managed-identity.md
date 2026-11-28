@@ -190,6 +190,9 @@ independently need their own controls.
 
 Broker-generated identity tokens are random lowercase hyphenated UUID v4 values.
 Administrators can import existing bearers of 32–4096 ASCII HTTP token characters.
+A value that starts with `aab_ak_`, the access-key prefix, is refused. A
+stored value with that prefix fails store readiness until it is removed or
+replaced, so it is never accepted by fingerprint.
 Input is exact: no whitespace or trailing newline is stripped. Broker stores the
 recoverable value encrypted and a unique SHA-256 fingerprint for lookup. Ingress
 verifies possession of the original bearer and forwards only its fingerprint;

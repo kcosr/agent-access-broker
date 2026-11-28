@@ -32,3 +32,18 @@ test("registry order does not conflict or write while an unrelated field stays d
   expect(refreshed.conflicts).toEqual([]);
   expect(accessDraftPatch(refreshed)).toEqual({ role: "admin" });
 });
+
+test("a field the form stops showing leaves the draft, edited or not, and is never sent; it returns from the saved value", () => {
+  const saved: AccessFields = { ...base, accessKeyTypes: { allow: [], deny: [] } };
+  const edited = { ...accessDraft(saved), value: { ...saved, accessKeyTypes: { allow: ["inference"], deny: [] }, role: "auditor" as const } };
+  // The access key types are no longer shown: none is configured, or the list cannot be read.
+  const hidden = refreshAccessDraft(edited, base);
+  expect(hidden.conflicts).toEqual([]);
+  expect("accessKeyTypes" in hidden.value).toBe(false);
+  expect("accessKeyTypes" in hidden.base).toBe(false);
+  expect(accessDraftPatch(hidden)).toEqual({ role: "auditor" });
+  // Shown again, it starts from the saved setting.
+  const shown = refreshAccessDraft(hidden, saved);
+  expect(shown.value.accessKeyTypes).toEqual({ allow: [], deny: [] });
+  expect(accessDraftPatch(shown)).toEqual({ role: "auditor" });
+});

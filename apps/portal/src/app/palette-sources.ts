@@ -8,17 +8,18 @@ import { auditListPath } from "../lib/audit";
 import { tokenTypeName } from "../lib/credentials";
 import { resourceLabel } from "../lib/resource-labels";
 import { resourceTypeLabel, resourceTypePluralLabel, type ResourceTypes } from "../lib/resource-types";
-import { ADMIN_TABS, SELF_TABS, hasAdminSpace } from "./spaces";
+import { ADMIN_TABS, hasAdminSpace, spaceTabs } from "./spaces";
 import { ROUTE, paths } from "./paths";
 
 type Go = (href: string) => () => void;
 
-export function navigationPaletteItems(session: Session, go: Go): PaletteItem[] {
+/** `keys`: the person's navigation shows Keys (`useOwnAccessKeysNav`). */
+export function navigationPaletteItems(session: Session, go: Go, keys = false): PaletteItem[] {
   return [
     ...(hasAdminSpace(session) ? ADMIN_TABS : []).filter((tab) => !tab.allow || tab.allow(session))
       .map((tab) => ({ id: `go-${tab.key}`, label: tab.label, icon: tab.icon, hint: "Admin", onSelect: go(tab.href) })),
-    ...(canUseSelfService(session) ? SELF_TABS : []).filter((tab) => !tab.allow || tab.allow(session))
-      .map((tab) => ({ id: `go-${tab.key}`, label: tab.label, icon: tab.icon, hint: "My access", onSelect: go(tab.href) })),
+    ...spaceTabs("self", session, keys)
+      .map((tab) => ({ id: `go-${tab.key}`, label: tab.key === "keys" ? "Access keys" : tab.label, icon: tab.icon, hint: "My access", onSelect: go(tab.href) })),
     ...(canViewAdmin(session) ? [
       { id: "go-users", label: "Users", icon: "user" as const, keywords: ["people", "principals", "accounts"], onSelect: go(paths.principals("users")) },
       { id: "go-service-accounts", label: "Service accounts", icon: "server" as const, keywords: ["principals", "automation", "bots"], onSelect: go(paths.principals("service-accounts")) },
@@ -122,7 +123,7 @@ export function entityPaletteSources(data: PaletteEntities, go: Go): PaletteSour
   }
   if (self) {
     add("tokens", "Your tokens", data.tokens.map((token) => ({
-      id: `token-${token.tokenId}`, label: token.name, icon: "key", hint: `${token.tokenId.slice(0, 8)} · ${tokenStatus(token)}`, keywords: [token.tokenId, "token", tokenStatus(token)], onSelect: go(paths.tokens(token.tokenId))
+      id: `token-${token.tokenId}`, label: token.name, icon: "ticket", hint: `${token.tokenId.slice(0, 8)} · ${tokenStatus(token)}`, keywords: [token.tokenId, "token", tokenStatus(token)], onSelect: go(paths.tokens(token.tokenId))
     })));
     add("credentials", "Your credentials", data.credentials.connections.filter((connection) => connection.credential).map((connection) => {
       const credential = connection.credential!;

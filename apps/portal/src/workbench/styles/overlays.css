@@ -85,6 +85,22 @@
     height: 16px;
     stroke-width: 2.4;
   }
+  .wb-menu-checkbox {
+    width: 14px;
+    height: 14px;
+    margin: 0 1px;
+    border: 1px solid var(--wb-muted);
+    border-radius: 3px;
+  }
+  .wb-menu-checkbox .wb-icon {
+    width: 12px;
+    height: 12px;
+  }
+  .wb-menu-item[aria-checked="true"] .wb-menu-checkbox {
+    border-color: var(--wb-accent);
+    background: var(--wb-accent);
+    color: var(--wb-on-accent);
+  }
   .wb-menu-label-text {
     flex: 1;
     min-width: 0;

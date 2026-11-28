@@ -401,9 +401,13 @@ async fn policy_writers_reject_old_snapshot_after_actual_registry_reload() {
             })
             .await
         } else {
-            committed_principal_mutation(state, context, operation, None, |_, _| {
-                panic!("stale principal write entered store")
-            })
+            committed_principal_mutation::<_, serde_json::Value>(
+                state,
+                context,
+                operation,
+                None,
+                |_, _| panic!("stale principal write entered store"),
+            )
             .await
         };
         assert_eq!(response.status(), StatusCode::CONFLICT);

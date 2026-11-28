@@ -51,6 +51,19 @@ pub enum ReasonCode {
     ApplicationAuthorizationInvalid,
     ApplicationAccessDenied,
     ApplicationAccessNotFound,
+    /// The trusted caller may not resolve access keys.
+    BrokerCallerAccessKeyResolutionDenied,
+    /// A username is held by another principal, or changed since it was read.
+    BrokerAccountUsernameConflict,
+    /// A username operation is not allowed for this principal or name.
+    BrokerAccountUsernameDenied,
+    /// The principal holds no username.
+    BrokerAccountUsernameNotFound,
+    /// An access key may not be issued; `details.refusal` says why.
+    BrokerAccessKeyDenied,
+    BrokerAccessKeyNotFound,
+    /// An access key's resolution answer exceeds its size limit.
+    BrokerAccessKeyAnswerTooLarge,
     ExecutionContextRequired,
     ExecutionContextInvalid,
     ExecutionContextDenied,
@@ -189,6 +202,15 @@ impl ReasonCode {
             Self::ApplicationAuthorizationInvalid => "application_authorization_invalid",
             Self::ApplicationAccessDenied => "application_access_denied",
             Self::ApplicationAccessNotFound => "application_access_not_found",
+            Self::BrokerCallerAccessKeyResolutionDenied => {
+                "broker_caller_access_key_resolution_denied"
+            }
+            Self::BrokerAccountUsernameConflict => "broker_account_username_conflict",
+            Self::BrokerAccountUsernameDenied => "broker_account_username_denied",
+            Self::BrokerAccountUsernameNotFound => "broker_account_username_not_found",
+            Self::BrokerAccessKeyDenied => "broker_access_key_denied",
+            Self::BrokerAccessKeyNotFound => "broker_access_key_not_found",
+            Self::BrokerAccessKeyAnswerTooLarge => "broker_access_key_answer_too_large",
             Self::ExecutionContextRequired => "execution_context_required",
             Self::ExecutionContextInvalid => "execution_context_invalid",
             Self::ExecutionContextDenied => "execution_context_denied",
@@ -340,6 +362,8 @@ impl ReasonCode {
             | Self::IdentityBindingNotFound
             | Self::ApplicationAuthorizationInvalid
             | Self::ApplicationAccessNotFound
+            | Self::BrokerAccountUsernameNotFound
+            | Self::BrokerAccessKeyNotFound
             | Self::GroupNotFound
             | Self::PolicyGrantNotFound
             | Self::ResourceNotFound
@@ -352,6 +376,9 @@ impl ReasonCode {
             | Self::AuditRequestNotFound => 404,
             Self::ServiceActionDenied
             | Self::ApplicationAccessDenied
+            | Self::BrokerCallerAccessKeyResolutionDenied
+            | Self::BrokerAccountUsernameDenied
+            | Self::BrokerAccessKeyDenied
             | Self::CallerUserAssertionDenied
             | Self::IdentityAssertionDenied
             | Self::WebhookDestinationDenied
@@ -381,6 +408,7 @@ impl ReasonCode {
             | Self::GitCapabilityDenied => 403,
             Self::LocalPasswordNotEnabled
             | Self::IdentityBindingConflict
+            | Self::BrokerAccountUsernameConflict
             | Self::IdentityVersionConflict
             | Self::LocalPasswordAlreadyEnabled
             | Self::ResourceInUse
@@ -415,6 +443,7 @@ impl ReasonCode {
             | Self::CredentialDecryptFailed
             | Self::CursorSigningUnavailable
             | Self::ManagedStoreUnavailable
+            | Self::BrokerAccessKeyAnswerTooLarge
             | Self::ManagedStoreMigrationRequired
             | Self::EncryptionKeyMissing
             | Self::EncryptionKeyInvalid
@@ -449,6 +478,13 @@ impl ReasonCode {
             Self::ApplicationAuthorizationInvalid,
             Self::ApplicationAccessDenied,
             Self::ApplicationAccessNotFound,
+            Self::BrokerCallerAccessKeyResolutionDenied,
+            Self::BrokerAccountUsernameConflict,
+            Self::BrokerAccountUsernameDenied,
+            Self::BrokerAccountUsernameNotFound,
+            Self::BrokerAccessKeyDenied,
+            Self::BrokerAccessKeyNotFound,
+            Self::BrokerAccessKeyAnswerTooLarge,
             Self::ExecutionContextRequired,
             Self::ExecutionContextInvalid,
             Self::ExecutionContextDenied,

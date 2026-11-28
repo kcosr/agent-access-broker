@@ -1,8 +1,10 @@
 import { issuanceSettingBlocker } from "../../lib/token-issuance-policy";
 import { accessDraftPatch } from "../../lib/access-draft";
+import { accessKeyTypeSettingBlocker } from "../../lib/access-keys";
 import { useAccessDraft } from "./use-access-draft";
 import { AccessDraftConflict, TokenIssuanceControls, useIssuanceRegistry } from "./token-issuance-controls";
-import type { GroupAgentTokenIssuanceSetting, GroupRecord } from "../../types";
+import type { GroupAccessKeyTypes, GroupAgentTokenIssuanceSetting, GroupRecord } from "../../types";
+import { GroupAccessKeyTypeChecks } from "./access-key-type-settings";
 import { AdminButton, AdminForm, AdminIconButton } from "../../components/admin-access";
 // Admin › Principals › a group: header and URL-driven tabs (Overview,
 // Members, Grants, and Microsoft mappings when Microsoft sign-in is configured).
@@ -51,6 +53,7 @@ import { useSession } from "../../app/session";
 import { PortalPage } from "../../app/top-bar";
 import { NotFoundPage } from "../../app/gate";
 import {
+  useAdminAccessKeyTypes,
   useAdminGroup,
   useAdminPrincipals,
   useConfigStatus,
@@ -569,38 +572,58 @@ function MicrosoftTab(props: TabProps) {
 
 function GroupTokenIssuance({ group, enabled, identityAuthority }: { group: GroupRecord; enabled: boolean; identityAuthority: string }) {
   const actions = useGroupActions();
-  const draft = useAccessDraft({ agentTokenIssuance: group.agentTokenIssuance });
+  // The access key types this group allows, while a type is configured; saved with token issuance.
+  // A failed read shows its error, never choices from a stale list.
+  const types = useAdminAccessKeyTypes();
+  const keyTypes = types.isError ? [] : types.data ?? [];
+  const keysShown = keyTypes.length > 0 && Boolean(group.accessKeyTypes);
+  const fields = (value: GroupRecord) => ({ agentTokenIssuance: value.agentTokenIssuance, ...(keysShown && value.accessKeyTypes ? { accessKeyTypes: value.accessKeyTypes } : {}) });
+  const draft = useAccessDraft(fields(group));
   const record = useAdminGroup(group.groupId);
   const registry = useIssuanceRegistry();
   const policyError = issuanceSettingBlocker(draft.value.agentTokenIssuance, registry.contexts);
+  const keyTypeError = keysShown && draft.value.accessKeyTypes ? accessKeyTypeSettingBlocker(draft.value.accessKeyTypes, group.accessKeyTypes, keyTypes) : null;
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   return <SettingsSection title="Token issuance" description="Disabled does not override permission from another group. A user’s explicit setting wins.">
     {enabled ? <AdminForm onSubmit={async (event) => {
       event.preventDefault();
-      if (pending || policyError || draft.conflicts.length || !draft.changed) return;
+      if (pending || policyError || keyTypeError || draft.conflicts.length || !draft.changed) return;
       setPending(true); setError(null);
       try {
         const refreshed = await record.refetch({ throwOnError: true });
         if (!refreshed.data) throw new Error("Current group settings are unavailable.");
-        const current = draft.refresh({ agentTokenIssuance: refreshed.data.agentTokenIssuance });
+        const current = draft.refresh(fields(refreshed.data));
         if (current.conflicts.length) throw new Error("Review the changed saved settings before saving.");
         const patch = accessDraftPatch(current);
         if (Object.keys(patch).length) {
           const saved = await actions.patch(group.groupId, patch);
-          draft.committed({ agentTokenIssuance: saved.agentTokenIssuance });
+          draft.committed(fields(saved));
         }
       }
-      catch (failure) { setError(errorMessage(failure)); void registry.query.refetch(); void record.refetch(); } finally { setPending(false); }
+      // A refused save may name a type a reload elsewhere removed: reading the list again shows it for removal.
+      catch (failure) { setError(errorMessage(failure)); void registry.query.refetch(); void record.refetch(); if (keysShown) void types.refetch(); } finally { setPending(false); }
     }}>
       <SettingsRow label="Agent token issuance" alignTop help={group.status !== "active" ? "This group’s contribution is inactive while the group is disabled. Its setting is retained." : "The most permissive active group contributes the inherited permission."}>
-        <TokenIssuanceControls group value={draft.value.agentTokenIssuance} registry={registry} disabled={pending} onChange={(value) => draft.edit({ agentTokenIssuance: value as GroupAgentTokenIssuanceSetting })} />
+        <TokenIssuanceControls group value={draft.value.agentTokenIssuance} registry={registry} disabled={pending} onChange={(value) => draft.edit({ ...draft.value, agentTokenIssuance: value as GroupAgentTokenIssuanceSetting })} />
       </SettingsRow>
+      {types.isError ? (
+        <SettingsRow label="Access key types" group alignTop>
+          <ErrorState compact title="Couldn’t load access key types" error={types.error} onRetry={() => void types.refetch()} retrying={types.isFetching} />
+        </SettingsRow>
+      ) : keysShown && draft.value.accessKeyTypes ? (
+        <SettingsRow label="Access key types" group alignTop help="A group allows a type or says nothing about it; it cannot deny one. Only local membership, held in the broker, counts: membership that comes only from a Microsoft group mapping does not.">
+          <div className="wb-form-stack">
+            <GroupAccessKeyTypeChecks types={keyTypes} value={draft.value.accessKeyTypes as GroupAccessKeyTypes} saved={group.accessKeyTypes!} disabled={pending} onChange={(value) => draft.edit({ ...draft.value, accessKeyTypes: value })} />
+            <p className="wb-field-hint">A member may hold a type when any of their groups allows it, unless their own account says Allow or Deny. Unticking a type stops members left without permission from using it through their existing keys.</p>
+          </div>
+        </SettingsRow>
+      ) : null}
       <AccessDraftConflict conflict={draft.conflicts.length > 0} kept={draft.kept} discard={() => { draft.discard(); setError(null); }} keep={() => { draft.keep(); setError(null); }} />
       {record.isError ? <ErrorState compact title="Couldn’t refresh saved group settings" error={record.error} onRetry={() => void record.refetch()} /> : null}
       <FormError error={error} />
-      <div className="wb-settings-actions"><AdminButton type="submit" variant="primary" pending={pending} disabled={!draft.changed || draft.conflicts.length > 0 || Boolean(policyError)}>Save token issuance</AdminButton></div>
+      <div className="wb-settings-actions"><AdminButton type="submit" variant="primary" pending={pending} disabled={!draft.changed || draft.conflicts.length > 0 || Boolean(policyError) || Boolean(keyTypeError)}>Save token issuance</AdminButton></div>
     </AdminForm> : <p className="pt-prose">Group token issuance is unavailable under {identityAuthority} identity authority.</p>}
   </SettingsSection>;
 }

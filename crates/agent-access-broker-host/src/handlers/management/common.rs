@@ -1078,6 +1078,12 @@ fn management_cookie_csrf_required(operation: &str) -> bool {
             | "applications.authorizations.inspect"
             | "applications.access.list"
             | "admin.principals.application_access.list"
+            | "access_keys.list"
+            | "access_keys.options"
+            | "admin.access_keys.list"
+            | "admin.access_key_types.list"
+            | "admin.account_usernames.list"
+            | "admin.principals.account_username.inspect"
             | "admin.store.status"
             | "config.status"
             | "admin.policy.status"
@@ -1275,6 +1281,8 @@ pub(crate) const UNAUDITED_READ_OPERATIONS: &[&str] = &[
     "tokens.effective_access",
     "applications.authorizations.inspect",
     "applications.access.list",
+    "access_keys.list",
+    "access_keys.options",
     "credentials.list",
     "credentials.inspect",
     "credentials.targets",
@@ -1300,6 +1308,10 @@ pub(crate) const UNAUDITED_READ_OPERATIONS: &[&str] = &[
     "admin.principals.identity_access.inspect",
     "admin.principals.identity_bindings.list",
     "admin.principals.application_access.list",
+    "admin.principals.account_username.inspect",
+    "admin.account_usernames.list",
+    "admin.access_keys.list",
+    "admin.access_key_types.list",
     "admin.groups.list",
     "admin.groups.inspect",
     "admin.groups.members.list",
@@ -2211,6 +2223,12 @@ pub(super) async fn management_store_error_response(
         agent_access_core::ManagedStoreError::ApplicationAccessDenied(denial) => {
             Some(json!({"denialReason": denial}))
         }
+        // Why a username operation or an access key mint was refused:
+        // `refusal`, with the account, access key type or limit it concerned.
+        agent_access_core::ManagedStoreError::AccountUsernameRefused(refused) => {
+            Some(json!(refused))
+        }
+        agent_access_core::ManagedStoreError::AccessKeyRefused(refused) => Some(json!(refused)),
         _ => None,
     };
     let mut envelope = management_error_envelope(

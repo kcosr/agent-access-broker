@@ -483,7 +483,7 @@ export function passwordValidation(newPassword: string, confirmPassword: string)
 }
 
 export function modalHasOneTimeSecret(modal: ModalState) {
-  return modal?.type === "reveal" || modal?.type === "passwordReveal";
+  return modal?.type === "reveal" || modal?.type === "passwordReveal" || modal?.type === "accessKeyReveal";
 }
 
 export function secureRandomIndex(length: number) {

@@ -1096,6 +1096,8 @@ mod tests {
             command_imports: Default::default(),
             oauth: Default::default(),
             applications: Default::default(),
+            access_key_types: Default::default(),
+            usernames: Default::default(),
             deployment: DeploymentConfig {
                 enable_fake_service: true,
                 ..DeploymentConfig::default()

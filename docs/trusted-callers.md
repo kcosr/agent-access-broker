@@ -34,7 +34,9 @@ there is no client-supplied caller name or namespace. Each entry accepts exactly
 one `credential_transport`: `caller_authorization` (the default) or
 `authorization_user`. Distinct entries can attest the same namespace but must use
 distinct credentials. A direct caller credential must not collide with a static
-principal credential or begin with the reserved managed-token prefix `aab_`.
+principal credential or begin with the reserved managed-token prefix `aab_`. No
+caller credential, on either transport, may begin with the access-key prefix
+`aab_ak_`.
 
 Credentials use secret references and contain at least 16 visible ASCII bytes.
 Username-capable callers require 16–8192 bytes, excluding whitespace and commas.
@@ -57,6 +59,39 @@ forwarding and defaults to false; it requires managed identity/store/encryption.
 A dedicated-carrier caller may enable usernames, fingerprints, or both, but a
 request may assert only one representation. A context-only caller still needs an
 ordinary principal credential.
+
+## Access key resolution
+
+`allow_access_key_resolution = true` lets a caller ask whose
+[access key](http-api.md#access-key-resolution) a value is, with
+`POST /v1/access-keys/resolve`. It defaults to false and requires the
+`caller_authorization` transport, managed identity authority
+(`identity.authority = "managed"`), `[managed_store]` and `[broker_tokens]`:
+access keys exist only for managed accounts, so a configuration that
+grants the capability under TOML identity authority is refused when it is
+loaded, with a message that names the requirement. It is independent of
+username assertions and identity forwarding: a caller with only this
+capability can assert nobody. The
+capability is part of the caller's security contract, so granting or
+withdrawing it at a reload ends sessions established under the earlier
+contract, like any other change to the entry.
+
+```toml
+[identity.trusted_callers.key_resolver]
+credential_ref = "file:/run/secrets/key-resolver-caller"
+context_mode = "fixed"
+execution_context = "default"
+allow_access_key_resolution = true
+```
+
+A resolution request carries the caller credential and nothing else. The
+route admits every request in its own pool. Its per-caller rate counts only
+what the Broker cannot tie to a stored key, so a lookup for a stored key is
+never refused by it; both are described with the
+[route](http-api.md#access-key-resolution). A configured caller without the
+capability is refused with 403 and counted against its own entry at the
+small number an unauthenticated source has; no refusal on this route spends
+a sign-in budget. The route writes no audit records for any outcome.
 
 ## Admission
 
@@ -195,7 +230,7 @@ result. The reserved combinations are:
 | --- | --- | --- | --- | --- |
 | `identity.authenticate` | `identity_assertion_invalid`, `identity_assertion_unsupported` | 400 | `deny` | No |
 | `caller.authenticate` | `caller_authentication_required`, `caller_authentication_invalid` | 401 | `deny` | No |
-| `caller.authenticate` | `caller_user_assertion_denied`, `caller_identity_forwarding_denied`, `execution_context_required`, `execution_context_invalid`, `execution_context_denied` | 403 | `deny` | No |
+| `caller.authenticate` | `caller_user_assertion_denied`, `caller_identity_forwarding_denied`, `broker_caller_access_key_resolution_denied`, `execution_context_required`, `execution_context_invalid`, `execution_context_denied` | 403 | `deny` | No |
 | `identity.authenticate` | `identity_assertion_denied` | 403 | `deny` | No |
 | `identity.authenticate` | `identity_required`, `identity_invalid`, `broker_token_not_found`, `broker_token_expired`, `broker_token_paused`, `broker_token_revoked` | 401 | `deny` | No |
 | `identity.authenticate` | `principal_required`, `principal_disabled` | 403 | `deny` | No |

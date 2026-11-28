@@ -1010,6 +1010,15 @@ auth_requests_per_principal_per_minute = 100
 auth_requests_per_source_per_minute = 300
 max_concurrent_requests = 100
 max_concurrent_requests_per_principal = 10
+# Access key resolution (POST /v1/access-keys/resolve) shares no capacity with
+# other routes. Every request runs in its pool, which alone bounds a lookup
+# for a stored key, and one caller holds at most the per-caller share of it
+# (less than the pool when more than one caller resolves). The per-caller
+# rate counts only what cannot be tied to a stored key: unknown keys,
+# malformed requests and failed lookups.
+max_concurrent_access_key_resolutions = 32
+max_concurrent_access_key_resolutions_per_caller = 24
+access_key_resolutions_per_caller_per_minute = 6000
 max_http_body_bytes = 536870912
 max_download_bytes = 104857600
 max_upstream_response_bytes = 536870912
@@ -1097,6 +1106,7 @@ durability = "write" # write | sync_data | sync_all
 # context_mode = "asserted"
 # allowed_execution_contexts = ["internal", "external"]
 # allow_forwarded_identity = true # fingerprint capability only
+# allow_access_key_resolution = true   # may ask whose access key a value is
 #
 # Context-only callers still need an ordinary principal credential.
 # [identity.trusted_callers.job_runner]
@@ -1133,6 +1143,28 @@ durability = "write" # write | sync_data | sync_all
 # refresh_idle_ttl = "90d"                  # default; unused refresh tokens stop working
 # Client secrets are 16-1024 visible ASCII bytes, distinct from each other and
 # from trusted caller credentials, and cannot start with aab_.
+
+# Access key types: what an access key may be used for at the service
+# that resolves it. Access keys are a separate kind of credential: no Broker route
+# accepts one. Requires managed identity, managed_store and broker_tokens.
+# See docs/configuration.md#access-key-types.
+# [access_key_types.inference]
+# display_name = "Model inference"
+# description = "Point your tool at https://gateway.example.com/v1."   # optional; people see it when they create a key
+# lifetime_options = ["1h", "7d", "30d", "never"] # required; offered choices
+# default_lifetime = "30d"                  # required; one offered choice
+# self_service = false                      # default; whether people create such keys themselves
+# Who may hold a type is set by an administrator on accounts and groups; see
+# docs/roles.md#access-key-types.
+
+# Usernames: the ID a person is known by to the services that resolve
+# their access keys. It follows the profile email's local part for the
+# listed domains, or an administrator sets it by hand. See
+# docs/configuration.md#usernames.
+# [usernames]
+# email_domains = ["example.com"]
+# reserved_names = ["root", "admin"]        # never given to a person
+# existing_usernames = ["alice", "bob"]     # usable only after an administrator confirms the account
 
 # Optional delegated OAuth test provider (non-production only). Requires managed
 # identity/store/encryption, browser auth, management and enable_fake_service.

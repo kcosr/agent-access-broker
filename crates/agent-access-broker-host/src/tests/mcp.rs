@@ -2047,6 +2047,7 @@ async fn mcp_sessions_bind_trusted_caller_and_loaded_secret_revision() {
                     execution_context: Some("default".into()),
                     allowed_execution_contexts: None,
                     allow_forwarded_identity: false,
+                    allow_access_key_resolution: false,
                 },
             );
         }
@@ -2154,6 +2155,7 @@ async fn http_caller_admission_envelopes_prove_zero_provider_invocations() {
                     execution_context: None,
                     allowed_execution_contexts: Some(vec!["default".into()]),
                     allow_forwarded_identity: false,
+                    allow_access_key_resolution: false,
                 },
             );
         },

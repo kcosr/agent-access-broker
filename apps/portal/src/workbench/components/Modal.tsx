@@ -19,6 +19,8 @@ import {
 import { Button, IconButton } from "./Button";
 
 export interface ModalProps {
+  /** Stable dialog id for the control that opens it. */
+  id?: string | undefined;
   open: boolean;
   onClose: () => void;
   title: ReactNode;
@@ -54,6 +56,7 @@ export function Modal(props: ModalProps) {
 }
 
 function ModalSurface({
+  id,
   onClose,
   title,
   description,
@@ -124,6 +127,7 @@ function ModalSurface({
   );
 
   const shared = {
+    id,
     className: cx("wb-modal", size !== "md" && `wb-modal--${size}`, className),
     role,
     "aria-modal": true,

@@ -369,6 +369,302 @@ without a level, and mints nothing. Auditors can read the list. An
 application's tokens act within the person's grants, so review application
 access together with those grants.
 
+## Usernames and access keys
+
+When the operator has configured [access key types](configuration.md#access-key-types),
+a trusted caller with the resolution capability can ask the Broker whose
+[access key](http-api.md#access-key-resolution) a value is. An access
+key is for that service only: the Broker never accepts one as a credential. A
+person is known there by the username on their account, a service
+account by its principal ID. You administer names, decide who may hold each
+access key type and issue access keys for people and service accounts with the
+[management routes](http-api.md#usernames-and-access-keys) or the CLI
+commands below; auditors can run the `list` and `inspect` commands.
+
+When a stored key is inactive, the trusted resolving service receives its key
+ID, the owner's current usable username or service-account ID (or null), and
+the [inactive reason](http-api.md#access-key-resolution) for its own logs. A
+renamed owner is identified by the current name; a missing, reserved or
+unconfirmed name yields null. Unknown keys receive only `active: false`;
+malformed HTTP requests are refused with 400.
+
+### Size the resolution route
+
+A resolving service asks about a key when it first sees it, and then asks
+again on a schedule for as long as anything it admitted under the key is
+live. The two kinds of request are bounded differently, by
+[`[limits]`](configuration.md#limits):
+
+- `max_concurrent_access_key_resolutions` is the pool every request to the
+  route runs in, and the only bound on a lookup for a key the Broker holds.
+  Make it at least the sum, over the resolving services, of the rechecks
+  each may have in flight and the lookups of new keys each may have in
+  flight. A request beyond the pool answers 429, which a resolving service
+  treats as "unavailable": a pool that is too small delays rechecks and
+  new-key lookups under load. The resolving service owns its recheck schedule
+  and its handling of unavailable lookups.
+- `max_concurrent_access_key_resolutions_per_caller` is the most of that
+  pool one caller entry may hold at once, so that a caller whose requests
+  stall cannot keep the others out. Make it at least what the busiest
+  caller entry may have in flight, rechecks and lookups of new keys
+  together, and make the pool larger than it by what the other callers
+  need while that one is at its share. With the defaults one caller holds
+  at most 24 of 32 slots. A Broker with a single resolving caller may set
+  the two equal; once a second caller resolves, the share must be smaller
+  than the pool. A request beyond the share answers 429 like one beyond
+  the pool.
+- `access_key_resolutions_per_caller_per_minute` counts, for each caller
+  entry, only the requests the Broker cannot tie to a stored key: keys no
+  store holds, malformed requests (among them a request abandoned while
+  its body was being read) and failed lookups. It never refuses a
+  stored key, so it need only cover what the services sharing the entry
+  allow through for keys that turn out to be unknown, their own bound on
+  lookups of new keys. Beyond it the Broker answers 429. Lower it to the
+  services' bound rather than leaving headroom.
+
+Resolution writes no audit records. It identifies a key and decides nothing
+about a request; the resolving service logs every decision and refusal itself.
+An unavailable audit store does not change a resolution answer. The coarse
+last-used time remains, and issue, revoke, settings and username changes keep
+their existing audits.
+
+Give each resolving service its own caller entry when you want their
+unknown-key budgets and shares of the pool kept apart.
+
+### How people get their usernames
+
+A person's name is decided in one of two ways, set per account:
+
+- **From email**, the default. The name is the part of the profile email
+  before the `@`, lower-cased, when the operator's
+  [`[usernames]`](configuration.md#usernames) lists the email's domain.
+  The name follows the email.
+- **Set by hand.** You type it, and it stays until you change it. Leaving it
+  empty means the person has no name.
+
+The Broker keeps the stored name in step itself. A person is named when the
+account is created; when you change their email or their mode; when they
+sign in while they hold no name; and, for accounts that already existed,
+shortly after the Broker starts or reloads with their domain listed. There
+is no command to run for existing accounts.
+
+```bash
+agent-access admin usernames list
+agent-access admin usernames inspect usr-3
+agent-access admin principals inspect usr-3
+```
+
+Each account shows its `mode`, its `state` and, when it has no name, the
+`reason`:
+
+- `usable`: the name works.
+- `awaiting_confirmation`: the name is on the operator's list of names that
+  services already use for people. Equal spelling is not proof: the name
+  works only after you confirm that this account is that person.
+- `conflict` (`name_taken`): another account holds the name this person's
+  email derives; `conflict` names the name and its holder. The first holder
+  keeps a name. Give this person a name by hand, or change the holder's.
+- `none`, with `no_email`, `email_unusable`, `domain_not_listed`,
+  `name_invalid`, `name_reserved`, `not_set` (set by hand, and empty) or
+  `not_yet_assigned` (the name is free and is allocated at the person's
+  next sign-in or the next reload).
+
+```bash
+agent-access admin usernames confirm usr-1 alice
+agent-access admin usernames set usr-3 a.smith
+agent-access admin usernames clear usr-4
+agent-access admin usernames mode usr-3 from_email
+agent-access admin usernames mode usr-5 manual
+agent-access admin principals update usr-6 --email new.name@example.com
+```
+
+- `confirm` names the name the account holds, so a confirmation never
+  applies to a name allocated since you looked.
+- `set` gives a person a name by hand and switches them to manual. A
+  reserved name, or one another principal holds, is refused. A name on the
+  operator's list still needs your confirmation afterwards.
+- `clear` leaves the person without a name, in manual mode.
+- `mode ... from_email` derives at once from the email when the person's
+  name was set by hand. For a person already on **From email** it takes no
+  name away: it fills in a missing name and otherwise changes nothing.
+  `mode ... manual` keeps the name held now and stops following the email.
+- Changing the email of a person on **From email** renames them in the
+  same change, unless the new email gives the same name.
+
+Every change of name ends the person's access keys: keys minted under
+the earlier name no longer work. The username's `liveKeys` says how many
+that would be before you change anything, and `fromEmail` what the saved
+email gives, also for a person whose name is set by hand. The response to a
+change of mode, name or email carries `accountUsernameChange`: the names
+before and after, `renamed`, and in `endedKeys` how many live keys ended. A
+name that stays the same, as when only the mode changes or a new email gives
+the same name, ends nothing. A disabled person keeps their name until you
+change it. A person without a usable name cannot create an access key and
+is told why.
+
+### Decide who may hold each type
+
+The operator's configuration defines the access key types. You decide who may
+hold each one, and a type is on for nobody until you allow it. Allow a type
+to a group, to one account, or both:
+
+```bash
+agent-access admin groups create platform \
+  --access-key-types --access-key-type-allow inference --access-key-type-allow packages
+agent-access admin principals groups add alice platform
+agent-access admin principals access set alice \
+  --access-key-types --access-key-type-deny packages
+agent-access admin principals access set build-agent \
+  --access-key-types --access-key-type-allow inference
+agent-access admin principals inspect alice
+```
+
+- A group's setting lists the types it lets its members hold. It counts for
+  members you added to the group while the group is enabled; membership that
+  comes only from Microsoft group evidence does not count.
+- An account's setting can allow a type whatever its groups say, or deny a
+  type although a group allows it. A type the account names in neither list
+  follows its groups. Here Alice holds `inference` through `platform` and is
+  denied `packages`.
+- A service account has the same setting. You can issue any account a key
+  only of types its access allows.
+- `--access-key-types` replaces the whole setting with the lists given
+  beside it, and alone it empties them. Reread the current setting first:
+  the last write wins.
+
+`inspect` shows the account's `accessKeyTypes` and, under
+`accessKeyTypePolicy`, whether each configured type is allowed and
+whether the account itself (`account`), its groups (`groups`, with their
+IDs) or nothing (`none`) decides. Withdrawing a type takes effect at once
+for keys that already exist, without revoking them: they work again if you
+restore it. See [access key types](roles.md#access-key-types).
+
+### Retire an access key type
+
+A type is defined in the Broker's configuration, and the Broker refuses a
+configuration that no longer defines a type while any account's or group's
+setting still names it. A refused reload leaves the running configuration
+in force; a Broker started on such a configuration does not start. The
+refusal says which type it is, how many account settings and group
+settings still name it, with up to ten of each, and how many unexpired
+access keys carry it:
+
+```text
+access key type packages is not in [access_key_types] and is still named by
+2 account settings (alice, build-agent) and 1 group setting (platform);
+3 unexpired access keys carry it. Take it out of those settings, or keep its
+table, then reload or start again
+```
+
+To retire a type:
+
+1. **Decide about its keys.** Keys never block a retirement and are not
+   revoked by it. Once the type is gone, a key that carries only that type
+   stops working (`no_access_key_type`), and a key that carries others
+   keeps working with the rest. `agent-access admin access-keys list` shows
+   each key's `accessKeyTypes`. Tell the owners, and revoke the keys that
+   must not work again if the type is ever put back.
+2. **Take the type out of every setting, while it is still configured.**
+   Replace each group's setting with the types that remain
+   (`admin groups update <group> --access-key-types ...`; `admin groups
+   list` shows every group's setting) and each account's with its remaining
+   allow and deny entries (`admin principals access set <account>
+   --access-key-types ...`; `admin principals inspect <account>` shows it).
+   An entry in a deny list counts like one in an allow list, and so do the
+   settings of disabled accounts and disabled groups.
+3. **Remove the type's table from the configuration and reload.** If the
+   reload is refused, its message names what is left: repeat step 2 for
+   those and reload again.
+
+If the Broker does not start because the configuration already lacks a type
+that settings name, put the type's table back, start, and follow the steps
+above. Settings are changed only through a running Broker: never edit
+database rows.
+
+A type put back later under the same ID is on for nobody until you allow it
+again. Keys that carried it can work again for accounts allowed it, subject
+to their own expiry, if any, and the type's current maximum lifetime.
+
+### Issue a key for an account
+
+A person creates their own access keys with their signed-in browser
+session, through the
+[personal routes](http-api.md#a-persons-own-access-keys), of the types
+they may hold that the operator opened to self-service. You issue a key
+for a workload's service account, and for a person when the type is not
+one people create themselves or when you hand the key out:
+
+```bash
+agent-access admin access-key-types list
+agent-access admin access-keys issue build-agent \
+  --name "nightly build" --access-key-type inference --ttl 7d
+agent-access admin access-keys issue alice \
+  --name "batch access" --access-key-type batch --ttl 30d
+```
+
+`access-key-types list` shows each type's name, description, ordered
+`lifetimeOptions`, `defaultLifetime` and whether people may create it
+themselves. The account's access must allow every type
+you request; the self-service setting does not matter for a key you issue,
+so a type the operator closed to self-service is one only you hand out. The
+key is printed once, in `result.key`; store it where the workload reads
+it, or give it to the person. Supply `--ttl` with a duration offered by
+every chosen type, or `never` only when every chosen type offers it. Durations
+match by their effective length, so `24h` matches `1d`. The server never uses
+a type's default for an omitted lifetime. Invalid syntax, zero and durations
+over `3650d` are malformed input and return `input_invalid` without echoing
+the supplied value. It refuses a well-formed but unoffered lifetime with
+`lifetime_not_offered` and names the first type in request order that does
+not offer it.
+
+The portal uses the same common options, in the first chosen type's order.
+It preserves a lifetime you chose manually while every selected type still
+offers it. Otherwise, it preselects the shortest chosen-type default common
+to every chosen type, or the shortest common option, treating **Never expires**
+as unlimited when choosing the default. The displayed choices keep the configured order.
+With no common option, issuing is disabled. A key issued with `never` lists
+its expiry as **Never**, but still depends on the current type settings:
+removing `never` from a type's options can end that type's use by the key,
+counted from the key's original mint time.
+
+The Broker does not issue a key that could not work. The account must be
+one whose keys resolve: enabled, for a person with identity access that is
+not paused, with a usable name (a person's username, and for a service
+account an ID that is not a reserved or listed username), and in at most
+64 local groups. Otherwise the command is refused with the reason, the
+same code the account's page shows as its access key problem and every key
+the account already holds lists as its status: `principal_disabled`,
+`identity_access_paused`, `no_account_username`,
+`account_username_awaiting_confirmation`, `account_username_reserved` or
+`group_limit_exceeded`. Remove the cause and issue again; keys issued
+before are not ended by it and work again once it is gone. A person's own
+request is refused in the same states.
+
+A key you issue for a person is theirs. It works as that person, they see
+it among their own keys, marked as issued by an administrator, and can
+revoke it, and it stops working by the same rules as one they created: a
+changed name, withdrawn access, paused identity access or a disabled
+account. The audit record names you as the actor and the person as the
+owner.
+
+### Review and revoke
+
+```bash
+agent-access admin access-keys list
+agent-access admin access-keys list --principal build-agent --include-revoked --include-expired
+agent-access admin access-keys revoke ak_0123456789abcdef0123456789abcdef
+```
+
+Each key's `status` is `active` or the reason it does not work now, such as
+`expired`, `revoked`, `principal_disabled`, `identity_access_paused`,
+`username_incarnation_changed` (its owner's name changed), `no_account_username` or
+`no_access_key_type` (its types were removed, shortened or withdrawn from its
+owner's access). `lastUsedAt` is updated at most every five minutes.
+Revocation is final. Pausing a person's
+[identity access](managed-identity.md), disabling the account or withdrawing
+a type stops access keys without revoking them: they work again when you
+resume, re-enable or restore, so revoke them when that is not what you want.
+
 ## Enable personal OAuth connections
 
 For Gmail, GitLab (GitLab REST and GitLab Git gateways on one connection; see

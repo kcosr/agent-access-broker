@@ -2,8 +2,12 @@ mod agent_token_issuance;
 pub use agent_token_issuance::*;
 mod application_access;
 pub use application_access::*;
+mod access_key_types;
 mod connection_credentials;
 mod content_resources;
+pub use access_key_types::*;
+mod access_keys;
+pub use access_keys::*;
 mod identity_access;
 mod identity_tokens;
 pub use identity_access::{
@@ -42,7 +46,9 @@ pub use oidc_membership_renewal::{
     OidcMembershipRenewalSkip, OidcMembershipRenewalStart, OidcMembershipRenewalState,
     OidcMembershipRenewalStatus, OidcMembershipRenewalStatusState, OidcRenewalReference,
 };
+mod account_usernames;
 mod principal_service_limits;
+pub use account_usernames::*;
 mod resource_attributes;
 mod resource_browser_urls;
 pub(crate) use resource_attributes::{AdmittedResourceEntry, CommandResourceAttributes};
@@ -93,7 +99,8 @@ use uuid::Uuid;
 
 type HmacSha256 = Hmac<Sha256>;
 
-pub const MANAGED_STORE_SCHEMA_VERSION: &str = MANAGED_STORE_RESOURCE_BROWSER_URLS_VERSION;
+pub const MANAGED_STORE_SCHEMA_VERSION: &str = MANAGED_STORE_ACCESS_KEYS_VERSION;
+const MANAGED_STORE_ACCESS_KEYS_VERSION: &str = "040_access_keys";
 const MANAGED_STORE_RESOURCE_BROWSER_URLS_VERSION: &str = "039_resource_browser_urls";
 const MANAGED_STORE_CONTENT_RESOURCES_VERSION: &str = "038_confluence_content_resources";
 const MANAGED_STORE_APPLICATION_ACCESS_VERSION: &str = "037_application_access";
@@ -344,6 +351,13 @@ const MANAGED_STORE_MIGRATIONS: &[ManagedStoreMigration] = &[
         seed: None,
         structural_validation: resource_browser_urls::validate_structure,
     },
+    ManagedStoreMigration {
+        version: MANAGED_STORE_ACCESS_KEYS_VERSION,
+        checksum: "7d1f431605042e285dcc16ba127bf24b8aafb234fc78f0cbbfad0b86ec1ef9e8",
+        sql: include_str!("managed_store/access_keys.sql"),
+        seed: None,
+        structural_validation: access_keys::validate_structure,
+    },
 ];
 
 fn production_migration_catalog() -> ManagedStoreMigrationCatalog<'static> {
@@ -529,6 +543,12 @@ pub enum ManagedStoreError {
     ApplicationAccessDenied(ApplicationConnectDenial),
     #[error("application access was not found")]
     ApplicationAccessNotFound,
+    #[error("{}", .0.message())]
+    AccountUsernameRefused(AccountUsernameRefused),
+    #[error("{}", .0.message())]
+    AccessKeyRefused(AccessKeyRefused),
+    #[error("access key was not found")]
+    AccessKeyNotFound,
     #[error("attested identity is denied")]
     AttestedIdentityDenied,
     #[error("broker token was not found")]
@@ -620,6 +640,9 @@ impl ManagedStoreError {
             Self::ApplicationAuthorizationCapacity => ReasonCode::ConcurrencyLimited,
             Self::ApplicationAccessDenied(_) => ReasonCode::ApplicationAccessDenied,
             Self::ApplicationAccessNotFound => ReasonCode::ApplicationAccessNotFound,
+            Self::AccountUsernameRefused(refused) => refused.refusal.reason_code(),
+            Self::AccessKeyRefused(_) => ReasonCode::BrokerAccessKeyDenied,
+            Self::AccessKeyNotFound => ReasonCode::BrokerAccessKeyNotFound,
             Self::AttestedIdentityDenied => ReasonCode::IdentityAssertionDenied,
             Self::BrokerTokenNotFound => ReasonCode::BrokerTokenNotFound,
             Self::BrokerTokenExpired => ReasonCode::BrokerTokenExpired,
@@ -776,6 +799,8 @@ pub struct ManagedStore {
     /// How principal disablement keeps revoking registrations' OAuth
     /// families: set by the active OAuth configuration.
     oauth_revocation: Arc<Mutex<Option<oauth_revocation::RevocationCapture>>>,
+    /// The username settings of the configuration this store serves.
+    account_username_policy: Arc<Mutex<Arc<crate::AccountUsernamePolicy>>>,
     local_password_work: Arc<LocalPasswordWork>,
     credential_material_proofs: Arc<Mutex<CredentialMaterialProofs>>,
     schema_version: String,
@@ -880,6 +905,7 @@ impl ManagedStore {
             connection,
             identity_key_ring: Arc::new(Mutex::new(None)),
             oauth_revocation: Arc::new(Mutex::new(None)),
+            account_username_policy: Arc::default(),
             schema_version,
             schema_checksum,
             latest_migration_checksum,
@@ -1856,6 +1882,13 @@ impl ManagedStore {
         )
         .map_err(sql_unavailable)?;
         self.initialize_identity_token(&tx, &request.principal_id, "user")?;
+        account_usernames::derive_on_creation(
+            &tx,
+            &self.account_username_policy(),
+            &request.principal_id,
+            "user",
+            "system:initial_admin",
+        )?;
         let principal = principal_by_id(&tx, &request.principal_id)?;
         tx.commit().map_err(sql_unavailable)?;
         Ok(principal)
@@ -1900,6 +1933,13 @@ impl ManagedStore {
                     "last active admin cannot change principal kind",
                 ));
             }
+            if current.kind != request.kind && request.kind == "service_account" {
+                account_usernames::require_service_account_id_free(
+                    &conn,
+                    &self.account_username_policy(),
+                    &request.principal_id,
+                )?;
+            }
             conn.execute(
                 "UPDATE principals
                  SET kind = ?2, display_name = ?3, email = ?4, external_subject = ?5,
@@ -1915,8 +1955,24 @@ impl ManagedStore {
                 ],
             )
             .map_err(sql_unavailable)?;
+            if current.email != email {
+                // The name of a person who follows their email follows it.
+                account_usernames::sync_after_email_change(
+                    &conn,
+                    &self.account_username_policy(),
+                    &request.principal_id,
+                    &request.created_by,
+                )?;
+            }
         } else {
             request.agent_token_issuance.validate(registry)?;
+            if request.kind == "service_account" {
+                account_usernames::require_service_account_id_free(
+                    &conn,
+                    &self.account_username_policy(),
+                    &request.principal_id,
+                )?;
+            }
             conn.execute(
                 "INSERT INTO principals
                  (principal_id, kind, display_name, email, external_subject, status,
@@ -1943,6 +1999,13 @@ impl ManagedStore {
                 &request.agent_token_issuance.allowed_execution_contexts,
             )?;
             self.initialize_identity_token(&conn, &request.principal_id, &request.kind)?;
+            account_usernames::derive_on_creation(
+                &conn,
+                &self.account_username_policy(),
+                &request.principal_id,
+                &request.kind,
+                &request.created_by,
+            )?;
         }
         let principal = principal_by_id(&conn, &request.principal_id)?;
         conn.commit().map_err(sql_unavailable)?;
@@ -1964,6 +2027,20 @@ impl ManagedStore {
         provider_generation: Option<u64>,
         registry: &ConfiguredExecutionContexts,
     ) -> Result<PrincipalRecord, ManagedStoreError> {
+        Ok(self
+            .create_principal_with_effect(request, enrollment, provider_generation, registry)?
+            .principal)
+    }
+
+    /// Creates a principal and returns it with what its transaction did
+    /// beside the row: the username derived for a new person.
+    pub fn create_principal_with_effect(
+        &self,
+        request: PrincipalWriteRequest,
+        enrollment: Option<MicrosoftEnrollmentCreate>,
+        provider_generation: Option<u64>,
+        registry: &ConfiguredExecutionContexts,
+    ) -> Result<PrincipalCreation, ManagedStoreError> {
         let mut request = request;
         request.agent_token_issuance = request.agent_token_issuance.canonicalized(registry)?;
         validate_principal_write_request(&request)?;
@@ -1988,6 +2065,13 @@ impl ManagedStore {
             .map_err(sql_unavailable)?;
         if exists.is_some() {
             return Err(ManagedStoreError::PrincipalAlreadyExists);
+        }
+        if request.kind == "service_account" {
+            account_usernames::require_service_account_id_free(
+                &conn,
+                &self.account_username_policy(),
+                &request.principal_id,
+            )?;
         }
         conn.execute(
             "INSERT INTO principals
@@ -2027,9 +2111,19 @@ impl ManagedStore {
                 },
             )?;
         }
+        let derived_account_username = account_usernames::derive_on_creation(
+            &conn,
+            &self.account_username_policy(),
+            &request.principal_id,
+            &request.kind,
+            &request.created_by,
+        )?;
         let principal = principal_by_id(&conn, &request.principal_id)?;
         conn.commit().map_err(sql_unavailable)?;
-        Ok(principal)
+        Ok(PrincipalCreation {
+            principal,
+            derived_account_username,
+        })
     }
 
     pub fn set_principal_enabled(
@@ -2094,12 +2188,37 @@ impl ManagedStore {
         &self,
         request: PrincipalPatchRequest,
     ) -> Result<PrincipalRecord, ManagedStoreError> {
+        self.patch_principal_inner(request, "system:principal_patch")
+            .map(|patch| patch.principal)
+    }
+
+    /// Changes a principal's profile or status. When the email of a person
+    /// who follows it changes, the person is renamed in the same
+    /// transaction, with `actor` as the assigner: the old name is released
+    /// and the one the new email derives is allocated, or none. The change
+    /// is returned for the caller's audit record.
+    pub fn patch_principal_with_account_username(
+        &self,
+        request: PrincipalPatchRequest,
+        actor: &str,
+    ) -> Result<PrincipalPatch, ManagedStoreError> {
+        validate_actor(actor)?;
+        self.patch_principal_inner(request, actor)
+    }
+
+    fn patch_principal_inner(
+        &self,
+        request: PrincipalPatchRequest,
+        actor: &str,
+    ) -> Result<PrincipalPatch, ManagedStoreError> {
         validate_principal_patch_request(&request)?;
+        let policy = self.account_username_policy();
         let mut conn = self.connection.lock().unwrap();
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql_unavailable)?;
-        principal_by_id(&tx, &request.principal_id)?;
+        let before = principal_by_id(&tx, &request.principal_id)?;
+        let mut account_username_change = None;
         if request.status.as_deref() == Some("disabled")
             && principal_is_active_admin(&tx, &request.principal_id)?
             && active_admin_principal_count(&tx)? <= 1
@@ -2123,6 +2242,14 @@ impl ManagedStore {
                 params![request.principal_id, email, now_string()],
             )
             .map_err(sql_unavailable)?;
+            if before.email != email {
+                account_username_change = account_usernames::sync_after_email_change(
+                    &tx,
+                    &policy,
+                    &request.principal_id,
+                    actor,
+                )?;
+            }
         }
         if let Some(status) = &request.status {
             if status == "active" {
@@ -2160,7 +2287,10 @@ impl ManagedStore {
         if kept > 0 {
             crate::oauth::revocation::wake();
         }
-        Ok(principal)
+        Ok(PrincipalPatch {
+            principal,
+            account_username_change,
+        })
     }
 
     pub fn principal(&self, principal_id: &str) -> Result<PrincipalRecord, ManagedStoreError> {
@@ -2223,9 +2353,33 @@ impl ManagedStore {
         request: GroupWriteRequest,
         registry: &ConfiguredExecutionContexts,
     ) -> Result<GroupMutationResult, ManagedStoreError> {
+        self.create_group_inner(request, None, false, registry)
+    }
+
+    /// Creates a group, with its access key type setting when one is given; a
+    /// group created without one allows nothing.
+    pub fn create_group_with_access(
+        &self,
+        request: GroupWriteRequest,
+        access_key_types: Option<AccessKeyTypesWrite<'_, GroupAccessKeyTypes>>,
+        registry: &ConfiguredExecutionContexts,
+    ) -> Result<GroupMutationResult, ManagedStoreError> {
+        self.create_group_inner(request, access_key_types, true, registry)
+    }
+
+    fn create_group_inner(
+        &self,
+        request: GroupWriteRequest,
+        access_key_types: Option<AccessKeyTypesWrite<'_, GroupAccessKeyTypes>>,
+        report_access_key_types: bool,
+        registry: &ConfiguredExecutionContexts,
+    ) -> Result<GroupMutationResult, ManagedStoreError> {
         let mut request = request;
         request.agent_token_issuance = request.agent_token_issuance.canonicalized(registry)?;
         validate_group_write_request(&request)?;
+        if let Some(write) = &access_key_types {
+            write.setting.validate(write.configured)?;
+        }
         let group_id = request.group_id.clone();
         let mut conn = self.connection.lock().unwrap();
         let tx = conn
@@ -2257,9 +2411,16 @@ impl ManagedStore {
             &group_id,
             &request.agent_token_issuance.allowed_execution_contexts,
         )?;
+        let access_key_types = access_key_types::write_group_setting(
+            &tx,
+            &group_id,
+            access_key_types,
+            report_access_key_types,
+        )?;
         let group = group_by_id(&tx, &group_id)?;
         tx.commit().map_err(sql_unavailable)?;
         Ok(GroupMutationResult {
+            access_key_types,
             agent_token_issuance_change: (request.agent_token_issuance
                 != GroupAgentTokenIssuanceSetting::default())
             .then_some(GroupAgentTokenIssuanceChange {
@@ -2289,13 +2450,37 @@ impl ManagedStore {
         request: GroupPatchRequest,
         registry: &ConfiguredExecutionContexts,
     ) -> Result<GroupMutationResult, ManagedStoreError> {
+        self.patch_group_inner(request, None, false, registry)
+    }
+
+    /// Changes a group, replacing its access key type setting when one is
+    /// given. A setting equal to the stored one writes nothing.
+    pub fn patch_group_with_access(
+        &self,
+        request: GroupPatchRequest,
+        access_key_types: Option<AccessKeyTypesWrite<'_, GroupAccessKeyTypes>>,
+        registry: &ConfiguredExecutionContexts,
+    ) -> Result<GroupMutationResult, ManagedStoreError> {
+        self.patch_group_inner(request, access_key_types, true, registry)
+    }
+
+    fn patch_group_inner(
+        &self,
+        request: GroupPatchRequest,
+        access_key_types: Option<AccessKeyTypesWrite<'_, GroupAccessKeyTypes>>,
+        report_access_key_types: bool,
+        registry: &ConfiguredExecutionContexts,
+    ) -> Result<GroupMutationResult, ManagedStoreError> {
         let mut request = request;
         request.agent_token_issuance = request
             .agent_token_issuance
             .as_ref()
             .map(|setting| setting.canonicalized(registry))
             .transpose()?;
-        validate_group_patch_request(&request)?;
+        validate_group_patch_request(&request, access_key_types.is_some())?;
+        if let Some(write) = &access_key_types {
+            write.setting.validate(write.configured)?;
+        }
         let group_id = request.group_id.clone();
         let updated_by = request.updated_by.clone();
         let mut conn = self.connection.lock().unwrap();
@@ -2327,6 +2512,22 @@ impl ManagedStore {
             )?;
             tx.execute("UPDATE groups SET agent_token_issuance=?2, updated_at=?3, updated_by=?4 WHERE group_id=?1",
                 params![group_id, change.current.mode.as_str(), now, updated_by]).map_err(sql_unavailable)?;
+        }
+        let access_key_types = access_key_types::write_group_setting(
+            &tx,
+            &group_id,
+            access_key_types,
+            report_access_key_types,
+        )?;
+        if access_key_types
+            .as_ref()
+            .is_some_and(|change| change.previous != change.current)
+        {
+            tx.execute(
+                "UPDATE groups SET updated_at = ?2, updated_by = ?3 WHERE group_id = ?1",
+                params![group_id, now, updated_by],
+            )
+            .map_err(sql_unavailable)?;
         }
         if let Some(change) = &auto_enrollment_change {
             tx.execute(
@@ -2381,6 +2582,7 @@ impl ManagedStore {
             group,
             auto_enrollment_change,
             agent_token_issuance_change,
+            access_key_types,
         })
     }
 
@@ -2648,6 +2850,10 @@ impl ManagedStore {
         hasher: &BrokerTokenHasher,
         raw_token: &str,
     ) -> Result<BrokerTokenIdentity, ManagedStoreError> {
+        // An access key is never a Broker token, whatever the table holds.
+        if has_access_key_prefix(raw_token) {
+            return Err(ManagedStoreError::BrokerTokenNotFound);
+        }
         let token_hash = hasher.hash(raw_token)?;
         let conn = self.connection.lock().unwrap();
         let Some(record) = broker_token_by_hash(&conn, &token_hash)? else {
@@ -3391,6 +3597,8 @@ impl ManagedStore {
         let enrollment_id = pending
             .as_ref()
             .map(|pending| pending.enrollment_id.clone());
+        let account_username_policy = self.account_username_policy();
+        let mut created_account_username = None;
         if method.is_none() {
             let principal_id = if let Some(pending) = pending.as_ref() {
                 // Mutual-exclusion triggers require consumption before insertion.
@@ -3417,6 +3625,13 @@ impl ManagedStore {
                 )
                 .map_err(sql_unavailable)?;
                 self.initialize_identity_token(&tx, &request.jit_principal_id, "user")?;
+                created_account_username = account_usernames::derive_on_creation(
+                    &tx,
+                    &account_username_policy,
+                    &request.jit_principal_id,
+                    "user",
+                    &request.created_by,
+                )?;
                 request.jit_principal_id.clone()
             };
             let login_method_id = Uuid::new_v4().to_string();
@@ -3439,6 +3654,13 @@ impl ManagedStore {
             method = Some(login_method_by_id(&tx, &login_method_id)?);
         }
         let method = method.expect("OIDC method resolved or created");
+        // A sign-in names a person who follows their email and holds none.
+        let derived_account_username =
+            created_account_username.or(account_usernames::derive_on_sign_in(
+                &tx,
+                &account_username_policy,
+                &method.principal_id,
+            )?);
         let display_name_updated = !jit_created
             && microsoft_enrollments::refresh_display_name(
                 &tx,
@@ -3512,6 +3734,7 @@ impl ManagedStore {
             enrollment_id,
             display_name_updated,
             membership_evidence,
+            derived_account_username,
         };
         tx.commit().map_err(sql_unavailable)?;
         Ok(OidcCompletionOutcome::Succeeded {
@@ -3864,9 +4087,51 @@ impl ManagedStore {
         session_ttl_seconds: u64,
         issuance_authority: Option<&AgentTokenIssuanceEnvironment>,
     ) -> Result<AuthenticatedLocalPassword, ManagedStoreError> {
+        let attempt = self.verify_local_password_attempt(password_hasher, request)?;
+        self.complete_local_password_session(
+            token_hasher,
+            attempt,
+            session_ttl_seconds,
+            issuance_authority,
+        )
+    }
+
+    /// The first half of a local sign-in: hashes the submitted password
+    /// outside the connection lock and any transaction. Nothing is written
+    /// and nothing is decided: `complete_local_password_session` rechecks the
+    /// method, counts a failure or issues the session.
+    pub fn verify_local_password_attempt(
+        &self,
+        password_hasher: &LocalPasswordHasher,
+        request: LocalPasswordVerifyRequest,
+    ) -> Result<LocalPasswordAttempt, ManagedStoreError> {
         validate_local_password_verify_request(&request)?;
-        let _work = self.try_acquire_work()?;
+        let work = self.try_acquire_work()?;
         let candidate = self.verify_local_password_outside_store(password_hasher, &request)?;
+        Ok(LocalPasswordAttempt {
+            request,
+            candidate,
+            _work: work,
+        })
+    }
+
+    /// The second half of a local sign-in, in one transaction: the lockout
+    /// check, the recheck of the verified method, failure accounting, the
+    /// session and the first sign-in's username derivation. A caller that
+    /// serves reloadable configuration runs it under its reload fence, so the
+    /// derivation uses the username settings of the current generation.
+    pub fn complete_local_password_session(
+        &self,
+        token_hasher: &BrokerTokenHasher,
+        attempt: LocalPasswordAttempt,
+        session_ttl_seconds: u64,
+        issuance_authority: Option<&AgentTokenIssuanceEnvironment>,
+    ) -> Result<AuthenticatedLocalPassword, ManagedStoreError> {
+        let LocalPasswordAttempt {
+            request,
+            candidate,
+            _work,
+        } = attempt;
         let mut conn = self.connection.lock().unwrap();
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -3925,11 +4190,18 @@ impl ManagedStore {
             },
             &normalized_now_string(),
         )?;
+        // A sign-in names a person who follows their email and holds none.
+        let derived_account_username = account_usernames::derive_on_sign_in(
+            &tx,
+            &self.account_username_policy(),
+            &verified.principal_id,
+        )?;
         tx.commit().map_err(sql_unavailable)?;
         Ok(AuthenticatedLocalPassword {
             verified,
             session,
             agent_token_issuance_policy,
+            derived_account_username,
         })
     }
 
@@ -6306,6 +6578,18 @@ pub struct GroupMutationResult {
     pub group: GroupRecord,
     pub auto_enrollment_change: Option<GroupAutoEnrollmentChange>,
     pub agent_token_issuance_change: Option<GroupAgentTokenIssuanceChange>,
+    /// The group's access key type setting before and after, read in the
+    /// transaction; equal when the mutation did not change it. `None` from
+    /// the entry points that take no access key types.
+    pub access_key_types: Option<AccessKeyTypesChange<GroupAccessKeyTypes>>,
+}
+
+/// An access key type setting to write with a principal or group, and
+/// the access key types of the generation the write runs under.
+#[derive(Debug, Clone, Copy)]
+pub struct AccessKeyTypesWrite<'a, S> {
+    pub setting: &'a S,
+    pub configured: &'a crate::AccessKeyTypes,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -6344,6 +6628,17 @@ pub struct PrincipalPatchRequest {
     pub display_name: Option<Option<String>>,
     pub email: Option<Option<String>>,
     pub status: Option<String>,
+}
+
+/// A principal after a profile or status change, with the change of name an
+/// email change caused.
+#[derive(Debug, Clone)]
+pub struct PrincipalPatch {
+    pub principal: PrincipalRecord,
+    /// What the email change did to the name of a person who follows their
+    /// email; `None` when the email did not change, the person's name is set
+    /// by hand, or the account is not a person.
+    pub account_username_change: Option<AccountUsernameChange>,
 }
 
 #[derive(Debug, Clone)]
@@ -6461,6 +6756,25 @@ pub struct AuthenticatedLocalPassword {
     pub verified: VerifiedLocalPassword,
     pub session: IssuedBrowserSession,
     pub agent_token_issuance_policy: Option<AgentTokenIssuancePolicy>,
+    /// The username this sign-in derived for the account.
+    pub derived_account_username: Option<AccountUsernameRecord>,
+}
+
+/// A submitted local password, hashed and awaiting its decision. It holds
+/// the password work permit until the sign-in completes. No `Debug`: it
+/// carries the submitted password.
+pub struct LocalPasswordAttempt {
+    request: LocalPasswordVerifyRequest,
+    candidate: Option<LocalPasswordCandidate>,
+    _work: tokio::sync::OwnedSemaphorePermit,
+}
+
+/// A created principal with what its transaction did beside the row.
+#[derive(Debug, Clone)]
+pub struct PrincipalCreation {
+    pub principal: PrincipalRecord,
+    /// The username derived for a new person.
+    pub derived_account_username: Option<AccountUsernameRecord>,
 }
 
 #[derive(Debug, Clone)]
@@ -6687,6 +7001,9 @@ pub struct OidcCompleteLoginResult {
     pub enrollment_id: Option<String>,
     pub display_name_updated: bool,
     pub membership_evidence: OidcMembershipEvidence,
+    /// The username this sign-in derived for the account.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub derived_account_username: Option<AccountUsernameRecord>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -6940,7 +7257,10 @@ fn validate_group_write_request(request: &GroupWriteRequest) -> Result<(), Manag
     Ok(())
 }
 
-fn validate_group_patch_request(request: &GroupPatchRequest) -> Result<(), ManagedStoreError> {
+fn validate_group_patch_request(
+    request: &GroupPatchRequest,
+    access_key_types: bool,
+) -> Result<(), ManagedStoreError> {
     validate_group_name(&request.group_id)?;
     validate_actor(&request.updated_by)?;
     if request.display_name.is_none()
@@ -6948,9 +7268,10 @@ fn validate_group_patch_request(request: &GroupPatchRequest) -> Result<(), Manag
         && request.status.is_none()
         && request.auto_enroll_new_microsoft_users.is_none()
         && request.agent_token_issuance.is_none()
+        && !access_key_types
     {
         return Err(input_invalid(
-            "at least one of displayName, description, status, autoEnrollNewMicrosoftUsers, or agentTokenIssuance is required",
+            "at least one of displayName, description, status, autoEnrollNewMicrosoftUsers, agentTokenIssuance, or accessKeyTypes is required",
         ));
     }
     validate_group_metadata(
@@ -10130,6 +10451,7 @@ mod tests {
     include!("managed_store/principal_access_tests.rs");
     include!("managed_store/identity_access_tests.rs");
     include!("managed_store/group_auto_enrollment_tests.rs");
+    include!("managed_store/account_username_sign_in_tests.rs");
     include!("managed_store/microsoft_enrollment_tests.rs");
     include!("managed_store/agent_token_issuance_tests.rs");
     include!("managed_store/agent_token_issuance_contexts_tests.rs");

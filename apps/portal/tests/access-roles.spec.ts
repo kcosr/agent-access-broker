@@ -48,6 +48,7 @@ async function fixture(page: Page, role: PrincipalRole, selfServiceEnabled: bool
     else if (pathname.endsWith("/application-access")) result = { access: [] };
     else if (pathname === "/v1/admin/policy/status") result = { ...config, writable: true, policyGeneration: 1, counts: { active: 1, disabled: 0, deleted: 0 }, managementScope: { kind: "global" } };
     else if (pathname === "/v1/admin/policy/catalog") result = catalog;
+    else if (pathname === "/v1/admin/access-key-types") result = { accessKeyTypes: [] };
     else if (pathname === "/v1/admin/policy/grants") result = [grant];
     else if (pathname.endsWith("/effective-access")) result = { policyGeneration: 1, access: [] };
     else if (pathname.endsWith("/tokens/options") || pathname.endsWith("/agent-tokens/options")) result = options;

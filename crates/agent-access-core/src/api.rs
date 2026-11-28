@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
+mod access_keys;
 mod imports;
 mod schema_refs;
 pub(crate) use schema_refs::relocate_local_schema_refs;
@@ -225,6 +226,12 @@ pub struct HttpRouteSpec {
     /// broker's configuration does not provide the feature.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub required_feature: Option<RouteFeature>,
+    /// The route takes a signed-in browser session only: a bearer token,
+    /// the person's own included, is refused. The caller-filtered catalog
+    /// offers such a route to a browser session alone, and the OpenAPI
+    /// projection names the session as its security.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub browser_session_only: bool,
     /// The typed `result` of a successful management envelope, when the
     /// route documents one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -238,6 +245,10 @@ pub struct HttpRouteSpec {
 pub enum RouteFeature {
     /// Audit queries: management is enabled and `audit.type = "sqlite"`.
     AuditQuery,
+    /// A person's own application routes: an application is registered.
+    Applications,
+    /// A person's own access key routes: an access key type is configured.
+    AccessKeys,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -663,6 +674,12 @@ pub fn openapi_from_catalog(
                     operation.insert("security".into(), json!([{"browserSession": []}]));
                 }
             }
+            if route.browser_session_only {
+                operation.insert("description".into(), json!("Requires a signed-in browser session; writes require the configured CSRF header. A bearer token, the person's own included, is refused."));
+                if matches!(auth, RenderAuthMode::Include) {
+                    operation.insert("security".into(), json!([{"browserSession": []}]));
+                }
+            }
             if let Some(schema) = &route.request_body_schema {
                 operation.insert(
                     "requestBody".to_string(),
@@ -717,10 +734,12 @@ pub fn openapi_from_catalog(
             );
             security.push(json!({ (key): [] }));
         }
+        // Defined whenever a listed route names it: the browser-management
+        // routes and every route that takes a browser session only.
         if catalog
             .routes
             .iter()
-            .any(|r| r.access == RouteAccess::BrowserManagement)
+            .any(|r| r.access == RouteAccess::BrowserManagement || r.browser_session_only)
         {
             schemes.insert(
                 "browserSession".into(),
@@ -932,6 +951,7 @@ pub fn http_route_specs(
     routes.extend(oauth_route_specs());
     routes.extend(admin_oauth_route_specs());
     routes.extend(application_access_route_specs());
+    routes.extend(access_keys::route_specs());
     routes.extend(admin_management_route_specs());
     routes.extend(resource_policy_route_specs(resource_types));
     routes.extend(audit_query_route_specs());
@@ -1542,6 +1562,7 @@ fn application_access_route_specs() -> Vec<HttpRouteSpec> {
                 "principalId":{"type":"string","description":"The signed-in account the request was shown to: the principal of the inspect response. A decision sent under another account's session is refused with version_conflict."}}}),
     );
     for route in &mut routes {
+        route.required_feature = Some(RouteFeature::Applications);
         route.result_schema = match route.operation.as_str() {
             "applications.authorizations.inspect" => Some(json!({
                 "title":"ApplicationAuthorizationRequest", "type":"object", "additionalProperties":false,
@@ -2967,7 +2988,8 @@ fn principal_group_admin_routes() -> Vec<HttpRouteSpec> {
         "PATCH",
         "/v1/admin/principals/{principal}/access",
         json!({"type":"object", "additionalProperties":false, "minProperties":1,
-            "properties":{"role":role_schema, "selfServiceEnabled":{"type":"boolean"}, "agentTokenIssuance":principal_agent_token_issuance_schema()}}),
+            "properties":{"role":role_schema, "selfServiceEnabled":{"type":"boolean"}, "agentTokenIssuance":principal_agent_token_issuance_schema(),
+                "accessKeyTypes":principal_access_key_types_schema()}}),
     );
     set_request_body_schema(
         &mut routes,
@@ -3027,6 +3049,34 @@ fn configured_agent_token_issuance_schema(principal: bool) -> Value {
     })
 }
 
+fn access_key_types_list_schema(description: &str) -> Value {
+    json!({
+        "type":"array", "maxItems":crate::ACCESS_KEY_TYPES_MAX_ENTRIES, "uniqueItems":true,
+        "items":execution_context_schema(), "description":description
+    })
+}
+
+fn principal_access_key_types_schema() -> Value {
+    json!({
+        "type":"object", "additionalProperties":false, "required":["allow", "deny"],
+        "description":"Complete choice, for each access key type, of whether the account may hold it. A configured access key type in deny is refused and one in allow is permitted, whatever the account's groups allow; one in neither list follows the account's active managed groups. An access_key_type cannot be in both lists. Withdrawing a type stops the account's existing access keys of that type.",
+        "properties":{
+            "allow":access_key_types_list_schema("Configured access key type IDs the account may hold, treated as a set. New configured access key types are never added automatically."),
+            "deny":access_key_types_list_schema("Configured access key type IDs the account may not hold, treated as a set.")
+        }
+    })
+}
+
+fn group_access_key_types_schema() -> Value {
+    json!({
+        "type":"object", "additionalProperties":false, "required":["allow"],
+        "description":"Complete list of the access key types this group lets its members hold, for members whose own setting names neither allow nor deny for the type. Only local membership of an active managed group counts, and a group cannot deny a type.",
+        "properties":{
+            "allow":access_key_types_list_schema("Configured access key type IDs, treated as a set. New configured access key types are never added automatically.")
+        }
+    })
+}
+
 fn group_auto_enrollment_schema() -> Value {
     json!({"type":"boolean", "description":"Automatically add missing persistent local membership in this enabled group at the first successful Microsoft sign-in of a principal created after the enrollment migration, including email-precreated, Object-ID-linked and JIT accounts. Existing principals are migration-marked processed without backfill. Later sign-ins and unlink/re-enrollment never re-add removed membership; clearing the setting does not remove memberships."})
 }
@@ -3038,6 +3088,7 @@ fn group_write_body_schema(patch: bool) -> Value {
             "displayName":{"type":["string","null"]},
             "description":{"type":["string","null"]},
             "agentTokenIssuance":group_agent_token_issuance_schema(),
+            "accessKeyTypes":group_access_key_types_schema(),
             "autoEnrollNewMicrosoftUsers":group_auto_enrollment_schema()
         }
     });
@@ -3050,6 +3101,7 @@ fn group_write_body_schema(patch: bool) -> Value {
         schema["properties"]["autoEnrollNewMicrosoftUsers"]["default"] = json!(false);
         schema["properties"]["agentTokenIssuance"]["default"] =
             json!({"mode":"disabled", "allowedExecutionContexts":[]});
+        schema["properties"]["accessKeyTypes"]["default"] = json!({"allow":[]});
     }
     schema
 }
@@ -3057,12 +3109,13 @@ fn group_write_body_schema(patch: bool) -> Value {
 fn group_record_schema(detail: bool) -> Value {
     let mut schema = json!({
         "type":"object", "additionalProperties":false,
-        "required":["groupId","displayName","description","status","agentTokenIssuance","autoEnrollNewMicrosoftUsers",
+        "required":["groupId","displayName","description","status","agentTokenIssuance","accessKeyTypes","autoEnrollNewMicrosoftUsers",
             "createdAt","createdBy","updatedAt","updatedBy","disabledAt","memberCount"],
         "properties":{
             "groupId":{"type":"string"}, "displayName":{"type":["string","null"]},
             "description":{"type":["string","null"]}, "status":{"enum":["active","disabled"]},
             "agentTokenIssuance":group_agent_token_issuance_schema(),
+            "accessKeyTypes":group_access_key_types_schema(),
             "autoEnrollNewMicrosoftUsers":group_auto_enrollment_schema(),
             "createdAt":{"type":["string","null"]}, "createdBy":{"type":["string","null"]},
             "updatedAt":{"type":["string","null"]}, "updatedBy":{"type":["string","null"]},
@@ -3949,6 +4002,7 @@ fn get_route(
         body_required: false,
         null_body_allowed: false,
         required_feature: None,
+        browser_session_only: false,
         result_schema: None,
     }
 }
@@ -3978,6 +4032,7 @@ fn no_body_route(
         body_required: false,
         null_body_allowed: false,
         required_feature: None,
+        browser_session_only: false,
         result_schema: None,
     }
 }
@@ -4008,6 +4063,7 @@ fn body_route(
         body_required: true,
         null_body_allowed: false,
         required_feature: None,
+        browser_session_only: false,
         result_schema: None,
     }
 }

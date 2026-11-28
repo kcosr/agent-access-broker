@@ -117,7 +117,10 @@ pub(crate) async fn patch(
 
 /// Keep mandatory-preflight writes and their safe completion audit owned after
 /// the HTTP response waiter disappears. Completion failure cannot undo a commit.
-pub(super) async fn committed_identity_mutation<F>(
+/// The owner holds a shutdown-drain lease from before it is spawned until its
+/// store work and completion audit are done, so shutdown waits for it before
+/// the audit writers close.
+pub(crate) async fn committed_identity_mutation<F>(
     state: AppState,
     context: ManagementContext,
     operation: &'static str,
@@ -130,7 +133,9 @@ where
     let context = Arc::new(context);
     let owner_context = context.clone();
     let owner_target = target.clone();
+    let lease = state.reloadable.application_owners.register();
     let owner = tokio::spawn(async move {
+        let _lease = lease;
         let context = owner_context;
         match management_token_store_call(&state, &context, move |store, _, _| mutate(store)).await
         {

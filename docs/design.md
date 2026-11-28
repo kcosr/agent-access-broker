@@ -1682,6 +1682,185 @@ of self-service and of the agent-token issuance policy; the personal routes use
 a management access that requires only a browser session or `user_manage`
 token.
 
+## Usernames and access keys
+
+An access key is a credential the Broker issues for another service. A
+resolving service that receives one from a client asks the Broker whose it
+is, and applies its own rules to the answer. The Broker never accepts an
+access key as a credential, and an access key gives nobody a way to assert an
+identity to the Broker. The feature has three parts: a username stored on
+each account, access key types with settings that say who may hold each,
+and the keys with their resolution route. All of it requires managed
+identity authority; configuration that defines a type, a `[usernames]`
+entry or the resolution capability under TOML identity authority is refused
+when it is loaded.
+
+**A separate kind of credential.** A key is `aab_ak_` followed by 43
+base64url characters. Keys live in `access_keys`
+(`managed_store/access_keys.rs`, migration `040_access_keys`), apart from
+`broker_tokens`, with only a keyed hash of the value. No identity path,
+application endpoint or caller-credential check reads that table, and the
+prefix, well formed or not, is refused at every other credential boundary:
+static principal tokens, trusted caller credentials on both transports,
+imported identity tokens and Broker token lookup. A key's identity and expiry
+are immutable and revocation is final. The expiry is mint time plus its
+chosen duration, or absent when every chosen type offers `"never"` and that
+is the requested lifetime.
+
+**Usernames.** A username is the ID a person is known by to the services
+that resolve their keys; a service account is known by its principal ID.
+One primary key in `account_usernames` holds both, so a person's name never
+equals a service account's ID in either order of creation, and triggers
+keep the service-account rows. A person's name is decided in one of two
+modes on the account: `from_email`, the default, is the lower-cased local
+part of the profile email while the email's domain is listed in
+`[usernames]`; `manual` is what an administrator set. The name is stored,
+never computed at lookup, and the store keeps it in step in the transaction
+that changes an input: account creation, an administrator's change of the
+email or the mode, a sign-in of a person who holds none, and a bounded fill
+after startup and reload that names the accounts a newly listed domain
+covers. The fill runs in its own owner, one bounded batch per transaction
+under the reload fence. The first holder keeps a name: a later account
+whose email gives it gets none and shows the conflict. Reserved names and
+names on the operator's list of IDs already in use, which need an
+administrator's confirmation per account, are evaluated against the current
+configuration at every use. The profile email only names the account it is
+stored on; it never finds or merges accounts.
+
+Every allocation of a name has an incarnation, new whenever the value
+changes or a released value is taken again by anyone. A key records the
+incarnation it was minted under and resolves only while that is the owner's
+current one, so a change of name ends the owner's keys without touching
+them. A name that stays the same keeps its allocation: an email edit that
+gives the same name, or a switch from `from_email` to `manual`, ends
+nothing.
+
+**Access key types and who may hold them.** `[access_key_types.<id>]`
+defines a type: a display name, an optional description for people, ordered
+`lifetime_options`, a `default_lifetime` from those options and whether people
+may create keys of it themselves. Its current maximum is unlimited when
+`"never"` is listed and otherwise is the longest duration.
+A type names no execution contexts and says nothing about where it works:
+the resolving service decides that. Who may hold a type is managed state
+(`managed_store/access_key_types.rs`), decided one type at a time: the
+account's `deny` refuses, its `allow` permits, and otherwise at least one
+active managed group the account belongs to by current local membership
+must allow it. Group membership that comes only from directory evidence
+does not count. New accounts and groups allow nothing, so a configured type
+is on for nobody until an administrator allows it. The decision is made in
+the mint transaction and again at every evaluation, for people and service
+accounts alike, so withdrawing a type stops existing keys. Startup and
+reload refuse a configuration that no longer defines a type a saved setting
+names.
+
+**Issuance.** A person creates a key from their own signed-in browser
+session, for types they may hold that are open to self-service. No key is
+issued that could not work: both ways of issuing first require an account
+whose keys resolve (`account_standing`: enabled, identity access neither
+paused nor missing, a usable username, at most 64 local groups), refuse
+with the reason a resolution would record, and only then judge the
+requested types and finally whether the required `lifetime` is offered.
+Malformed lifetime strings, including zero and durations over `3650d`, have
+already been rejected with `input_invalid` during request-body validation,
+with no supplied value in the message. A well-formed lifetime must match an
+option of every chosen type by effective duration, or `"never"` literally;
+the server supplies no default. The mint transaction checks the
+account, the session and every requested type again, and trims nothing.
+An administrator issues a key for a person or a service account under administrator authority; the
+key belongs to that account. A mint and its success record belong to one
+owner task under the reload fence that also holds a shutdown-drain lease:
+the secret is returned only after the record is written, and a committed
+key whose record failed is never revealed. The personal routes are offered
+by the catalog only while a type is configured and only to a browser
+session.
+
+**Resolution.** `POST /v1/access-keys/resolve` is not a governed request
+and admits no principal (`handlers/access_keys.rs`):
+
+```mermaid
+flowchart TD
+    Request[POST /v1/access-keys/resolve] --> Method{POST?}
+    Method -->|no| NotAllowed[405, nothing checked or recorded]
+    Method -->|yes| Caller{Caller credential with the capability?}
+    Caller -->|no| Refused[401 or 403, small bound of its own]
+    Caller -->|yes| Pool{Slot in the pool, within the caller's share?}
+    Pool -->|no| Busy[429, not audited]
+    Pool -->|yes| Body[Headers, request ID, 4 KiB body]
+    Body -->|malformed| Counted{Within the caller's rate?}
+    Body --> Lookup[Keyed hash, one indexed read]
+    Lookup -->|no stored key| Counted
+    Counted -->|no| Limited[429, not audited]
+    Counted -->|yes| Answered[400 or bare inactive]
+    Lookup -->|stored key| Evaluate[Owner, username, groups, types now]
+    Evaluate -->|active| Facts[200 with the key's facts]
+    Evaluate -->|not active| Inactive[200 with key ID, owner and reason]
+```
+
+The caller is a trusted caller with `allow_access_key_resolution`, which is
+part of the caller's security contract, and its credential is checked
+before any of the body is read. The route's capacity is its own: it takes
+no shared, anonymous-body, per-source or per-principal capacity, spends no
+authentication budget and never waits for a membership renewal. Every
+request runs in the route's pool, which alone bounds a lookup for a stored
+key, so a resolving service's rechecks never fail on rate. One caller entry
+holds at most its share of the pool at once, so a caller whose requests
+stall cannot keep the others out. The per-caller
+rate counts only what cannot be tied to a stored key: a well-formed key no
+store holds, a malformed request (a request abandoned while its body was
+being read is one) and a lookup that failed. Beyond it the
+answer is 429, as is a request the pool turns away.
+
+An active key answers with its subject (the person's username or the
+service account's ID), the username incarnation, the groups the subject
+holds by active local membership, the types it may use now with the moment
+each stops, how it was issued, its ID and its expiry. `expiresAt` is null for
+a key with no expiry. Each type's `validUntil` is the earlier of the key's
+expiry and mint time plus the type's current maximum, or null when both are
+unlimited. A stored inactive key answers with exactly `active: false`, `keyId`, `owner` and `reason`. The owner
+is the current usable username or service-account ID as `{kind,id}`, or null
+when no usable name exists; revocation, expiry and account or identity-access
+status do not suppress a usable name. A renamed owner is reported under the
+current name. The [inactive reasons](http-api.md#access-key-resolution) describe
+why the key cannot be used. Unknown keys receive only `active: false`; the core
+resolver uses that bare form for malformed values too, while malformed HTTP
+requests are refused with 400. Resolution identifies a key; it decides nothing
+about a request. No outcome writes an audit record, including caller or input
+refusals, limits and failed lookups. The resolving service logs every decision
+and refusal itself. Audit-store availability never changes an answer; issue,
+revoke, settings and username changes retain their audits. A resolution reads
+current state every time and writes nothing but a coarse last-used time, at
+most once in five minutes per key, whose failure never fails it. An answer
+never returns fewer groups than the subject holds: beyond 64 the key is
+inactive instead.
+
+| Change | Effect on a key at its next resolution |
+| --- | --- |
+| Revoked, or expired | Not active, finally |
+| Owner disabled, or a person's identity access paused | Not active until re-enabled or resumed |
+| Username changed or released | Not active: its incarnation is no longer current |
+| Username reserved, or awaiting confirmation | Not active until usable again |
+| More than 64 local groups | Not active until the owner is in fewer |
+| A type removed, withdrawn or outlived | The key works with the types that remain, or is not active with none |
+| Local group membership changed | The answer carries the groups held now |
+
+**Management surface.** The routes for names, keys and types
+(`handlers/management/account_usernames.rs`,
+`handlers/management/access_keys.rs`, their catalog specs and result
+schemas in core `api/access_keys.rs`, CLI `access_key_commands.rs`) state
+what a page shows, so that no client re-derives a server decision: a listed
+key names each type it carries and whether it still holds it, a username
+says what the saved email gives and how many live keys a change would end,
+every request that can change a name answers with what it did, and a person
+and an administrator are told the account-level reason why no key can
+work. Every body is read from a JSON object only.
+
+See [configuration](configuration.md#access-key-types), the
+[HTTP API](http-api.md#access-key-resolution), the
+[database reference](database.md#access-keys-and-usernames),
+[access key type settings](roles.md#access-key-types),
+[trusted callers](trusted-callers.md#access-key-resolution) and the
+[administrator guide](administrator-guide.md#usernames-and-access-keys).
+
 ## Execution-context boundary
 
 The fixed `X-Agent-Access-Context` header is a trusted ingress attribute, not a

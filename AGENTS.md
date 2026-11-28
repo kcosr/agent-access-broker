@@ -420,7 +420,9 @@ a person's application access.
 
 An application's token is an ordinary `agent_invoke` `broker_tokens` row, so
 every admission path works unchanged; never add an identity path or special
-admission for it. Its caveats are fixed at mint: the application's contexts
+admission for it. Access keys and their resolution route are a separate
+kind with their own admission; see
+[Usernames and access keys](#usernames-and-access-keys). Its caveats are fixed at mint: the application's contexts
 and services, and `readOnly` when the level is `read_only` or the access is
 read-only. Per-person settings only narrow. Connecting is independent of
 self-service and of the agent-token issuance policy: the personal routes use
@@ -496,6 +498,315 @@ which accounts without self-service can reach, and is shown from the runtime
 catalog's `account_management` routes, never by probing; an administrator's
 rows are in the principal's **Access paths**. `docs/testing.md` lists the
 portal's unit, real-Broker and mocked coverage.
+
+## Usernames and access keys
+
+Access keys (`aab_ak_` plus 43 characters of `[A-Za-z0-9_-]`,
+`managed_store/access_keys.rs`, migration `040`) are for a resolving service, never
+for the Broker. They live in `access_keys`, apart from `broker_tokens`: never
+store one as a `broker_tokens` row, add a token class for it, or make a Broker
+identity path, application endpoint or caller-credential check look in that
+table. The only route that takes one is `POST /v1/access-keys/resolve`
+(`handlers/access_keys.rs`), for a trusted caller with `allow_access_key_resolution`,
+which is part of the caller contract digest. That route authenticates the
+caller credential before reading any body, by
+`authenticate_access_key_resolution_caller`, never through `admit_ingress`, and
+refuses with 400 every header under which the configuration accepts or
+asserts an identity (`access_key_resolution_forbidden_header`: each
+configured identity source's header, `Authorization`, `Cookie`, a
+fingerprint, a username and a context; extend it with any new carrier); it admits no principal and is skipped by `verify_caller_ingress` and
+public body admission, for `POST` only: any other method on the path is
+refused first with the one bare 405 of `method_not_allowed`, before
+anything is checked, taken or recorded. Its capacity is its own
+(`access_key_resolution_ingress`, `limits.max_concurrent_access_key_resolutions`,
+`limits.max_concurrent_access_key_resolutions_per_caller`,
+`limits.access_key_resolutions_per_caller_per_minute`), for every request to it:
+never take shared, anonymous-body, per-source or per-principal capacity,
+spend an authentication budget, or wait for a membership renewal, for a
+resolution or for a refusal. Take the pool slot right after the credential
+check and before anything is awaited: it bounds every request, and it alone
+bounds a lookup for a stored key. Take it within the payer's share
+(`Resolution::slot`: a caller entry, or the peer address of a request with
+no configured caller's credential, holds at most the per-caller limit of
+the pool, and validation keeps that below the pool where two callers
+resolve), and keep both for as long as the request or its lookup runs. Never let a rate refuse a stored key,
+whatever its state: a resolving service's rechecks must not fail on rate.
+The per-caller rate counts only what cannot be tied to a stored key (a
+well-formed key no store holds, a malformed request, a lookup that failed),
+through the one `Charge` the handler holds: charge before every
+refusal, for an unknown key or a failed lookup inside the lookup's own
+blocking task, and for a request dropped while its body is being read
+through the guard armed around that read (`ChargeIfAbandoned`), so that
+the count survives a cancelled request and no slot is held for free. A request
+beyond its rate answers 429, and so does one the pool turns away
+(`access_key_resolution_limit_response`). A caller that lacks only the
+capability is counted as its caller entry, and a request with no configured
+caller's credential against its peer address, both in the route's own
+windows at `limits.auth_requests_per_source_per_minute`, never through
+`admission_failure_response`. The store lookup runs in a blocking task that
+outlives a cancelled request, so it holds a clone of the permit until it
+returns. An unknown key costs one indexed read and no write. Keep the 4 KiB body bound and its deadline, accept only an object
+with the one member `key` (the hand-written map-only `Deserialize`; a
+derived one accepts an array), and keep the route out of the runtime catalog,
+OpenAPI and generic send schema. Unknown keys answer exactly `{"active":false}`;
+the core resolver uses the same bare form for malformed values, while the HTTP
+handler rejects malformed key strings with 400. A stored inactive key answers
+exactly `{active:false, keyId, owner, reason}`. `owner` is `{kind,id}` for its
+owner's current usable username (`user`) or service-account ID (`service_account`),
+or null when no usable name exists. Never substitute the internal principal ID
+for a person's username, or the key's old name for the current one. Keep owner
+metadata independent of revocation, expiry, account status and identity-access
+status; preserve the existing reason precedence. Reasons are the existing
+`AccessKeyInactiveReason` values except `Malformed` and `Unknown`. Resolution
+identifies a key and decides
+nothing about a request. No outcome on this route writes an audit record:
+active and inactive answers, caller or input refusals, limit refusals and
+lookup failures are all unaudited. Never make resolution depend on the audit
+store. The resolving service logs every decision and refusal itself; keep
+ordinary operational logging and the coarse last-used update. State-changing
+operations such as issue, revoke, settings and username changes retain their
+audits. An answer over 16 KiB is 503 `broker_access_key_answer_too_large` with no part of it. The largest answer
+the limits admit (`largest_access_key_resolution_answer_bytes`, over the
+answers that can be emitted) fits, so configuration is never refused for
+answer size; its test pins that against an independently written answer,
+so recheck it when an answer member or limit changes or another origin is
+resolved. A type item is exactly `{name, validUntil}`: access key types
+name no execution contexts, the resolving service alone decides where a
+type works, and agent tokens' execution contexts are a separate feature. The vendored fixtures in
+`tests/fixtures/access-key-resolution/` are a byte-identical copy shared with the
+resolving service; never edit them here. Store only the keyed hash and keep
+the raw token out of logs, audit, errors and `Debug`. Identity and expiry
+are immutable and revocation is final. Each `[access_key_types.<id>]` has
+required `lifetime_options` (one to 16 distinct effective durations using
+`s`, `m`, `h` or `d`, positive and at most `3650d`, or `"never"`) and a
+required `default_lifetime` matching an option. Preserve configured strings
+and order in `lifetimeOptions` and `defaultLifetime`. Both mints require a
+`lifetime` string offered by every chosen type; duration equality is by
+effective length and `"never"` matches literally. Reject invalid lifetime
+syntax, zero and durations over `3650d` as malformed input at the same stage
+as other malformed body members, with `input_invalid` and a value-free
+message. After request validation, check account standing, then types, then
+whether the well-formed lifetime is offered. Only that last refusal is
+`lifetime_not_offered`, with the first type that does not offer it in request
+order. Apply no server default.
+
+Store expiry as mint time plus the duration, or NULL for `"never"`, with
+`CHECK (expires_at IS NULL OR expires_at > created_at)` and a NULL-safe
+`IS NOT` immutability trigger in migration `040`. The store keeps access
+key type names only: a type's current maximum is unlimited when `"never"` is
+listed, otherwise the longest option. Read that maximum from current
+`[access_key_types]` (`access_key_config.rs`) and who may hold each type from
+the current account and group settings at every evaluation. Return a type
+only when the subject's access allows it and either its maximum is
+unlimited or the key is younger than it. Never extend a key's own expiry.
+Always emit `expiresAt`, a timestamp or null. A type's `validUntil` is the earlier of
+that expiry and mint time plus its current maximum; null is allowed only
+when both are unlimited. The portal offers the common options in the first
+chosen type's order. Preserve a manual lifetime choice while every selected
+type still offers it; otherwise preselect the shortest chosen-type default
+common to all, or the shortest common option when no default is common.
+Treat `"never"` as unlimited when choosing the shortest, preserving the
+configured display order. If there is no common option, disable issuing. Use server choices only. Never return fewer
+groups than the subject holds. Resolution serializes the active,
+unmatched-inactive and stored-inactive forms in `managed_store/access_keys.rs`.
+It is
+read-only apart from the last-used write, at most once per token per five
+minutes, whose failure never fails it. Never issue a key that could not work: both mints first require an account
+whose keys resolve (`account_standing`, the account-level states
+`evaluate` answers inactive for, in its order: disabled, identity access
+paused or missing, no usable username, more than 64 local groups) and
+refuse with the same code that `problem`, `accessKeyProblem` and a key's
+`status` report, before any type is judged, so that the refusal says
+nothing about a type; extend `AccountProblem` when resolution gains an
+account-level state, and never revoke or change an issued key for one.
+Never trim a mint request: one
+unknown, not allowed or non-self-service access key type refuses it. A
+person's own request is answered `access_key_type_not_eligible` alike for a
+type they may not hold and for one that is not configured, and
+`access_key_type_not_self_service` only for a type their options list, so
+that a guessed ID tells them nothing. A person's
+mint requires a browser session of their own that is signed in now, by
+every condition the session resolver and the portal apply
+(`live_browser_session`: keep it in step with `resolve_browser_session`),
+and a usable username; an
+administrator's is for a person or a service account, belongs to that
+account, and applies every check of a person's mint except the session and
+`self_service`. A person's paused identity access
+pauses their access keys, reversibly, and a missing gate fails closed. The
+`aab_ak_` prefix, well formed or not, is reserved at every other credential
+boundary: static principal tokens, trusted caller credentials on both
+transports, imported identity tokens (and stored ones at readiness) and
+Broker token lookup.
+
+The access key type settings (`managed_store/access_key_types.rs`, the
+`principal_access_key_types` and `group_access_key_types` tables of
+migration `040`) decide who may hold each type, one type at a time:
+the account's `deny` refuses, its `allow` permits, and otherwise at least
+one active managed group the account belongs to by current local membership
+must allow it. Never count Microsoft group evidence or a disabled group,
+never let a group deny, and never let `[access_key_types]` say who may hold a
+type: `self_service` gates only a person's own creation, never an
+administrator's issuance. Use only the complete objects
+(`{allow, deny}` for an account, `{allow}` for a group), keep the lists
+disjoint, and keep new accounts and groups empty so that a configured
+access key type is on for nobody until an administrator allows it. Check the
+access in the mint transaction and at every evaluation, for people and
+service accounts alike, so that withdrawing a type stops existing tokens.
+It reuses the agent-token issuance machinery: the settings ride the
+principal access PATCH and group create and update inside their existing
+transactions and owners, writes carry the generation's `AccessKeyTypes` and
+run under the reload fence, replacement is last-writer-wins, every change is
+audited with the setting before and after, and startup and reload refuse a
+configuration that does not define an access key type a saved setting names
+(`access_key_types_still_referenced`; every account and every
+group, disabled ones included), as a configuration error that names the
+type, how many account and group settings still name it and how many
+unexpired keys carry it: keep that refusal, as agent-token issuance
+contexts are refused, and never report it as a store or schema failure.
+Keys never block a type's removal. Access key types, access keys, usernames
+and the resolution capability require managed identity authority:
+configuration validation refuses `[access_key_types]`, `[usernames]` entries
+and `allow_access_key_resolution` under TOML identity authority with a message
+that says why, so add no resolve-time or store branch for TOML authority. It differs where the
+per-type shape requires: an account overrides one type and inherits the
+rest, the resolved policy reports each type's source (`account`, `groups`
+or `none`) with the allowing groups, and the setting is enforced on existing
+tokens. The settings are not on `PrincipalRecord` or `GroupRecord`: the
+generic record reads run on schemas that predate migration `040`, so read
+them only through the entry points that take or report the setting, and
+merge them into responses in the handlers.
+
+Read every object this feature takes from outside from a map only. The
+`Deserialize` serde derives for a struct also reads a sequence as the fields
+in order, so `[["inference"],[]]` would be an account's setting and an array
+could stand for a whole body. Use `agent_access_core::object_only` for a
+body's root or a private wire struct, and `deserialize_object_only!` with
+`#[serde(remote = "Self")]` for a struct that is a member of other input
+(`object_only.rs`); the resolution request, both access settings, the
+principal access and group bodies that carry them, the principal create and
+profile PATCH bodies (whose email names or renames a person), the
+agent-token issuance settings beside them, every body of the
+account-username and access-key routes, and the `[access_key_types.<id>]`,
+`[usernames]`, trusted-caller and limits tables are read this way. The role and
+the agent-token issuance mode in those bodies, and the trusted-caller transport and context
+mode, are read from strings only. Give
+every new body or stored document the same treatment and a test that sends
+the positional form, at the root and for each nested object, and derive
+`Deserialize` only for types that are read.
+
+The management routes (`handlers/management/account_usernames.rs` and
+`handlers/management/access_keys.rs` in the host, their catalog specs and
+result schemas in core `api/access_keys.rs`, CLI `access_key_commands.rs`) are the
+only way names and tokens change. A person's own access key routes take a
+signed-in browser session, for reads too, with CSRF on writes, and use
+`ManagementAccess::Account`: never accept a bearer token on them and never
+gate them by the account's self-service flag, by agent-token issuance or by
+a service grant. What a person may create follows their access key type
+settings, the type's `self_service` and a usable username; the options route
+lists the types the person may hold with `selfService`, never the groups or
+the reason; its `hasSelfServiceType`, `hasKeys` and `problem` say
+whether there is anything to show the person, `problem` being the status
+every key of theirs lists for a cause only an administrator removes: null
+for a person who can create no key and owns none, and null when `refusal`
+names a disabled account or identity access that is paused or missing,
+which a resolution finds first. `refusal` is what a mint of the person's
+own would answer whatever it asked for, so it carries every code `problem`
+can.
+The portal derives nothing the server states: a listed key carries
+`accessKeyTypeStates` (from the one per-type decision `carried_types` makes
+for resolution too) and `access`, a username carries `fromEmail` and
+`liveKeys`, every request that can change or release a name answers
+with the one `accountUsernameChange` shape, and principal detail carries
+`accessKeyProblem`, the account-level status every key of the account
+lists. An administrator issues for a
+person or a service account under administrator authority, with the
+administrator as audit actor and the account as owner, and lists and
+revokes any token; auditors read. A mint and its
+success record belong to one owner under the reload fence
+(`committed_issuance`): return the secret only after the record is written,
+leave a committed token whose record failed without revealing it, and never
+retry a mint. Every other change runs through `committed_identity_mutation`
+with a preflight record and a success record whose target was read in the
+transaction; reads are unaudited. Both owners take an `OwnerDrain` lease
+before they are spawned and keep it through store completion and audit, so
+that shutdown drains them before the audit writers close, and so do the
+owners of the principal and group writes that carry a derived username or
+an access key type setting (`committed_principal_mutation`,
+`committed_group_mutation`): never spawn a
+mutation owner whose audit record could be written after shutdown began
+without one. A confirmation names the name it acts on.
+Typed refusals are store errors (`AccountUsernameRefused`, `AccessKeyRefused`)
+mapped to the SDK's `broker_account_username_*` and `broker_access_key_*` codes
+with the cause in `details.refusal`: keep one code per family. A listed
+token reports why it does not resolve (`status`); the resolution route returns
+that reason with the stored key's ID and current owner. Validate a revoke path
+as a key ID before constructing any audit target or preflight: `ak_` plus
+1 to 60 characters of `[A-Za-z0-9_-]`, with no `aab_` prefix in the remainder.
+Invalid IDs answer the existing 404 without the supplied target. Reject the
+Broker secret namespace `aab_` in identifier fields of the access-key and
+username routes, and principal/group create, inspect and update routes that
+carry these settings, before audit or storage. The same reservation applies
+to access-key issue names and to usernames (manual, derived, confirmed or
+service-account IDs). Keep username refusal `name_invalid` value-free and
+never echo unknown list-query parameter names. Keep the personal
+routes behind `RouteFeature::AccessKeys` and marked `browser_session_only`, so the
+catalog offers them only while an access key type is configured and only to
+a browser session, the one credential they accept, and keep the catalog,
+OpenAPI, docs and CLI in step.
+
+Usernames (`managed_store/account_usernames.rs`): one primary key holds people's
+names and service-account principal IDs. Keep the triggers that maintain
+service-account rows and refuse a collision on every path. The first holder
+keeps a name: never move or displace one, and show a later account that
+would derive it as a conflict. A person's name is decided in one of two
+modes on the account (`principals.account_username_mode`): `from_email`, the
+default, follows the profile email; `manual` holds what an administrator
+set, and no value means no name. The name is stored, never computed at
+lookup, and the store keeps it in step in the transaction that changes an
+input: account creation; an administrator's change of the email (a
+`from_email` person is renamed: the old name released and the derived one
+allocated, or none) or of the mode (to manual keeps the name held; from
+manual to `from_email` derives at once, while a request for the mode the
+person already follows only fills in a missing name and never removes or
+replaces one); a sign-in of a `from_email` person who holds
+none; and the fill after startup and reload. Every one of those captures
+the change for its operation's audit record. A name that stays the same
+keeps its allocation; every other change is a new incarnation or none, so
+earlier tokens stop resolving. Never rename at any other moment: removing a
+domain from `email_domains` takes no name away, and a profile change that
+leaves the email as it was renames nobody. Never use an email to find or
+merge accounts. Why a person holds no name is evaluated when the account is
+read, not stored. Evaluate reserved names and unconfirmed listed names
+against the current `[usernames]` at every use; both lists also bar a
+service account's ID, at creation, at a kind change and at every use, and a
+service account is never confirmed. Confirmation is per account and names
+the name it confirms. Read an enumerated member of a request, such as the
+mode, from a JSON string: a derived enum also reads an object keyed by the
+variant.
+
+The fill of missing names (`fill_missing_after_publication` in the host's
+`handlers/management/account_usernames.rs`) runs after startup and after a reload
+has published, in an owner of its own that holds an `OwnerDrain` lease. Keep
+it bounded: each batch is one store transaction under the reload fence
+(`token_store_call_from_snapshot`) that examines at most
+`ACCOUNT_USERNAME_FILL_BATCH_SIZE` accounts, counting every account examined and
+not only those it names, and the fence and the store are free between
+batches. It only fills in missing names. A newer configuration generation
+stops it, because that reload starts its own; a snapshot published for the
+same generation, as a change to an imported service publishes, starts none,
+so the fill resumes under the snapshot in force from the batch the fence
+refused. A batch that names somebody is audited as `account_usernames.assigned`,
+and a failure is logged and audited and never stops startup, the reload or
+serving. There is no administrator command that names accounts in bulk and
+no bulk confirmation; do not add one.
+
+A successful sign-in's store completion and its audit record belong to one
+owner task that keeps the request's permits and an `OwnerDrain` lease, and
+the local sign-in's completing transaction runs under the reload fence
+(`token_store_call_from_snapshot`) with password hashing before it, so a
+derivation never applies a retired generation's settings. The principal
+PATCH that can rename runs in `committed_identity_mutation` for the same
+reason.
 
 ## Microsoft membership renewal
 
@@ -1020,8 +1331,8 @@ stdio MCP subprocess; keep those file, receipt and transport boundaries covered.
   baseline, with required identity, protected key/state paths, SQLite audit,
   disabled steady-state bootstrap/migrations, and no provider grants.
 - `docs/administrator-guide.md`: administrator bootstrap, principal onboarding,
-  credential modes, resources/grants, service delegation, access review, and
-  offboarding.
+  credential modes, resources/grants, service delegation, usernames and
+  access keys, access review, and offboarding.
 - `docs/release-readiness.md`: candidate validation, distribution contents,
   administrator acceptance, and publishing checklist.
 - `docs/design.md`: implemented architecture and conceptual contract for crate
@@ -1046,7 +1357,7 @@ stdio MCP subprocess; keep those file, receipt and transport boundaries covered.
   workflow.
 - `docs/configuration.md`: canonical broker and CLI config schema, including
   identity, policy, credentials, managed store, broker tokens, encryption,
-  management, audit, services, and providers.
+  management, audit, services, providers, access key types, and usernames.
 - `docs/applications.md`: registered client applications: registration and
   levels, the OAuth authorization-server wire contract, consent routes,
   personal and administrative management, limits, retention, audit and
@@ -1055,9 +1366,10 @@ stdio MCP subprocess; keep those file, receipt and transport boundaries covered.
   dialects (including their administrator setup and scopes, and Atlassian's
   connection table, per-product registrations, quota and lifecycle), separate
   test provider, consent, refresh recovery, and connection boundaries.
-- `docs/database.md`: managed-store database schema, token hashing, credential
-  encryption, key readiness, rewrap, lifecycle, and backup/recovery model, plus
-  the separate SQLite audit database.
+- `docs/database.md`: managed-store database schema, token hashing, access
+  keys and usernames, credential encryption, key readiness, rewrap,
+  lifecycle, and backup/recovery model, plus the separate SQLite audit
+  database.
 - `docs/resources.md`: typed resources, flat include/exclude resource groups,
   execution contexts, live grant/token references, effective access, and catalog
   administration.

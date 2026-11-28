@@ -33,6 +33,8 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::net::SocketAddr;
+use tracing::Instrument;
+use tracing::instrument::WithSubscriber;
 use uuid::Uuid;
 
 const OIDC_BINDING_COOKIE: &str = "__Host-aab_oidc_binding";
@@ -427,7 +429,7 @@ pub(crate) async fn microsoft_oidc_callback(
     let source = snapshot
         .source_resolver
         .source_context(remote_addr, &headers);
-    let _permit = match acquire_oidc_source_guard(&state, &snapshot, &source) {
+    let source_permit = match acquire_oidc_source_guard(&state, &snapshot, &source) {
         Ok(permit) => permit,
         Err((_, reason_code)) => {
             return oidc_callback_error(
@@ -858,234 +860,297 @@ pub(crate) async fn microsoft_oidc_callback(
     let completion_groups = groups.clone();
     let completion_display_name = display_name.clone();
     let completion_email = email.clone();
-    // External exchange is complete. Serialize only the store mutation with
-    // reload, rejecting a stale key-ring snapshot before JIT can encrypt inventory.
-    let completion = state
+    // The owner keeps the request's permit and a drain lease from the store
+    // completion to the audit record, whatever happens to the response
+    // waiter: a first sign-in can allocate a username, and that allocation
+    // is recorded only by this sign-in's audit record.
+    let lease = state.reloadable.application_owners.register();
+    #[cfg(test)]
+    let barrier = state
         .reloadable
-        .token_store_call_from_snapshot(snapshot.clone(), move |runtime| {
-            let store = runtime.managed_store().ok_or_else(|| {
-                ManagedStoreError::Unavailable("managed store is unavailable".into())
-            })?;
-            let membership_renewal = renewal
-                .map(|(refresh_token, reference)| {
-                    let ring = runtime.credential_key_ring().cloned().ok_or_else(|| {
-                        ManagedStoreError::EncryptionKeyMissing("credential key ring".into())
-                    })?;
-                    match refresh_token {
-                        Some(refresh_token) => OidcMembershipRenewalSignIn::issued(
-                            ring,
-                            refresh_token.into_secret(),
-                            reference,
-                        ),
-                        None => Ok(OidcMembershipRenewalSignIn::not_issued(ring)),
+        .sign_in_completion_barrier
+        .lock()
+        .unwrap()
+        .clone();
+    let fallback_request_id = request_id.clone();
+    let fallback_broker_request_id = broker_request_id.clone();
+    let owner = tokio::spawn(
+        async move {
+            let _lease = lease;
+            let _permit = source_permit;
+            #[cfg(test)]
+            let completed = barrier.clone();
+            let response = async move {
+                #[cfg(test)]
+                if let Some(barrier) = barrier {
+                    tokio::task::spawn_blocking(move || barrier.wait())
+                        .await
+                        .expect("sign-in barrier");
+                }
+                // External exchange is complete. Serialize only the store mutation with
+                // reload, rejecting a stale key-ring snapshot before JIT can encrypt inventory.
+                let completion = state
+                    .reloadable
+                    .token_store_call_from_snapshot(snapshot.clone(), move |runtime| {
+                        let store = runtime.managed_store().ok_or_else(|| {
+                            ManagedStoreError::Unavailable("managed store is unavailable".into())
+                        })?;
+                        let membership_renewal = renewal
+                            .map(|(refresh_token, reference)| {
+                                let ring =
+                                    runtime.credential_key_ring().cloned().ok_or_else(|| {
+                                        ManagedStoreError::EncryptionKeyMissing(
+                                            "credential key ring".into(),
+                                        )
+                                    })?;
+                                match refresh_token {
+                                    Some(refresh_token) => OidcMembershipRenewalSignIn::issued(
+                                        ring,
+                                        refresh_token.into_secret(),
+                                        reference,
+                                    ),
+                                    None => Ok(OidcMembershipRenewalSignIn::not_issued(ring)),
+                                }
+                            })
+                            .transpose()?;
+                        store.complete_oidc_login(
+                            &token_hasher,
+                            OidcCompleteLoginRequest {
+                                flow_sequence: flow.flow_sequence,
+                                provider_generation,
+                                external_subject,
+                                external_group_ids: completion_groups,
+                                jit_provisioning,
+                                jit_principal_id: format!("usr-{}", Uuid::new_v4()),
+                                display_name: completion_display_name,
+                                email: completion_email,
+                                evidence_at,
+                                callback_now,
+                                session_ttl_seconds,
+                                created_by: "oidc-microsoft".to_string(),
+                                issued_at,
+                                membership_renewal,
+                            },
+                        )
+                    })
+                    .await;
+                let result = match completion {
+                    Ok(OidcCompletionOutcome::Succeeded {
+                        result,
+                        jit_created,
+                    }) => (result, jit_created),
+                    Ok(OidcCompletionOutcome::Denied { reason }) => {
+                        claims_debug.observed(
+                            &request_id,
+                            &broker_request_id,
+                            &reason,
+                            None,
+                            None,
+                            None,
+                        );
+                        return oidc_callback_error(
+                            &snapshot,
+                            &request_id,
+                            &broker_request_id,
+                            operation,
+                            &source,
+                            ReasonCode::OidcAdmissionDenied,
+                            Some(flow.return_path.as_str()),
+                        )
+                        .await;
                     }
-                })
-                .transpose()?;
-            store.complete_oidc_login(
-                &token_hasher,
-                OidcCompleteLoginRequest {
-                    flow_sequence: flow.flow_sequence,
-                    provider_generation,
-                    external_subject,
-                    external_group_ids: completion_groups,
-                    jit_provisioning,
-                    jit_principal_id: format!("usr-{}", Uuid::new_v4()),
-                    display_name: completion_display_name,
-                    email: completion_email,
-                    evidence_at,
-                    callback_now,
+                    Ok(OidcCompletionOutcome::Superseded) => {
+                        claims_debug.observed(
+                            &request_id,
+                            &broker_request_id,
+                            "superseded",
+                            None,
+                            None,
+                            None,
+                        );
+                        return oidc_callback_error(
+                            &snapshot,
+                            &request_id,
+                            &broker_request_id,
+                            operation,
+                            &source,
+                            ReasonCode::OidcFlowInvalid,
+                            Some(flow.return_path.as_str()),
+                        )
+                        .await;
+                    }
+                    Err(ManagedStoreError::OidcLoginMethodConflict) => {
+                        claims_debug.observed(
+                            &request_id,
+                            &broker_request_id,
+                            "login_method_conflict",
+                            None,
+                            None,
+                            None,
+                        );
+                        return oidc_callback_error(
+                            &snapshot,
+                            &request_id,
+                            &broker_request_id,
+                            operation,
+                            &source,
+                            ReasonCode::OidcLoginMethodConflict,
+                            Some(flow.return_path.as_str()),
+                        )
+                        .await;
+                    }
+                    Err(_) => {
+                        claims_debug.observed(
+                            &request_id,
+                            &broker_request_id,
+                            "store_unavailable",
+                            None,
+                            None,
+                            None,
+                        );
+                        return oidc_callback_error(
+                            &snapshot,
+                            &request_id,
+                            &broker_request_id,
+                            operation,
+                            &source,
+                            ReasonCode::OidcUnavailable,
+                            Some(flow.return_path.as_str()),
+                        )
+                        .await;
+                    }
+                };
+                let (result, jit_created) = result;
+                let matched_external_group_ids = result
+                    .membership
+                    .details
+                    .iter()
+                    .flat_map(|membership| {
+                        membership
+                            .microsoft
+                            .iter()
+                            .map(|contribution| contribution.external_group_id.clone())
+                    })
+                    .collect::<BTreeSet<_>>();
+                let mapped_broker_group_ids = result
+                    .membership
+                    .details
+                    .iter()
+                    .filter(|membership| !membership.microsoft.is_empty())
+                    .map(|membership| membership.group_id.clone())
+                    .collect::<BTreeSet<_>>();
+                let audit_identity = IdentityContext {
+                    principal: result.principal.principal_id.clone(),
+                    principal_kind: result.principal.principal_kind(),
+                    principal_subject: None,
+                    groups: result.membership.groups.clone(),
+                    policy_groups: result.membership.policy_groups.clone(),
+                    authenticated: true,
+                    source: None,
+                    caller_id: None,
+                };
+                let mut login_details = json!({
+                    "provider": "microsoft",
+                    "loginMethodId": result.login_method.login_method_id,
+                    "jitCreated": jit_created,
+                    "autoEnrolledGroupIds": result.auto_enrolled_group_ids,
+                    "displayNameUpdated": result.display_name_updated,
+                    "effectiveGroupCount": result.membership.groups.len(),
+                    "membershipEvidence": result.membership_evidence.as_str(),
+                });
+                if let Some(enrollment_id) = &result.enrollment_id {
+                    login_details["enrollmentId"] = json!(enrollment_id);
+                    login_details["tenantId"] = json!(identity.tenant_id);
+                }
+                // The name this sign-in derived, captured in its transaction.
+                if let Some(name) = &result.derived_account_username {
+                    login_details["derivedAccountUsername"] = name.audit_details();
+                }
+                let audit = append_oidc_audit(
+                    &snapshot,
+                    &request_id,
+                    &broker_request_id,
+                    crate::handlers::management::audit_actions::OIDC_LOGIN_SUCCEEDED,
+                    &source,
+                    &audit_identity,
+                    Decision::Allow,
+                    None,
+                    login_details,
+                )
+                .await;
+                if audit.is_err() {
+                    claims_debug.observed(
+                        &request_id,
+                        &broker_request_id,
+                        "audit_unavailable",
+                        Some(result.principal.principal_id.as_str()),
+                        Some(jit_created),
+                        Some(OidcAdmissionDebugGroups {
+                            matched_external_group_ids: &matched_external_group_ids,
+                            mapped_broker_group_ids: &mapped_broker_group_ids,
+                            effective_group_ids: &result.membership.groups,
+                            policy_group_ids: &result.membership.policy_groups,
+                        }),
+                    );
+                    let token_id = result.session.record.token_id.clone();
+                    let actor = result.principal.principal_id.clone();
+                    let _ = snapshot
+                        .managed_store_call(move |store| {
+                            store.revoke_browser_session(&token_id, &actor)
+                        })
+                        .await;
+                    return oidc_callback_error_without_audit(
+                        &request_id,
+                        &broker_request_id,
+                        ReasonCode::AuditUnavailable,
+                    );
+                }
+                claims_debug.observed(
+                    &request_id,
+                    &broker_request_id,
+                    "succeeded",
+                    Some(result.principal.principal_id.as_str()),
+                    Some(jit_created),
+                    Some(OidcAdmissionDebugGroups {
+                        matched_external_group_ids: &matched_external_group_ids,
+                        mapped_broker_group_ids: &mapped_broker_group_ids,
+                        effective_group_ids: &result.membership.groups,
+                        policy_group_ids: &result.membership.policy_groups,
+                    }),
+                );
+                let mut response = StatusCode::SEE_OTHER.into_response();
+                response.headers_mut().insert(
+                    LOCATION,
+                    HeaderValue::from_str(&flow.return_path)
+                        .expect("sanitized return path is a header value"),
+                );
+                set_session_cookie(
+                    &snapshot,
+                    &result.session.token,
                     session_ttl_seconds,
-                    created_by: "oidc-microsoft".to_string(),
-                    issued_at,
-                    membership_renewal,
-                },
-            )
-        })
-        .await;
-    let result = match completion {
-        Ok(OidcCompletionOutcome::Succeeded {
-            result,
-            jit_created,
-        }) => (result, jit_created),
-        Ok(OidcCompletionOutcome::Denied { reason }) => {
-            claims_debug.observed(&request_id, &broker_request_id, &reason, None, None, None);
-            return oidc_callback_error(
-                &snapshot,
-                &request_id,
-                &broker_request_id,
-                operation,
-                &source,
-                ReasonCode::OidcAdmissionDenied,
-                Some(flow.return_path.as_str()),
-            )
+                    response.headers_mut(),
+                );
+                set_browser_security_headers(response.headers_mut());
+                response
+            }
             .await;
+            #[cfg(test)]
+            if let Some(barrier) = completed {
+                barrier.completed.notify_one();
+            }
+            response
         }
-        Ok(OidcCompletionOutcome::Superseded) => {
-            claims_debug.observed(
-                &request_id,
-                &broker_request_id,
-                "superseded",
-                None,
-                None,
-                None,
-            );
-            return oidc_callback_error(
-                &snapshot,
-                &request_id,
-                &broker_request_id,
-                operation,
-                &source,
-                ReasonCode::OidcFlowInvalid,
-                Some(flow.return_path.as_str()),
-            )
-            .await;
-        }
-        Err(ManagedStoreError::OidcLoginMethodConflict) => {
-            claims_debug.observed(
-                &request_id,
-                &broker_request_id,
-                "login_method_conflict",
-                None,
-                None,
-                None,
-            );
-            return oidc_callback_error(
-                &snapshot,
-                &request_id,
-                &broker_request_id,
-                operation,
-                &source,
-                ReasonCode::OidcLoginMethodConflict,
-                Some(flow.return_path.as_str()),
-            )
-            .await;
-        }
-        Err(_) => {
-            claims_debug.observed(
-                &request_id,
-                &broker_request_id,
-                "store_unavailable",
-                None,
-                None,
-                None,
-            );
-            return oidc_callback_error(
-                &snapshot,
-                &request_id,
-                &broker_request_id,
-                operation,
-                &source,
-                ReasonCode::OidcUnavailable,
-                Some(flow.return_path.as_str()),
-            )
-            .await;
-        }
-    };
-    let (result, jit_created) = result;
-    let matched_external_group_ids = result
-        .membership
-        .details
-        .iter()
-        .flat_map(|membership| {
-            membership
-                .microsoft
-                .iter()
-                .map(|contribution| contribution.external_group_id.clone())
-        })
-        .collect::<BTreeSet<_>>();
-    let mapped_broker_group_ids = result
-        .membership
-        .details
-        .iter()
-        .filter(|membership| !membership.microsoft.is_empty())
-        .map(|membership| membership.group_id.clone())
-        .collect::<BTreeSet<_>>();
-    let audit_identity = IdentityContext {
-        principal: result.principal.principal_id.clone(),
-        principal_kind: result.principal.principal_kind(),
-        principal_subject: None,
-        groups: result.membership.groups.clone(),
-        policy_groups: result.membership.policy_groups.clone(),
-        authenticated: true,
-        source: None,
-        caller_id: None,
-    };
-    let mut login_details = json!({
-        "provider": "microsoft",
-        "loginMethodId": result.login_method.login_method_id,
-        "jitCreated": jit_created,
-        "autoEnrolledGroupIds": result.auto_enrolled_group_ids,
-        "displayNameUpdated": result.display_name_updated,
-        "effectiveGroupCount": result.membership.groups.len(),
-        "membershipEvidence": result.membership_evidence.as_str(),
-    });
-    if let Some(enrollment_id) = &result.enrollment_id {
-        login_details["enrollmentId"] = json!(enrollment_id);
-        login_details["tenantId"] = json!(identity.tenant_id);
+        .in_current_span()
+        .with_current_subscriber(),
+    );
+    match owner.await {
+        Ok(response) => response,
+        Err(_) => oidc_callback_error_without_audit(
+            &fallback_request_id,
+            &fallback_broker_request_id,
+            ReasonCode::OidcUnavailable,
+        ),
     }
-    let audit = append_oidc_audit(
-        &snapshot,
-        &request_id,
-        &broker_request_id,
-        crate::handlers::management::audit_actions::OIDC_LOGIN_SUCCEEDED,
-        &source,
-        &audit_identity,
-        Decision::Allow,
-        None,
-        login_details,
-    )
-    .await;
-    if audit.is_err() {
-        claims_debug.observed(
-            &request_id,
-            &broker_request_id,
-            "audit_unavailable",
-            Some(result.principal.principal_id.as_str()),
-            Some(jit_created),
-            Some(OidcAdmissionDebugGroups {
-                matched_external_group_ids: &matched_external_group_ids,
-                mapped_broker_group_ids: &mapped_broker_group_ids,
-                effective_group_ids: &result.membership.groups,
-                policy_group_ids: &result.membership.policy_groups,
-            }),
-        );
-        let token_id = result.session.record.token_id.clone();
-        let actor = result.principal.principal_id.clone();
-        let _ = snapshot
-            .managed_store_call(move |store| store.revoke_browser_session(&token_id, &actor))
-            .await;
-        return oidc_callback_error_without_audit(
-            &request_id,
-            &broker_request_id,
-            ReasonCode::AuditUnavailable,
-        );
-    }
-    claims_debug.observed(
-        &request_id,
-        &broker_request_id,
-        "succeeded",
-        Some(result.principal.principal_id.as_str()),
-        Some(jit_created),
-        Some(OidcAdmissionDebugGroups {
-            matched_external_group_ids: &matched_external_group_ids,
-            mapped_broker_group_ids: &mapped_broker_group_ids,
-            effective_group_ids: &result.membership.groups,
-            policy_group_ids: &result.membership.policy_groups,
-        }),
-    );
-    let mut response = StatusCode::SEE_OTHER.into_response();
-    response.headers_mut().insert(
-        LOCATION,
-        HeaderValue::from_str(&flow.return_path).expect("sanitized return path is a header value"),
-    );
-    set_session_cookie(
-        &snapshot,
-        &result.session.token,
-        session_ttl_seconds,
-        response.headers_mut(),
-    );
-    set_browser_security_headers(response.headers_mut());
-    response
 }
 
 fn acquire_oidc_source_guard(

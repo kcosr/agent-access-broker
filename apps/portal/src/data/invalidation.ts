@@ -16,6 +16,8 @@ export function usePortalInvalidation() {
       /** Self-service and managed-user console data. */
       console: () => void invalidate(portalQueryKeys.consoleRoot),
       oauthConnections: () => void invalidate(portalQueryKeys.oauthConnections(viewer)),
+      /** The signed-in person's access key options and keys. */
+      accessKeys: () => void invalidate(portalQueryKeys.accessKeysRoot(viewer)),
       agentTokenOptions: () => void invalidate(portalQueryKeys.agentTokenOptionsRoot),
       /** Admin data and effective-access previews. */
       admin: () => {

@@ -6,12 +6,12 @@ export type SortValue = string | number | null | undefined;
 
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 
-/** Orders two values; missing values (null, undefined, "") come last in either direction. */
-function compareValues(a: SortValue, b: SortValue, dir: 1 | -1) {
-  const aMissing = a === null || a === undefined || a === "";
-  const bMissing = b === null || b === undefined || b === "";
+/** Orders two values; missing values (null, undefined, "", NaN) come last in either direction. */
+export function compareValues(a: SortValue, b: SortValue, dir: 1 | -1) {
+  const aMissing = a === null || a === undefined || a === "" || (typeof a === "number" && Number.isNaN(a));
+  const bMissing = b === null || b === undefined || b === "" || (typeof b === "number" && Number.isNaN(b));
   if (aMissing || bMissing) return aMissing === bMissing ? 0 : aMissing ? 1 : -1;
-  if (typeof a === "number" && typeof b === "number") return dir * (a - b);
+  if (typeof a === "number" && typeof b === "number") return a === b ? 0 : dir * (a < b ? -1 : 1);
   return dir * collator.compare(String(a), String(b));
 }
 

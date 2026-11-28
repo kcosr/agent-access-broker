@@ -2028,6 +2028,102 @@ fn issuance_policy_schemas_keep_user_inheritance_distinct_from_group_contributio
 }
 
 #[test]
+fn access_key_types_schemas_take_only_the_complete_object_for_an_account_or_a_group() {
+    let routes = http_route_specs(&crate::tests::test_resource_types());
+    for (method, route, base, account) in [
+        (
+            "PATCH",
+            "/v1/admin/principals/{principal}/access",
+            json!({}),
+            true,
+        ),
+        (
+            "POST",
+            "/v1/admin/groups",
+            json!({"groupId": "readers"}),
+            false,
+        ),
+        ("PATCH", "/v1/admin/groups/{group}", json!({}), false),
+    ] {
+        let spec = routes
+            .iter()
+            .find(|spec| spec.method == method && spec.route == route)
+            .unwrap();
+        let validator =
+            jsonschema::validator_for(spec.request_body_schema.as_ref().unwrap()).unwrap();
+        let set = |value: Value| {
+            let mut body = base.clone();
+            body["accessKeyTypes"] = value;
+            body
+        };
+        for (value, for_account) in [
+            (json!({"allow":[], "deny":[]}), true),
+            (json!({"allow":["inference"], "deny":["packages"]}), true),
+            (json!({"allow":[]}), false),
+            (json!({"allow":["inference", "packages"]}), false),
+        ] {
+            assert_eq!(
+                validator.is_valid(&set(value.clone())),
+                for_account == account,
+                "{method} {route}: {value}"
+            );
+        }
+        for value in [
+            json!(null),
+            json!(true),
+            json!("inherit"),
+            json!({}),
+            json!({"deny":[]}),
+            json!({"allow":null, "deny":[]}),
+            json!({"allow":"inference", "deny":[]}),
+            json!({"allow":["Inference"], "deny":[]}),
+            json!({"allow":[""], "deny":[]}),
+            json!({"allow":[7], "deny":[]}),
+            json!({"allow":["inference", "inference"], "deny":[]}),
+            json!({"allow":["a".repeat(65)], "deny":[]}),
+            json!({"allow":(0..257).map(|n| format!("type-{n}")).collect::<Vec<_>>(), "deny":[]}),
+            json!({"allow":[], "deny":[], "mode":"inherit"}),
+            json!({"allow":[], "extra":true}),
+        ] {
+            assert!(
+                !validator.is_valid(&set(value.clone())),
+                "{method} {route}: {value}"
+            );
+        }
+    }
+    // The group record every group route returns carries the setting.
+    for operation in [
+        "admin.groups.list",
+        "admin.groups.create",
+        "admin.groups.patch",
+        "admin.groups.inspect",
+    ] {
+        let schema = routes
+            .iter()
+            .find(|spec| spec.operation == operation)
+            .and_then(|spec| spec.result_schema.as_ref())
+            .unwrap();
+        let record = if operation == "admin.groups.list" {
+            &schema["items"]
+        } else {
+            schema
+        };
+        assert!(
+            record["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("accessKeyTypes")),
+            "{operation}"
+        );
+        assert_eq!(
+            record["properties"]["accessKeyTypes"]["required"],
+            json!(["allow"]),
+            "{operation}"
+        );
+    }
+}
+
+#[test]
 fn agent_token_issue_schemas_enforce_caveat_contracts() {
     let routes = http_route_specs(&crate::tests::test_resource_types());
     let self_schema = routes

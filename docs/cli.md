@@ -837,6 +837,56 @@ a mutation; a stale one is refused with `version_conflict`. `list` permits
 auditors; changes require the administrator role. There is no command to
 connect an application: a person approves it in their own browser session.
 
+[Usernames and access keys](http-api.md#usernames-and-access-keys)
+have three command groups:
+
+| Command | Arguments |
+| --- | --- |
+| `admin usernames list` | none |
+| `admin usernames inspect` / `clear` | `PRINCIPAL` |
+| `admin usernames mode` | `PRINCIPAL from_email\|manual` |
+| `admin usernames set` / `confirm` | `PRINCIPAL NAME` |
+| `admin access-keys list` | `[--principal PRINCIPAL] [--include-revoked] [--include-expired]` |
+| `admin access-keys issue` | `PRINCIPAL --name NAME --access-key-type ID ... --ttl DURATION_OR_NEVER` |
+| `admin access-keys revoke` | `KEY_ID` |
+| `admin access-key-types list` | none |
+
+Each command is one request and prints the management envelope. A person's
+name follows their profile email (`from_email`, the default) or is set by
+hand (`manual`). `mode` switches between them: `from_email` derives at once
+for a person whose name was set by hand, and only fills in a missing name
+for one who already follows their email; `manual` keeps the name held now. `set` gives a name by hand and `clear`
+leaves the person without one, both in manual mode. `confirm` records that
+the account is the person already known by the name it holds, for a name on
+the operator's list; it names the name, and refuses one the account no
+longer holds with `broker_account_username_conflict`. There is no command that
+names existing accounts: the Broker names them itself after startup and
+reload, and `admin principals update --email` renames a person who follows
+their email. `inspect` and `list` show each account's `mode`, `state` and,
+when it has no name, the `reason`. `access-keys issue` is for a person or
+a service account whose [access key type setting](roles.md#access-key-types)
+allows every requested type, whether or not people may create that type
+themselves: repeat `--access-key-type` for each type, and supply the required
+`--ttl` as a duration such as `8h` or `7d`, or `never`. The value must match a
+`lifetimeOptions` entry of every chosen type by effective duration; `never`
+is accepted only when every type lists it. `access-key-types list` returns
+those configured strings in order and each type's `defaultLifetime`. The
+command sends the chosen value as `lifetime`; the server never supplies a
+default. Invalid syntax, zero and durations over `3650d` are malformed input
+and return `input_invalid`, with no supplied value in the message. A
+well-formed but unoffered value is refused with `lifetime_not_offered` and
+the first type in request order that does not offer it. The key belongs to that
+account, which must be one whose keys can work: an account that is disabled, paused, without a usable username or in more
+than 64 local groups is refused with that reason in `details.refusal`. It is
+printed once, in `result.key`; the command's output is the only copy. `list` shows each key's `status`:
+`active` or why it does not resolve now. `list` and `inspect` commands and
+`access-key-types list` permit auditors; every change requires the administrator
+role. Who may hold a type is set with `--access-key-types` on
+`admin principals access set` and `admin groups create` or `update`, below.
+A person's own access keys are created from their browser session, and
+there is no command for them. See the
+[administrator guide](administrator-guide.md#usernames-and-access-keys).
+
 
 Administrative management of principals, rights, tokens, credentials, and
 policy, plus audit queries. Metadata reads also permit auditors; changes require global admin authority;
@@ -846,7 +896,7 @@ commands described below. All `admin` subcommands reject `--token-value`.
 - `admin store status` — `GET /v1/admin/store/status`.
 - `admin config status | reload` — `GET /v1/admin/config/status` or
   `POST /v1/admin/config/reload`.
-- `admin principals list | inspect <principal> | create [<principal>] [--kind <KIND>] [--display-name ...] [--email ...] [--microsoft-enrollment-email ...] [--external-subject ...] [--role ...] [--self-service-enabled true|false] [--agent-token-issuance inherit|disabled|read_only|write_capable] [--agent-token-issuance-context <CONTEXT> ...] | update <principal> [--display-name ... | --clear-display-name] [--email ... | --clear-email] | enable <principal> | disable <principal> | access set <principal> [--role user|auditor|service_policy_manager|admin] [--self-service-enabled true|false] [--agent-token-issuance inherit|disabled|read_only|write_capable] [--agent-token-issuance-context <CONTEXT> ...] | groups add <principal> <group> | groups delete <principal> <group> | login-methods list <principal> | login-methods oidc link <principal> --user-object-id <UUID> | login-methods oidc unlink <principal>`.
+- `admin principals list | inspect <principal> | create [<principal>] [--kind <KIND>] [--display-name ...] [--email ...] [--microsoft-enrollment-email ...] [--external-subject ...] [--role ...] [--self-service-enabled true|false] [--agent-token-issuance inherit|disabled|read_only|write_capable] [--agent-token-issuance-context <CONTEXT> ...] | update <principal> [--display-name ... | --clear-display-name] [--email ... | --clear-email] | enable <principal> | disable <principal> | access set <principal> [--role user|auditor|service_policy_manager|admin] [--self-service-enabled true|false] [--agent-token-issuance inherit|disabled|read_only|write_capable] [--agent-token-issuance-context <CONTEXT> ...] [--access-key-types [--access-key-type-allow <ACCESS_KEY_TYPE> ...] [--access-key-type-deny <ACCESS_KEY_TYPE> ...]] | groups add <principal> <group> | groups delete <principal> <group> | login-methods list <principal> | login-methods oidc link <principal> --user-object-id <UUID> | login-methods oidc unlink <principal>`.
   `create --kind` defaults to `user`. For a human, `create
   --microsoft-enrollment-email morgan@example.test` creates the account and pending
   enrollment atomically without a positional principal ID. The server generates
@@ -866,6 +916,13 @@ commands described below. All `admin` subcommands reject `--token-value`.
   Supplying a mode replaces the complete object atomically. There is no partial
   context add/remove or GET-merge-write. API/CLI writes are last-writer-wins; reread
   the current policy before replacing it. `inherit` removes the account override.
+  `access set --access-key-types` replaces the account's
+  [access key types](roles.md#access-key-types) with the repeatable
+  `--access-key-type-allow ACCESS_KEY_TYPE` and `--access-key-type-deny ACCESS_KEY_TYPE`
+  given with it; alone it empties both lists, so every type follows the
+  account's groups. The list flags require `--access-key-types`, an
+  access key type cannot be in both lists, and omitting the flag leaves the setting
+  unchanged. Account creation takes no access key types.
   `update` sends only fields selected by
   flags and requires at least one field flag. Microsoft link takes the Entra
   user Object ID, not an email, UPN, tenant ID, or encoded subject. Link returns
@@ -888,11 +945,15 @@ commands described below. All `admin` subcommands reject `--token-value`.
   not ban ordinary JIT sign-in. Paused reconciled providers permit preparation.
   Profile `update --email` never changes the enrollment address. See
   [Microsoft onboarding](administrator-guide.md#microsoft-onboarding).
-- `admin groups list | inspect <group> | create <group> [--display-name ...] [--description ...] [--auto-enroll-new-microsoft-users] [--agent-token-issuance disabled|read_only|write_capable] [--agent-token-issuance-context <CONTEXT> ...] | update <group> [--display-name ... | --clear-display-name] [--description ... | --clear-description] [--auto-enroll-new-microsoft-users true|false] [--agent-token-issuance disabled|read_only|write_capable] [--agent-token-issuance-context <CONTEXT> ...] | enable <group> | disable <group> | members list <group> | members add <group> <principal> | members delete <group> <principal> | external-group-bindings list <group> | external-group-bindings create <group> --external-group-id <UUID> | external-group-bindings enable <group> <binding-id> | external-group-bindings disable <group> <binding-id> | external-group-bindings delete <group> <binding-id>`.
+- `admin groups list | inspect <group> | create <group> [--display-name ...] [--description ...] [--auto-enroll-new-microsoft-users] [--agent-token-issuance disabled|read_only|write_capable] [--agent-token-issuance-context <CONTEXT> ...] [--access-key-types [--access-key-type-allow <ACCESS_KEY_TYPE> ...]] | update <group> [--display-name ... | --clear-display-name] [--description ... | --clear-description] [--auto-enroll-new-microsoft-users true|false] [--agent-token-issuance disabled|read_only|write_capable] [--agent-token-issuance-context <CONTEXT> ...] [--access-key-types [--access-key-type-allow <ACCESS_KEY_TYPE> ...]] | enable <group> | disable <group> | members list <group> | members add <group> <principal> | members delete <group> <principal> | external-group-bindings list <group> | external-group-bindings create <group> --external-group-id <UUID> | external-group-bindings enable <group> <binding-id> | external-group-bindings disable <group> <binding-id> | external-group-bindings delete <group> <binding-id>`.
   Group issuance defaults to Disabled with an empty list. The same mode/context
   flag pairing and whole-object replacement rules apply; update omission preserves
   both fields. Groups do not accept `inherit`. See
   [issuance resolution](roles.md#agent-token-issuance).
+  `--access-key-types` replaces the group's
+  [access key types](roles.md#access-key-types) with the repeatable
+  `--access-key-type-allow ACCESS_KEY_TYPE` given with it, and alone makes the group
+  allow nothing. A group has no deny list.
   List, inspect, and member-list work in both TOML and managed identity
   authority modes. Mutating group commands require managed identity authority;
   TOML groups are static config resources changed by editing TOML and

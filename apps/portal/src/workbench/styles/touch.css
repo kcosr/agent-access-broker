@@ -1,0 +1,36 @@
+/*
+ * Touch targets: on narrow viewports and coarse pointers, controls grow to
+ * 44px (rows of options to 40px) and text fields use 16px text, below which
+ * mobile browsers zoom the page into a focused field. Desktop layouts are
+ * unchanged.
+ */
+@layer wb.components {
+  @media (max-width: 760px), (pointer: coarse) {
+    .wb-btn,
+    .wb-input,
+    .wb-copy-btn {
+      min-height: 44px;
+    }
+    .wb-btn--icon,
+    .wb-copy-btn {
+      min-width: 44px;
+    }
+    .wb-input,
+    .wb-input--mono {
+      font-size: 16px;
+    }
+    .wb-seg-btn,
+    .wb-tab,
+    .wb-check,
+    .wb-switch-label {
+      min-height: 40px;
+    }
+    /* A copy button's target overhangs its one-line block or line. */
+    .wb-copy:not(.wb-copy--multiline) .wb-copy-actions {
+      margin-block: -7px;
+    }
+    .wb-copy--plain .wb-copy-actions {
+      margin-block: -12px;
+    }
+  }
+}

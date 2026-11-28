@@ -453,6 +453,8 @@ impl core::marker::UnsafeUnpin for agent_access_core::api::RouteAccess
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_core::api::RouteAccess
 impl core::panic::unwind_safe::UnwindSafe for agent_access_core::api::RouteAccess
 pub enum agent_access_core::api::RouteFeature
+pub agent_access_core::api::RouteFeature::AccessKeys
+pub agent_access_core::api::RouteFeature::Applications
 pub agent_access_core::api::RouteFeature::AuditQuery
 impl core::clone::Clone for agent_access_core::api::RouteFeature
 pub fn agent_access_core::api::RouteFeature::clone(&self) -> agent_access_core::api::RouteFeature
@@ -478,6 +480,7 @@ pub struct agent_access_core::api::HttpRouteSpec
 pub agent_access_core::api::HttpRouteSpec::access: agent_access_core::api::RouteAccess
 pub agent_access_core::api::HttpRouteSpec::body_allowed: bool
 pub agent_access_core::api::HttpRouteSpec::body_required: bool
+pub agent_access_core::api::HttpRouteSpec::browser_session_only: bool
 pub agent_access_core::api::HttpRouteSpec::exit_policy: agent_access_core::api::ExitPolicy
 pub agent_access_core::api::HttpRouteSpec::method: alloc::string::String
 pub agent_access_core::api::HttpRouteSpec::null_body_allowed: bool
@@ -1104,6 +1107,121 @@ impl core::marker::UnsafeUnpin for agent_access_core::imports::registration::Imp
 impl !core::panic::unwind_safe::RefUnwindSafe for agent_access_core::imports::registration::ImportedAdapterRegistration
 impl !core::panic::unwind_safe::UnwindSafe for agent_access_core::imports::registration::ImportedAdapterRegistration
 pub mod agent_access_core::managed_store
+pub mod agent_access_core::managed_store::access_keys
+pub enum agent_access_core::managed_store::access_keys::AccessKeyRefusal
+pub agent_access_core::managed_store::access_keys::AccessKeyRefusal::AccessKeyTypeNotEligible
+pub agent_access_core::managed_store::access_keys::AccessKeyRefusal::AccessKeyTypeNotSelfService
+pub agent_access_core::managed_store::access_keys::AccessKeyRefusal::AccessKeyTypeUnknown
+pub agent_access_core::managed_store::access_keys::AccessKeyRefusal::AccountUsernameAwaitingConfirmation
+pub agent_access_core::managed_store::access_keys::AccessKeyRefusal::AccountUsernameReserved
+pub agent_access_core::managed_store::access_keys::AccessKeyRefusal::GroupLimitExceeded
+pub agent_access_core::managed_store::access_keys::AccessKeyRefusal::IdentityAccessMissing
+pub agent_access_core::managed_store::access_keys::AccessKeyRefusal::IdentityAccessPaused
+pub agent_access_core::managed_store::access_keys::AccessKeyRefusal::LifetimeNotOffered
+pub agent_access_core::managed_store::access_keys::AccessKeyRefusal::NoAccountUsername
+pub agent_access_core::managed_store::access_keys::AccessKeyRefusal::OwnerKind
+pub agent_access_core::managed_store::access_keys::AccessKeyRefusal::PrincipalDisabled
+pub agent_access_core::managed_store::access_keys::AccessKeyRefusal::SessionRequired
+impl agent_access_core::managed_store::access_keys::AccessKeyRefusal
+pub const fn agent_access_core::managed_store::access_keys::AccessKeyRefusal::as_str(self) -> &'static str
+impl core::clone::Clone for agent_access_core::managed_store::access_keys::AccessKeyRefusal
+pub fn agent_access_core::managed_store::access_keys::AccessKeyRefusal::clone(&self) -> agent_access_core::managed_store::access_keys::AccessKeyRefusal
+impl core::cmp::Eq for agent_access_core::managed_store::access_keys::AccessKeyRefusal
+impl core::cmp::PartialEq for agent_access_core::managed_store::access_keys::AccessKeyRefusal
+pub fn agent_access_core::managed_store::access_keys::AccessKeyRefusal::eq(&self, &agent_access_core::managed_store::access_keys::AccessKeyRefusal) -> bool
+impl core::fmt::Debug for agent_access_core::managed_store::access_keys::AccessKeyRefusal
+pub fn agent_access_core::managed_store::access_keys::AccessKeyRefusal::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for agent_access_core::managed_store::access_keys::AccessKeyRefusal
+impl core::marker::StructuralPartialEq for agent_access_core::managed_store::access_keys::AccessKeyRefusal
+impl serde_core::ser::Serialize for agent_access_core::managed_store::access_keys::AccessKeyRefusal
+pub fn agent_access_core::managed_store::access_keys::AccessKeyRefusal::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for agent_access_core::managed_store::access_keys::AccessKeyRefusal
+impl core::marker::Send for agent_access_core::managed_store::access_keys::AccessKeyRefusal
+impl core::marker::Sync for agent_access_core::managed_store::access_keys::AccessKeyRefusal
+impl core::marker::Unpin for agent_access_core::managed_store::access_keys::AccessKeyRefusal
+impl core::marker::UnsafeUnpin for agent_access_core::managed_store::access_keys::AccessKeyRefusal
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_core::managed_store::access_keys::AccessKeyRefusal
+impl core::panic::unwind_safe::UnwindSafe for agent_access_core::managed_store::access_keys::AccessKeyRefusal
+pub struct agent_access_core::managed_store::access_keys::AccessKeyRefused
+pub agent_access_core::managed_store::access_keys::AccessKeyRefused::access_key_type: core::option::Option<alloc::string::String>
+pub agent_access_core::managed_store::access_keys::AccessKeyRefused::refusal: agent_access_core::managed_store::access_keys::AccessKeyRefusal
+impl agent_access_core::managed_store::access_keys::AccessKeyRefused
+pub fn agent_access_core::managed_store::access_keys::AccessKeyRefused::audit_details(&self) -> serde_json::value::Value
+pub const fn agent_access_core::managed_store::access_keys::AccessKeyRefused::message(&self) -> &'static str
+pub fn agent_access_core::managed_store::access_keys::AccessKeyRefused::new(agent_access_core::managed_store::access_keys::AccessKeyRefusal) -> Self
+impl core::clone::Clone for agent_access_core::managed_store::access_keys::AccessKeyRefused
+pub fn agent_access_core::managed_store::access_keys::AccessKeyRefused::clone(&self) -> agent_access_core::managed_store::access_keys::AccessKeyRefused
+impl core::cmp::Eq for agent_access_core::managed_store::access_keys::AccessKeyRefused
+impl core::cmp::PartialEq for agent_access_core::managed_store::access_keys::AccessKeyRefused
+pub fn agent_access_core::managed_store::access_keys::AccessKeyRefused::eq(&self, &agent_access_core::managed_store::access_keys::AccessKeyRefused) -> bool
+impl core::fmt::Debug for agent_access_core::managed_store::access_keys::AccessKeyRefused
+pub fn agent_access_core::managed_store::access_keys::AccessKeyRefused::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for agent_access_core::managed_store::access_keys::AccessKeyRefused
+impl serde_core::ser::Serialize for agent_access_core::managed_store::access_keys::AccessKeyRefused
+pub fn agent_access_core::managed_store::access_keys::AccessKeyRefused::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for agent_access_core::managed_store::access_keys::AccessKeyRefused
+impl core::marker::Send for agent_access_core::managed_store::access_keys::AccessKeyRefused
+impl core::marker::Sync for agent_access_core::managed_store::access_keys::AccessKeyRefused
+impl core::marker::Unpin for agent_access_core::managed_store::access_keys::AccessKeyRefused
+impl core::marker::UnsafeUnpin for agent_access_core::managed_store::access_keys::AccessKeyRefused
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_core::managed_store::access_keys::AccessKeyRefused
+impl core::panic::unwind_safe::UnwindSafe for agent_access_core::managed_store::access_keys::AccessKeyRefused
+pub mod agent_access_core::managed_store::account_usernames
+pub enum agent_access_core::managed_store::account_usernames::AccountUsernameRefusal
+pub agent_access_core::managed_store::account_usernames::AccountUsernameRefusal::ConfirmationNotRequired
+pub agent_access_core::managed_store::account_usernames::AccountUsernameRefusal::NameChanged
+pub agent_access_core::managed_store::account_usernames::AccountUsernameRefusal::NameInvalid
+pub agent_access_core::managed_store::account_usernames::AccountUsernameRefusal::NameReserved
+pub agent_access_core::managed_store::account_usernames::AccountUsernameRefusal::NameTaken
+pub agent_access_core::managed_store::account_usernames::AccountUsernameRefusal::NoName
+pub agent_access_core::managed_store::account_usernames::AccountUsernameRefusal::NotHuman
+impl agent_access_core::managed_store::account_usernames::AccountUsernameRefusal
+pub const fn agent_access_core::managed_store::account_usernames::AccountUsernameRefusal::as_str(self) -> &'static str
+pub const fn agent_access_core::managed_store::account_usernames::AccountUsernameRefusal::message(self) -> &'static str
+pub const fn agent_access_core::managed_store::account_usernames::AccountUsernameRefusal::reason_code(self) -> agent_access_provider::reason::ReasonCode
+impl core::clone::Clone for agent_access_core::managed_store::account_usernames::AccountUsernameRefusal
+pub fn agent_access_core::managed_store::account_usernames::AccountUsernameRefusal::clone(&self) -> agent_access_core::managed_store::account_usernames::AccountUsernameRefusal
+impl core::cmp::Eq for agent_access_core::managed_store::account_usernames::AccountUsernameRefusal
+impl core::cmp::PartialEq for agent_access_core::managed_store::account_usernames::AccountUsernameRefusal
+pub fn agent_access_core::managed_store::account_usernames::AccountUsernameRefusal::eq(&self, &agent_access_core::managed_store::account_usernames::AccountUsernameRefusal) -> bool
+impl core::convert::From<agent_access_core::managed_store::account_usernames::AccountUsernameRefusal> for agent_access_core::managed_store::account_usernames::AccountUsernameRefused
+pub fn agent_access_core::managed_store::account_usernames::AccountUsernameRefused::from(agent_access_core::managed_store::account_usernames::AccountUsernameRefusal) -> Self
+impl core::fmt::Debug for agent_access_core::managed_store::account_usernames::AccountUsernameRefusal
+pub fn agent_access_core::managed_store::account_usernames::AccountUsernameRefusal::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for agent_access_core::managed_store::account_usernames::AccountUsernameRefusal
+impl core::marker::StructuralPartialEq for agent_access_core::managed_store::account_usernames::AccountUsernameRefusal
+impl serde_core::ser::Serialize for agent_access_core::managed_store::account_usernames::AccountUsernameRefusal
+pub fn agent_access_core::managed_store::account_usernames::AccountUsernameRefusal::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for agent_access_core::managed_store::account_usernames::AccountUsernameRefusal
+impl core::marker::Send for agent_access_core::managed_store::account_usernames::AccountUsernameRefusal
+impl core::marker::Sync for agent_access_core::managed_store::account_usernames::AccountUsernameRefusal
+impl core::marker::Unpin for agent_access_core::managed_store::account_usernames::AccountUsernameRefusal
+impl core::marker::UnsafeUnpin for agent_access_core::managed_store::account_usernames::AccountUsernameRefusal
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_core::managed_store::account_usernames::AccountUsernameRefusal
+impl core::panic::unwind_safe::UnwindSafe for agent_access_core::managed_store::account_usernames::AccountUsernameRefusal
+pub struct agent_access_core::managed_store::account_usernames::AccountUsernameRefused
+pub agent_access_core::managed_store::account_usernames::AccountUsernameRefused::refusal: agent_access_core::managed_store::account_usernames::AccountUsernameRefusal
+impl agent_access_core::managed_store::account_usernames::AccountUsernameRefused
+pub const fn agent_access_core::managed_store::account_usernames::AccountUsernameRefused::message(&self) -> &'static str
+impl core::clone::Clone for agent_access_core::managed_store::account_usernames::AccountUsernameRefused
+pub fn agent_access_core::managed_store::account_usernames::AccountUsernameRefused::clone(&self) -> agent_access_core::managed_store::account_usernames::AccountUsernameRefused
+impl core::cmp::Eq for agent_access_core::managed_store::account_usernames::AccountUsernameRefused
+impl core::cmp::PartialEq for agent_access_core::managed_store::account_usernames::AccountUsernameRefused
+pub fn agent_access_core::managed_store::account_usernames::AccountUsernameRefused::eq(&self, &agent_access_core::managed_store::account_usernames::AccountUsernameRefused) -> bool
+impl core::convert::From<agent_access_core::managed_store::account_usernames::AccountUsernameRefusal> for agent_access_core::managed_store::account_usernames::AccountUsernameRefused
+pub fn agent_access_core::managed_store::account_usernames::AccountUsernameRefused::from(agent_access_core::managed_store::account_usernames::AccountUsernameRefusal) -> Self
+impl core::fmt::Debug for agent_access_core::managed_store::account_usernames::AccountUsernameRefused
+pub fn agent_access_core::managed_store::account_usernames::AccountUsernameRefused::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for agent_access_core::managed_store::account_usernames::AccountUsernameRefused
+impl serde_core::ser::Serialize for agent_access_core::managed_store::account_usernames::AccountUsernameRefused
+pub fn agent_access_core::managed_store::account_usernames::AccountUsernameRefused::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for agent_access_core::managed_store::account_usernames::AccountUsernameRefused
+impl core::marker::Send for agent_access_core::managed_store::account_usernames::AccountUsernameRefused
+impl core::marker::Sync for agent_access_core::managed_store::account_usernames::AccountUsernameRefused
+impl core::marker::Unpin for agent_access_core::managed_store::account_usernames::AccountUsernameRefused
+impl core::marker::UnsafeUnpin for agent_access_core::managed_store::account_usernames::AccountUsernameRefused
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_core::managed_store::account_usernames::AccountUsernameRefused
+impl core::panic::unwind_safe::UnwindSafe for agent_access_core::managed_store::account_usernames::AccountUsernameRefused
 pub mod agent_access_core::managed_store::agent_token_issuance
 #[non_exhaustive] pub enum agent_access_core::managed_store::agent_token_issuance::TokenIssuanceDenial
 pub agent_access_core::managed_store::agent_token_issuance::TokenIssuanceDenial::ContextNotAllowed
@@ -1371,6 +1489,9 @@ impl core::marker::UnsafeUnpin for agent_access_core::managed_store::resources::
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_core::managed_store::resources::audit::CatalogAuditEntity
 impl core::panic::unwind_safe::UnwindSafe for agent_access_core::managed_store::resources::audit::CatalogAuditEntity
 pub enum agent_access_core::managed_store::ManagedStoreError
+pub agent_access_core::managed_store::ManagedStoreError::AccessKeyNotFound
+pub agent_access_core::managed_store::ManagedStoreError::AccessKeyRefused(agent_access_core::managed_store::access_keys::AccessKeyRefused)
+pub agent_access_core::managed_store::ManagedStoreError::AccountUsernameRefused(agent_access_core::managed_store::account_usernames::AccountUsernameRefused)
 pub agent_access_core::managed_store::ManagedStoreError::ApplicationAccessDenied(agent_access_core::managed_store::application_access::ApplicationConnectDenial)
 pub agent_access_core::managed_store::ManagedStoreError::ApplicationAccessNotFound
 pub agent_access_core::managed_store::ManagedStoreError::ApplicationAuthorizationCapacity
@@ -1874,6 +1995,8 @@ enum agent_access_core::imports::definition::ImportedCredentialPurpose: exhausti
 enum agent_access_core::imports::definition::ImportedDiscoveryCredential: exhaustive
 enum agent_access_core::imports::metadata::ImportedCredentialKind: exhaustive
 enum agent_access_core::managed_store::ManagedStoreError: exhaustive
+enum agent_access_core::managed_store::access_keys::AccessKeyRefusal: exhaustive
+enum agent_access_core::managed_store::account_usernames::AccountUsernameRefusal: exhaustive
 enum agent_access_core::managed_store::agent_token_issuance::TokenIssuanceDenial: non-exhaustive
 enum agent_access_core::managed_store::application_access::ApplicationConnectDenial: non-exhaustive
 enum agent_access_core::managed_store::imported_store::ImportedActionStatus: exhaustive
@@ -1921,6 +2044,8 @@ struct agent_access_core::managed_store::ImportBlockingResourceGroup: named fiel
 struct agent_access_core::managed_store::ImportChangeBlocked: named fields, non-exhaustive
 struct agent_access_core::managed_store::ManagedPolicyGrantRecord: named fields
 struct agent_access_core::managed_store::PolicyValidationIssue: named fields
+struct agent_access_core::managed_store::access_keys::AccessKeyRefused: named fields
+struct agent_access_core::managed_store::account_usernames::AccountUsernameRefused: named fields
 struct agent_access_core::managed_store::imported_documents::ImportedDocumentMetadata: named fields, non-exhaustive
 struct agent_access_core::managed_store::imported_store::ImportedActionRecord: named fields
 struct agent_access_core::managed_store::imported_store::ImportedCatalog: named fields

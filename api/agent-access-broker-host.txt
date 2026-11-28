@@ -292,6 +292,8 @@ impl core::marker::UnsafeUnpin for agent_access_core::api::RouteAccess
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_core::api::RouteAccess
 impl core::panic::unwind_safe::UnwindSafe for agent_access_core::api::RouteAccess
 pub enum agent_access_core::api::RouteFeature
+pub agent_access_core::api::RouteFeature::AccessKeys
+pub agent_access_core::api::RouteFeature::Applications
 pub agent_access_core::api::RouteFeature::AuditQuery
 impl core::clone::Clone for agent_access_core::api::RouteFeature
 pub fn agent_access_core::api::RouteFeature::clone(&self) -> agent_access_core::api::RouteFeature
@@ -317,6 +319,7 @@ pub struct agent_access_core::api::HttpRouteSpec
 pub agent_access_core::api::HttpRouteSpec::access: agent_access_core::api::RouteAccess
 pub agent_access_core::api::HttpRouteSpec::body_allowed: bool
 pub agent_access_core::api::HttpRouteSpec::body_required: bool
+pub agent_access_core::api::HttpRouteSpec::browser_session_only: bool
 pub agent_access_core::api::HttpRouteSpec::exit_policy: agent_access_core::api::ExitPolicy
 pub agent_access_core::api::HttpRouteSpec::method: alloc::string::String
 pub agent_access_core::api::HttpRouteSpec::null_body_allowed: bool

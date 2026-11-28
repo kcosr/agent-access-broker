@@ -4,7 +4,7 @@
 import { useMemo } from "react";
 import { useNavigate } from "react-router";
 import { brokerApi } from "../api";
-import type { MicrosoftEnrollment, PrincipalRole, PrincipalAgentTokenIssuanceSetting } from "../types";
+import type { MicrosoftEnrollment, PrincipalAccessKeyTypes, PrincipalRole, PrincipalAgentTokenIssuanceSetting } from "../types";
 import { generateTemporaryPassword } from "../lib/helpers";
 import { useToast } from "../workbench";
 import { paths } from "../app/paths";
@@ -38,6 +38,8 @@ export function usePrincipalActions() {
       invalidate.oauthConnections();
       invalidate.admin();
       invalidate.agentTokenOptions();
+      // Memberships, emails and usernames decide what the signed-in person may hold and issue.
+      invalidate.accessKeys();
       void invalidate.session();
     }
 
@@ -93,15 +95,18 @@ export function usePrincipalActions() {
       setModal(enrollLocal ? { type: "passwordReveal", principalId, password: generatedPassword, action: "created" } : null);
     }
 
+    /** Saves profile fields; the result says what an email change did to a person's username. */
     async function patch(principalId: string, change: PrincipalPatch) {
-      await attempt((current) => brokerApi.adminPatchPrincipal(current, principalId, change));
+      const saved = await attempt((current) => brokerApi.adminPatchPrincipal(current, principalId, change));
       toast(change.status === "disabled" ? "Principal disabled" : change.status === "active" ? "Principal enabled" : "Profile saved", { tone: "success" });
       refreshMembership();
+      return saved;
     }
 
-    async function setAccess(principalId: string, change: { role?: PrincipalRole; selfServiceEnabled?: boolean; agentTokenIssuance?: PrincipalAgentTokenIssuanceSetting }) {
+    async function setAccess(principalId: string, change: { role?: PrincipalRole; selfServiceEnabled?: boolean; agentTokenIssuance?: PrincipalAgentTokenIssuanceSetting; accessKeyTypes?: PrincipalAccessKeyTypes }) {
       const saved = await attempt((current) => brokerApi.adminSetAccess(current, principalId, change));
       toast("Account access updated", { tone: "success" });
+      invalidate.accessKeys();
       invalidate.admin();
       invalidate.agentTokenOptions();
       await invalidate.session();

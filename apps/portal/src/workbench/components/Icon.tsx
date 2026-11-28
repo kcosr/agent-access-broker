@@ -79,8 +79,17 @@ const PATHS = {
       <circle cx="5.25" cy="5.25" r="1" fill="currentColor" stroke="none" />
     </>
   ),
+  ticket: (
+    <path d="M2.75 3.25h10.5a1 1 0 0 1 1 1v2a1.75 1.75 0 0 0 0 3.5v2a1 1 0 0 1-1 1H2.75a1 1 0 0 1-1-1v-2a1.75 1.75 0 0 0 0-3.5v-2a1 1 0 0 1 1-1z" />
+  ),
   star: (
     <path d="M8 1.75l1.93 3.9 4.3.63-3.11 3.03.73 4.28L8 11.57l-3.85 2.02.73-4.28L1.77 6.28l4.3-.63z" />
+  ),
+  sparkles: (
+    <>
+      <path d="m6 2.5 1.4 4.1L11.5 8l-4.1 1.4L6 13.5 4.6 9.4.5 8l4.1-1.4L6 2.5Z" />
+      <path d="M12.5 1v4M10.5 3h4M13.5 10v4M11.5 12h4" />
+    </>
   ),
   "star-fill": (
     <path
@@ -198,6 +207,13 @@ const PATHS = {
       {dot(3.5, 8)}
       {dot(8, 8)}
       {dot(12.5, 8)}
+    </>
+  ),
+  "more-vertical": (
+    <>
+      {dot(8, 3.5)}
+      {dot(8, 8)}
+      {dot(8, 12.5)}
     </>
   ),
   eye: (
@@ -350,6 +366,8 @@ const PATHS = {
   "arrows-up-down": (
     <path d="M5 13V3M2.5 5.5L5 3l2.5 2.5M11 3v10M8.5 10.5L11 13l2.5-2.5" />
   ),
+  maximize: <path d="M10 2.5h3.5V6M13.5 2.5L9 7M6 13.5H2.5V10M2.5 13.5L7 9" />,
+  minimize: <path d="M9.5 3v3.5H13M9.5 6.5L14 2M6.5 13V9.5H3M6.5 9.5L2 14" />,
   database: (
     <>
       <ellipse cx="8" cy="3.75" rx="5.25" ry="1.75" />

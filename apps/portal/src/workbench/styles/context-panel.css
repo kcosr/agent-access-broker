@@ -1,0 +1,60 @@
+@layer wb.components {
+  .wb-context-panel {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    max-height: calc(100dvh - 48px);
+    overflow: hidden;
+    border: 1px solid var(--wb-border);
+    border-radius: var(--wb-radius-card);
+    background: var(--wb-surface);
+    box-shadow: var(--wb-shadow-pop);
+  }
+
+  .wb-context-panel-head {
+    display: flex;
+    flex: none;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 12px 10px 16px;
+    border-bottom: 1px solid var(--wb-border);
+  }
+
+  .wb-context-panel-head h2,
+  .wb-context-panel--overlay .wb-modal-title {
+    margin: 0;
+    font-size: var(--wb-fs-13);
+    font-weight: var(--wb-fw-semibold);
+  }
+
+  .wb-context-panel-body,
+  .wb-context-panel--overlay .wb-modal-body {
+    min-height: 0;
+    overflow: auto;
+    padding: 0;
+  }
+
+  .wb-context-panel-foot,
+  .wb-context-panel--overlay .wb-modal-foot {
+    flex: none;
+    display: block;
+    padding: 10px 16px;
+    border-top: 1px solid var(--wb-border);
+    color: var(--wb-muted);
+    font-size: var(--wb-fs-11);
+  }
+
+  .wb-context-panel--overlay {
+    width: min(340px, calc(100vw - 24px));
+  }
+
+  @media (max-width: 760px) {
+    .wb-context-panel--overlay {
+      top: auto;
+      bottom: max(12px, env(safe-area-inset-bottom));
+      width: calc(100vw - 24px);
+      max-height: calc(100dvh - 36px - env(safe-area-inset-bottom));
+    }
+  }
+}

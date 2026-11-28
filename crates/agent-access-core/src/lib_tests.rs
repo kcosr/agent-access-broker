@@ -822,6 +822,407 @@ fn applications_validate_their_registration_and_prerequisites() {
     }
 }
 
+/// The production sample with one access key type and username settings.
+fn access_key_config() -> BrokerConfig {
+    let raw =
+        fs::read_to_string(workspace_root().join("agent-access-broker.production.sample.toml"))
+            .unwrap();
+    let raw = format!(
+        "{raw}\n[access_key_types.inference]\n\
+         display_name = \"Model inference\"\n\
+         lifetime_options = [\"30d\"]\n\
+         default_lifetime = \"30d\"\n\
+         \n[usernames]\n\
+         email_domains = [\"example.com\"]\n\
+         reserved_names = [\"root\"]\n\
+         existing_usernames = [\"alice\"]\n"
+    );
+    parse_test_config(&raw).unwrap()
+}
+
+#[test]
+fn access_key_types_and_account_usernames_validate_their_settings_and_prerequisites() {
+    let config = access_key_config();
+    validate_broker_config(&config).unwrap();
+    let parsed = &config.access_key_types["inference"];
+    assert!(!parsed.self_service);
+    let loaded = AccessKeyTypes::from_config(&config).unwrap();
+    let current = loaded.get("inference").unwrap();
+    assert_eq!(current.lifetime_options, ["30d"]);
+    assert_eq!(current.default_lifetime, "30d");
+    assert_eq!(current.description, None);
+    assert_eq!(loaded.iter().count(), 1);
+    let policy = AccountUsernamePolicy::from_config(&config).unwrap();
+    assert!(policy.is_reserved("root"));
+    assert!(policy.requires_confirmation("alice"));
+    assert_eq!(policy.candidate(Some("Bob@example.com")).unwrap(), "bob");
+    // Without the tables nothing is derived, reserved or awaiting.
+    let empty = parse_test_config(
+        &fs::read_to_string(workspace_root().join("agent-access-broker.production.sample.toml"))
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(AccessKeyTypes::from_config(&empty).unwrap().is_empty());
+    assert_eq!(
+        AccountUsernamePolicy::from_config(&empty).unwrap(),
+        AccountUsernamePolicy::default()
+    );
+
+    let invalid = |change: &dyn Fn(&mut BrokerConfig), expected: &str| {
+        let mut changed = config.clone();
+        change(&mut changed);
+        assert_contains(
+            &validation_errors(validate_broker_config(&changed)),
+            expected,
+        );
+    };
+    fn inference(config: &mut BrokerConfig) -> &mut AccessKeyTypeConfig {
+        config.access_key_types.get_mut("inference").unwrap()
+    }
+    // An access key type or a username setting under TOML identity authority,
+    // or without the store and token key the tokens need, is refused with
+    // the reason.
+    let prerequisites = "access_key_types and usernames require identity.authority = \"managed\", [managed_store] and [broker_tokens]: access keys and usernames exist only for managed accounts";
+    invalid(
+        &|config| config.identity.authority = "toml".into(),
+        prerequisites,
+    );
+    invalid(
+        &|config| {
+            config.identity.authority = "toml".into();
+            config.access_key_types.clear();
+            config.usernames.reserved_names = vec!["root".into()];
+        },
+        prerequisites,
+    );
+    invalid(
+        &|config| {
+            config.identity.authority = "toml".into();
+            config.usernames = Default::default();
+        },
+        prerequisites,
+    );
+    invalid(&|config| config.broker_tokens = None, prerequisites);
+    invalid(
+        &|config| {
+            config.access_key_types.clear();
+            config.broker_tokens = None;
+        },
+        prerequisites,
+    );
+    for id in ["Inference", "9lives", "has.dot", ""] {
+        invalid(
+            &|config| {
+                let copy = inference(config).clone();
+                config.access_key_types.insert(id.into(), copy);
+            },
+            "has an invalid access key type ID",
+        );
+    }
+    for name in ["", " Padded", "line\nbreak"] {
+        invalid(
+            &|config| inference(config).display_name = name.into(),
+            "access_key_types.inference.display_name must be 1 to 128 bytes",
+        );
+    }
+    // A description is optional plain text for people, bounded like the
+    // display name but longer.
+    for description in ["", " Padded", "line\nbreak", "tab\there"]
+        .map(String::from)
+        .into_iter()
+        .chain(["d".repeat(1025)])
+    {
+        invalid(
+            &|config| inference(config).description = Some(description.clone()),
+            "access_key_types.inference.description must be 1 to 1024 bytes without control characters or surrounding whitespace",
+        );
+    }
+    let mut described = config.clone();
+    let text = "Point your tool at https://gateway.example.com/v1.";
+    inference(&mut described).description = Some(text.into());
+    validate_broker_config(&described).unwrap();
+    assert_eq!(
+        AccessKeyTypes::from_config(&described)
+            .unwrap()
+            .get("inference")
+            .unwrap()
+            .description
+            .as_deref(),
+        Some(text)
+    );
+    inference(&mut described).description = Some("d".repeat(1024));
+    validate_broker_config(&described).unwrap();
+    for lifetime in ["", "0s", "forever", "3651d"] {
+        invalid(
+            &|config| inference(config).lifetime_options = vec![lifetime.into()],
+            "access_key_types.inference.lifetime_options entries must be positive durations of at most 3650d",
+        );
+    }
+    for domains in [
+        vec!["Example.com"],
+        vec!["example.com", "example.com"],
+        vec!["@example.com"],
+        vec![""],
+    ] {
+        invalid(
+            &|config| {
+                config.usernames.email_domains =
+                    domains.iter().map(|domain| (*domain).into()).collect();
+            },
+            "usernames.email_domains must list distinct lower-case domain names",
+        );
+    }
+    invalid(
+        &|config| config.usernames.reserved_names = vec!["has/slash".into()],
+        "usernames.reserved_names must list distinct usernames",
+    );
+    invalid(
+        &|config| config.usernames.existing_usernames = vec!["bob".into(), "bob".into()],
+        "usernames.existing_usernames must list distinct usernames",
+    );
+    invalid(
+        &|config| config.usernames.existing_usernames = vec!["root".into()],
+        "usernames.existing_usernames must not repeat a name in usernames.reserved_names",
+    );
+    // An unknown key is a parse error, never ignored.
+    for extra in [
+        "[access_key_types.inference]\ndisplay_name = \"Model inference\"\nlifetime_options = [\"1d\"]\ndefault_lifetime = \"1d\"\nscope = \"all\"\n",
+        // A type names no contexts: the key is unknown, never ignored.
+        "[access_key_types.inference]\ndisplay_name = \"Model inference\"\nexecution_contexts = [\"default\"]\nlifetime_options = [\"1d\"]\ndefault_lifetime = \"1d\"\n",
+        // Who may hold a type is each account's access key type setting; a
+        // group list in configuration is not read.
+        "[access_key_types.inference]\ndisplay_name = \"Model inference\"\nlifetime_options = [\"1d\"]\ndefault_lifetime = \"1d\"\ngroups = [\"platform\"]\n",
+        "[access_key_types.inference]\ndisplay_name = \"Model inference\"\n",
+        "[usernames]\nderive = true\n",
+        // An access key type is a table: its values in order are not one.
+        "[access_key_types]\ninference = [\"Model inference\", \"Runs models\", \"1d\", true]\n",
+    ] {
+        let mut complete =
+            fs::read_to_string(workspace_root().join("agent-access-broker.production.sample.toml"))
+                .unwrap();
+        complete.push_str(extra);
+        assert!(parse_test_config(&complete).is_err(), "{extra}");
+    }
+}
+
+#[test]
+fn access_key_type_and_account_username_tables_are_never_read_from_arrays() {
+    #[derive(Debug, Deserialize)]
+    struct Tables {
+        #[serde(default)]
+        access_key_types: BTreeMap<String, AccessKeyTypeConfig>,
+        #[serde(default)]
+        usernames: AccountUsernamesConfig,
+    }
+    let tables: Tables = toml::from_str(
+        "[access_key_types.inference]\ndisplay_name = \"Model inference\"\ndescription = \"Runs models\"\nlifetime_options = [\"1d\"]\ndefault_lifetime = \"1d\"\nself_service = true\n\n[usernames]\nemail_domains = [\"example.com\"]\nreserved_names = [\"root\"]\n",
+    )
+    .unwrap();
+    assert!(tables.access_key_types["inference"].self_service);
+    assert_eq!(
+        tables.access_key_types["inference"].description.as_deref(),
+        Some("Runs models")
+    );
+    assert_eq!(tables.usernames.email_domains, ["example.com"]);
+    assert_eq!(tables.usernames.reserved_names, ["root"]);
+    // The same values by position, which a derived reader would take as the
+    // keys in order.
+    for positional in [
+        "[access_key_types]\ninference = [\"Model inference\", \"Runs models\", \"1d\", true]\n",
+        "[access_key_types]\ninference = [\"Model inference\", \"Runs models\", \"1d\"]\n",
+        "usernames = [[\"example.com\"], [\"root\"], []]\n",
+        "usernames = [[\"example.com\"]]\n",
+        "usernames = []\n",
+    ] {
+        assert!(
+            toml::from_str::<Tables>(positional).is_err(),
+            "{positional}"
+        );
+    }
+}
+
+/// The largest answer the limits admit fits the answer limit, so no
+/// configuration is refused for the size of its answers. The answer here is
+/// written out independently of the sizing in the store.
+#[test]
+fn the_largest_resolution_answer_the_limits_admit_fits() {
+    const TIME: &str = "2026-12-31T23:59:59Z";
+    let largest = |kind: &str, origin: &str, expiry: Option<&str>, valid_until: Option<&str>| {
+        serde_json::to_vec(&serde_json::json!({
+            "active": true,
+            "subject": {"kind": kind, "id": "s".repeat(256)},
+            "usernameIncarnation": "n".repeat(64),
+            "groups": vec!["g".repeat(128); 64],
+            "types": (0..16)
+                .map(|index| serde_json::json!({
+                    "name": format!("{}{index:02}", "t".repeat(62)),
+                    "validUntil": valid_until,
+                }))
+                .collect::<Vec<_>>(),
+            "origin": origin,
+            "application": null,
+            "keyId": format!("ak_{}", "k".repeat(60)),
+            "expiresAt": expiry,
+        }))
+        .unwrap()
+        .len()
+    };
+    // An administrator's key for a service account is the largest of the
+    // answers that can be emitted.
+    let written = largest("service_account", "administrator", Some(TIME), Some(TIME));
+    assert!(written > largest("user", "administrator", Some(TIME), Some(TIME)));
+    assert!(written > largest("user", "portal", Some(TIME), Some(TIME)));
+    assert_eq!(largest_access_key_resolution_answer_bytes(), written);
+    assert_eq!(written, 10_755);
+    assert!(written <= ACCESS_KEY_RESOLUTION_MAX_ANSWER_BYTES);
+    // Both permitted null-expiry forms are smaller than the finite bound.
+    assert!(largest("service_account", "administrator", None, Some(TIME)) < written);
+    assert!(largest("service_account", "administrator", None, None) < written);
+    // Any number of access key types with the longest IDs is accepted: a key
+    // carries at most sixteen of them.
+    let mut config = access_key_config();
+    let template = config.access_key_types.remove("inference").unwrap();
+    for index in 0..40 {
+        config
+            .access_key_types
+            .insert(format!("{}{index:02}", "t".repeat(62)), template.clone());
+    }
+    validate_broker_config(&config).unwrap();
+    assert_eq!(
+        AccessKeyTypes::from_config(&config).unwrap().iter().count(),
+        40
+    );
+}
+
+#[test]
+fn access_key_resolution_capability_and_limits_validate() {
+    let mut config = access_key_config();
+    config.identity.trusted_callers.insert(
+        "proxy".into(),
+        TrustedCallerConfig {
+            credential_ref: "file:/etc/agent-access-broker/secrets/proxy-caller".into(),
+            credential_transport: TrustedCallerCredentialTransport::CallerAuthorization,
+            username_namespace: None,
+            context_mode: TrustedCallerContextMode::Fixed,
+            execution_context: Some("default".into()),
+            allowed_execution_contexts: None,
+            allow_forwarded_identity: false,
+            allow_access_key_resolution: true,
+        },
+    );
+    validate_broker_config(&config).unwrap();
+    let invalid = |change: &dyn Fn(&mut BrokerConfig), expected: &str| {
+        let mut changed = config.clone();
+        change(&mut changed);
+        assert_contains(
+            &validation_errors(validate_broker_config(&changed)),
+            expected,
+        );
+    };
+    fn proxy(config: &mut BrokerConfig) -> &mut TrustedCallerConfig {
+        config.identity.trusted_callers.get_mut("proxy").unwrap()
+    }
+    invalid(
+        &|config| {
+            let caller = proxy(config);
+            caller.credential_transport = TrustedCallerCredentialTransport::AuthorizationUser;
+            caller.username_namespace = Some("linux".into());
+        },
+        "identity.trusted_callers.proxy.allow_access_key_resolution requires credential_transport = \"caller_authorization\"",
+    );
+    // A caller is granted access key resolution only under managed identity
+    // authority, with the store and token key the tokens need.
+    let prerequisites = "identity.trusted_callers.proxy.allow_access_key_resolution requires identity.authority = \"managed\", [managed_store] and [broker_tokens]: access keys exist only for managed accounts";
+    invalid(
+        &|config| config.identity.authority = "toml".into(),
+        prerequisites,
+    );
+    invalid(&|config| config.broker_tokens = None, prerequisites);
+    invalid(&|config| config.managed_store = None, prerequisites);
+    invalid(
+        &|config| config.limits.max_concurrent_access_key_resolutions = 0,
+        "limits.max_concurrent_access_key_resolutions must be non-zero",
+    );
+    invalid(
+        &|config| config.limits.access_key_resolutions_per_caller_per_minute = 0,
+        "limits.access_key_resolutions_per_caller_per_minute must be non-zero",
+    );
+    invalid(
+        &|config| {
+            config
+                .limits
+                .max_concurrent_access_key_resolutions_per_caller = 0
+        },
+        "limits.max_concurrent_access_key_resolutions_per_caller must be non-zero",
+    );
+    // One caller's share is never more than the pool.
+    invalid(
+        &|config| {
+            config
+                .limits
+                .max_concurrent_access_key_resolutions_per_caller = 33
+        },
+        "limits.max_concurrent_access_key_resolutions_per_caller (33) must not exceed limits.max_concurrent_access_key_resolutions (32)",
+    );
+    invalid(
+        &|config| config.limits.max_concurrent_access_key_resolutions = 16,
+        "limits.max_concurrent_access_key_resolutions_per_caller (24) must not exceed limits.max_concurrent_access_key_resolutions (16)",
+    );
+    // The one resolving caller of a configuration may be given the whole
+    // pool; where a second one resolves, neither may.
+    let whole_pool = |config: &mut BrokerConfig| {
+        config
+            .limits
+            .max_concurrent_access_key_resolutions_per_caller =
+            config.limits.max_concurrent_access_key_resolutions;
+    };
+    let mut alone = config.clone();
+    whole_pool(&mut alone);
+    validate_broker_config(&alone).unwrap();
+    invalid(
+        &|config| {
+            whole_pool(config);
+            let second = proxy(config).clone();
+            config
+                .identity
+                .trusted_callers
+                .insert("second".into(), second);
+        },
+        "limits.max_concurrent_access_key_resolutions_per_caller (32) must be less than limits.max_concurrent_access_key_resolutions (32) when more than one trusted caller has allow_access_key_resolution: no caller may be able to hold the whole pool",
+    );
+    assert_eq!(config.limits.max_concurrent_access_key_resolutions, 32);
+    assert_eq!(
+        config
+            .limits
+            .max_concurrent_access_key_resolutions_per_caller,
+        24
+    );
+    assert_eq!(
+        config.limits.access_key_resolutions_per_caller_per_minute,
+        6000
+    );
+    // The capability is a strictly parsed Boolean that defaults to off.
+    let raw = |extra: &str| {
+        let mut complete =
+            fs::read_to_string(workspace_root().join("agent-access-broker.production.sample.toml"))
+                .unwrap();
+        complete.push_str(&format!(
+            "\n[identity.trusted_callers.proxy]\ncredential_ref = \"env:PROXY_CALLER\"\ncontext_mode = \"fixed\"\nexecution_context = \"default\"\n{extra}\n"
+        ));
+        parse_test_config(&complete)
+    };
+    assert!(!raw("").unwrap().identity.trusted_callers["proxy"].allow_access_key_resolution);
+    assert!(
+        raw("allow_access_key_resolution = true")
+            .unwrap()
+            .identity
+            .trusted_callers["proxy"]
+            .allow_access_key_resolution
+    );
+    assert!(raw("allow_access_key_resolution = \"yes\"").is_err());
+    assert!(raw("allow_resolution = true").is_err());
+}
+
 #[test]
 fn application_client_secrets_follow_the_caller_credential_rules() {
     let directory = tempfile::tempdir().unwrap();
@@ -7814,6 +8215,7 @@ execution_context = "default"
         (
             TrustedCallerConfig {
                 allow_forwarded_identity: true,
+                allow_access_key_resolution: false,
                 ..direct.clone()
             },
             "forbids allow_forwarded_identity",
@@ -7967,4 +8369,138 @@ fn git_baseline_common_projection(config: &GatewayConfig) -> serde_json::Value {
         "streamingIdleTimeoutMs": config.streaming_idle_timeout_ms,
         "correlationHeaders": config.correlation_headers,
     })
+}
+
+#[test]
+fn access_key_resolution_config_uses_objects_and_string_enums_only() {
+    use serde_json::json;
+    let caller = json!({"credential_ref":"file:caller", "context_mode":"fixed", "execution_context":"default", "allow_access_key_resolution":true});
+    assert!(
+        serde_json::from_value::<TrustedCallerConfig>(caller.clone())
+            .unwrap()
+            .allow_access_key_resolution
+    );
+    let positional = json!([
+        "file:caller",
+        "caller_authorization",
+        null,
+        "fixed",
+        "default",
+        null,
+        false,
+        true
+    ]);
+    assert!(serde_json::from_value::<TrustedCallerConfig>(positional).is_err());
+    for (field, value) in [
+        ("context_mode", json!({"fixed":null})),
+        ("credential_transport", json!({"caller_authorization":null})),
+    ] {
+        let mut bad = caller.clone();
+        bad[field] = value;
+        assert!(serde_json::from_value::<TrustedCallerConfig>(bad).is_err());
+    }
+    for spelling in ["caller_authorization", "authorization_user"] {
+        assert!(
+            serde_json::from_value::<TrustedCallerCredentialTransport>(json!(spelling)).is_ok()
+        );
+    }
+    for spelling in ["fixed", "asserted"] {
+        assert!(serde_json::from_value::<TrustedCallerContextMode>(json!(spelling)).is_ok());
+    }
+    assert!(serde_json::from_value::<LimitsConfig>(json!({"upload_spool_dir":"spool"})).is_ok());
+    assert!(
+        serde_json::from_value::<LimitsConfig>(json!([
+            {},
+            120,
+            240,
+            64,
+            16,
+            32,
+            8,
+            6000,
+            1024,
+            1024,
+            1024,
+            1000,
+            1000,
+            1000,
+            "spool",
+            1024
+        ]))
+        .is_err()
+    );
+    assert!(serde_json::from_value::<LimitsConfig>(json!(null)).is_err());
+    #[derive(Deserialize)]
+    struct Tables {
+        caller: TrustedCallerConfig,
+        limits: LimitsConfig,
+    }
+    let valid: Tables = toml::from_str("[caller]\ncredential_ref='file:caller'\ncontext_mode='fixed'\nallow_access_key_resolution=true\n[limits]\nupload_spool_dir='spool'\n").unwrap();
+    assert!(valid.caller.allow_access_key_resolution);
+    assert_eq!(valid.limits.upload_spool_dir, "spool");
+    assert!(toml::from_str::<Tables>("caller=['file:caller','caller_authorization','users','fixed','default',[],false,true]\n[limits]\nupload_spool_dir='spool'\n").is_err());
+    assert!(toml::from_str::<Tables>("[caller]\ncredential_ref='file:caller'\ncontext_mode={fixed={}}\n[limits]\nupload_spool_dir='spool'\n").is_err());
+}
+
+#[test]
+fn access_key_lifetime_options_require_distinct_bounded_choices_and_an_offered_default() {
+    let baseline = access_key_config();
+    let configured = |choices: &[&str], default: &str| {
+        let mut config = baseline.clone();
+        let kind = config.access_key_types.get_mut("inference").unwrap();
+        kind.lifetime_options = choices.iter().map(|value| (*value).into()).collect();
+        kind.default_lifetime = default.into();
+        config
+    };
+    for (choices, default) in [
+        (vec![], "1h"),
+        (vec!["0s"], "0s"),
+        (vec!["3651d"], "3651d"),
+        (vec!["1h", "60m"], "1h"),
+        (vec!["never", "never"], "never"),
+        (vec!["1h"], "2h"),
+        (vec!["never"], "1h"),
+        (vec!["Never"], "Never"),
+        (vec![" never "], "never"),
+        (vec!["1 h"], "1 h"),
+        (vec!["+1h"], "+1h"),
+        (vec!["18446744073709551615d"], "1h"),
+    ] {
+        assert!(
+            AccessKeyTypes::from_config(&configured(&choices, default)).is_err(),
+            "{choices:?} / {default}"
+        );
+    }
+    let seventeen = (1..=17).map(|n| format!("{n}h")).collect::<Vec<_>>();
+    let seventeen_refs = seventeen.iter().map(String::as_str).collect::<Vec<_>>();
+    assert!(AccessKeyTypes::from_config(&configured(&seventeen_refs, "1h")).is_err());
+    assert!(AccessKeyTypes::from_config(&configured(&seventeen_refs[..16], "1h")).is_ok());
+    let config = configured(&["never", "01h", "3650d", "30m"], "60m");
+    let types = AccessKeyTypes::from_config(&config).unwrap();
+    let kind = types.get("inference").unwrap();
+    assert_eq!(kind.lifetime_options, ["never", "01h", "3650d", "30m"]);
+    assert_eq!(kind.default_lifetime, "60m");
+    assert_eq!(kind.maximum_lifetime_seconds(), None);
+    let finite = AccessKeyTypes::from_config(&configured(&["30m", "3650d", "1h"], "60m")).unwrap();
+    assert_eq!(
+        finite.get("inference").unwrap().maximum_lifetime_seconds(),
+        Some(3650 * 24 * 3600)
+    );
+    let projection = serde_json::to_value(kind).unwrap();
+    assert_eq!(
+        projection["lifetimeOptions"],
+        serde_json::json!(["never", "01h", "3650d", "30m"])
+    );
+    assert_eq!(projection["defaultLifetime"], "60m");
+    assert!(projection.get("maxKeyLifetimeSeconds").is_none());
+    // Every required member stands alone; no obsolete field is an alias.
+    for raw in [
+        "display_name = 'Inference'\nlifetime_options = ['1h']",
+        "display_name = 'Inference'\ndefault_lifetime = '1h'",
+        "display_name = 'Inference'\nlifetime_options = []\ndefault_lifetime = '1h'\nmax_key_lifetime = '1h'",
+        "display_name = 'Inference'\nlifetime_options = [3600]\ndefault_lifetime = '1h'",
+        "display_name = 'Inference'\nlifetime_options = ['1h']\ndefault_lifetime = 3600",
+    ] {
+        assert!(toml::from_str::<AccessKeyTypeConfig>(raw).is_err(), "{raw}");
+    }
 }

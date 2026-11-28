@@ -448,7 +448,7 @@ export function AuditDrawer({ scope, open, onSelect, onClose, returnFocus, princ
   const filterItems: MenuEntry[] = [];
   if (applyFilter) {
     filterItems.push({ id: "request", label: "Filter to this request", icon: "filter", onSelect: () => applyFilter({ requestId: record.brokerRequestId }) });
-    if (token.id) filterItems.push({ id: "token", label: "Filter to this token", icon: "key", onSelect: () => applyFilter({ tokenId: token.id ?? "" }) });
+    if (token.id) filterItems.push({ id: "token", label: "Filter to this token", icon: "ticket", onSelect: () => applyFilter({ tokenId: token.id ?? "" }) });
     if (admin && !embedded) filterItems.push({ id: "principal", label: "Filter to this principal", icon: "user", onSelect: () => applyFilter({ principal: record.principal }) });
   } else {
     filterItems.push({
@@ -458,7 +458,7 @@ export function AuditDrawer({ scope, open, onSelect, onClose, returnFocus, princ
       href: auditRecordPath("admin", record, { principal: record.principal, requestId: record.brokerRequestId })
     });
     if (token.id) {
-      filterItems.push({ id: "token", label: "Show this token in Audit", icon: "key", href: auditRecordPath("admin", record, { principal: record.principal, tokenId: token.id }) });
+      filterItems.push({ id: "token", label: "Show this token in Audit", icon: "ticket", href: auditRecordPath("admin", record, { principal: record.principal, tokenId: token.id }) });
     }
   }
 
@@ -525,7 +525,7 @@ export function AuditDrawer({ scope, open, onSelect, onClose, returnFocus, princ
             </Button>
           ) : null}
           {tokenLink ? (
-            <Button icon="key" href={tokenLink}>
+            <Button icon="ticket" href={tokenLink}>
               View token
             </Button>
           ) : null}

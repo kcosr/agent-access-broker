@@ -68,6 +68,12 @@ selections and applies the authorized credential mode. Agents discover their
 available actions and resources. Administrative roles and personal self-service
 are managed separately from permission to invoke service actions.
 
+The broker can also vouch for people to another service. An administrator
+lets accounts hold access keys of configured types; a service that receives
+one asks the broker whose it is and applies its own rules. The broker never
+accepts an access key as a credential. See
+[usernames and access keys](docs/administrator-guide.md#usernames-and-access-keys).
+
 The broker governs requests sent through it. Network controls establish whether
 agents can reach upstream services directly. Revocation blocks new admissions;
 operations already prepared may finish. See the [security model](docs/security-model.md),
@@ -194,6 +200,7 @@ and [changelog](CHANGELOG.md) when changing a deployment.
 | [Providers](docs/providers.md) | Provider capabilities and individual contracts |
 | [OAuth](docs/oauth.md) | Delegated connections to upstream services |
 | [Applications](docs/applications.md) | Client applications that obtain agent tokens with user approval |
+| [Access keys](docs/http-api.md#access-key-resolution) | Keys for a resolving service: usernames, key types, and the resolution route |
 | [Testing](docs/testing.md) | Offline suites and optional live-provider checks |
 | [Release readiness](docs/release-readiness.md) | Qualification, packaging, and deployment acceptance |
 

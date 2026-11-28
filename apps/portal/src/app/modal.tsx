@@ -21,10 +21,16 @@ export function ModalProvider({ children }: { children: ReactNode }) {
   const [modal, setModal] = useState<ModalState>(null);
   const location = useLocation();
   const navigationType = useNavigationType();
-  // Browser history navigation never leaves a one-time secret on screen.
+  // Browser history navigation never leaves a one-time secret on screen, and
+  // an issued access key lives only on the page it was issued to: any other
+  // navigation away from that page (push, replace or history) ends it.
   useEffect(() => {
-    if (navigationType === "POP") setModal((current) => (modalHasOneTimeSecret(current) ? null : current));
-  }, [location.key, navigationType]);
+    setModal((current) => {
+      if (navigationType === "POP" && modalHasOneTimeSecret(current)) return null;
+      if (current?.type === "accessKeyReveal" && current.destination !== location.pathname) return null;
+      return current;
+    });
+  }, [location.key, location.pathname, navigationType]);
   const closeModal = useCallback(() => setModal(null), []);
   const confirm = useCallback((options: ConfirmOptions) => setModal({ type: "confirm", ...options }), []);
   const value = useMemo(() => ({ modal, setModal, closeModal, confirm }), [modal, closeModal, confirm]);

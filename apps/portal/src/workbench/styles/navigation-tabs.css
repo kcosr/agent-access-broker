@@ -1,0 +1,106 @@
+@layer wb.components {
+  .wb-navigation-tabs {
+    display: flex;
+    flex: none;
+    align-items: stretch;
+    min-width: 0;
+    border-bottom: 1px solid var(--wb-border);
+    background: var(--wb-surface-2);
+  }
+  .wb-navigation-tabs-track {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+  .wb-navigation-tabs-track::-webkit-scrollbar {
+    display: none;
+  }
+  .wb-navigation-tabs-arrow.wb-btn {
+    flex: none;
+    width: 28px;
+    height: auto;
+    align-self: stretch;
+    border-radius: 0;
+  }
+  .wb-navigation-tab {
+    display: flex;
+    align-items: center;
+    flex: 0 0 min(190px, 100%);
+    min-width: 0;
+    position: relative;
+    border-right: 1px solid
+      color-mix(in srgb, var(--wb-border) 50%, transparent);
+    color: var(--wb-muted);
+  }
+  .wb-navigation-tab.is-current {
+    color: var(--wb-fg);
+    background: var(--wb-page);
+  }
+  .wb-navigation-tab.is-current::after {
+    position: absolute;
+    content: "";
+    height: 2px;
+    inset: auto 8px 0;
+    background: var(--wb-accent);
+    pointer-events: none;
+  }
+  .wb-navigation-tab-link {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    align-items: center;
+    gap: 6px;
+    min-height: 32px;
+    padding: 0 8px 0 10px;
+    color: inherit;
+    text-decoration: none;
+    font-size: var(--wb-fs-12);
+  }
+  .wb-navigation-tab-link:hover {
+    color: var(--wb-fg);
+    background: var(--wb-neutral-weak);
+    text-decoration: none;
+  }
+  .wb-navigation-tab-link:focus-visible,
+  .wb-navigation-tab-more:focus-visible {
+    outline-offset: -2px;
+  }
+  .wb-navigation-tab-title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .wb-navigation-tab-link > :not(.wb-navigation-tab-title) {
+    flex: none;
+  }
+  .wb-navigation-tab-more.wb-btn {
+    flex: none;
+    width: 26px;
+    margin-right: 4px;
+    color: var(--wb-muted);
+  }
+  @media (hover: none), (pointer: coarse) {
+    .wb-navigation-tab {
+      flex-basis: min(200px, 100%);
+    }
+    .wb-navigation-tab-link {
+      min-height: 44px;
+    }
+    .wb-navigation-tab-more.wb-btn {
+      width: 44px;
+      min-height: 44px;
+    }
+    .wb-navigation-tab-more.wb-btn .wb-icon {
+      width: 20px;
+      height: 20px;
+    }
+    .wb-navigation-tabs-arrow.wb-btn {
+      display: none;
+    }
+  }
+}

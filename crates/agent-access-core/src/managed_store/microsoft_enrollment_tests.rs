@@ -892,3 +892,65 @@ fn microsoft_enrollment_reload_rejects_noncanonical_rows_and_missing_constraints
         );
     }
 }
+
+#[test]
+fn an_enrollment_and_the_settings_beside_it_are_read_from_objects_and_strings_only() {
+    // The object form of each is read.
+    assert_eq!(
+        serde_json::from_str::<MicrosoftEnrollmentCreate>(r#"{"email":"alice@example.com"}"#)
+            .unwrap()
+            .email,
+        "alice@example.com"
+    );
+    assert_eq!(
+        serde_json::from_str::<PrincipalRole>(r#""auditor""#).unwrap(),
+        PrincipalRole::Auditor
+    );
+    assert_eq!(
+        serde_json::from_str::<PrincipalAgentTokenIssuance>(r#""read_only""#).unwrap(),
+        PrincipalAgentTokenIssuance::ReadOnly
+    );
+    assert_eq!(
+        serde_json::from_str::<AgentTokenIssuanceMode>(r#""write_capable""#).unwrap(),
+        AgentTokenIssuanceMode::WriteCapable
+    );
+    serde_json::from_str::<GroupAgentTokenIssuanceSetting>(
+        r#"{"mode":"disabled","allowedExecutionContexts":[]}"#,
+    )
+    .unwrap();
+    // An array of an object's members in order, an object keyed by an
+    // enumerated value and an unknown member are not.
+    assert!(serde_json::from_str::<MicrosoftEnrollmentCreate>(r#"["alice@example.com"]"#).is_err());
+    assert!(
+        serde_json::from_str::<MicrosoftEnrollmentCreate>(
+            r#"{"email":"alice@example.com","principalId":"usr-1"}"#
+        )
+        .is_err()
+    );
+    for role in [r#"{"auditor":null}"#, r#"["auditor"]"#, r#""owner""#, "0"] {
+        assert!(serde_json::from_str::<PrincipalRole>(role).is_err(), "{role}");
+    }
+    for mode in [r#"{"read_only":null}"#, r#"["read_only"]"#, r#""always""#] {
+        assert!(
+            serde_json::from_str::<PrincipalAgentTokenIssuance>(mode).is_err(),
+            "{mode}"
+        );
+        assert!(
+            serde_json::from_str::<AgentTokenIssuanceMode>(mode).is_err(),
+            "{mode}"
+        );
+    }
+    for setting in [
+        r#"["disabled",[]]"#,
+        r#"{"mode":{"disabled":null},"allowedExecutionContexts":[]}"#,
+    ] {
+        assert!(
+            serde_json::from_str::<PrincipalAgentTokenIssuanceSetting>(setting).is_err(),
+            "{setting}"
+        );
+        assert!(
+            serde_json::from_str::<GroupAgentTokenIssuanceSetting>(setting).is_err(),
+            "{setting}"
+        );
+    }
+}

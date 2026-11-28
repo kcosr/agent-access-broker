@@ -50,6 +50,7 @@ impl Fixture {
                     execution_context: Some("default".into()),
                     allowed_execution_contexts: None,
                     allow_forwarded_identity: false,
+                    allow_access_key_resolution: false,
                 },
             );
         }

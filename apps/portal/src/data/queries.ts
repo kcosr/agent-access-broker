@@ -3,6 +3,9 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { brokerApi } from "../api";
 import type {
+  AccessKeyOptions,
+  AccessKeyType,
+  AccessKeyView,
   ApplicationAccess,
   ApplicationAuthorization,
   AdminBrokerTokenRecord,
@@ -37,6 +40,7 @@ import type { ImportListResult, ImportPreviewResult } from "../import-types";
 import { portalQueryKeys, viewerKey } from "../lib/portal-queries";
 import { EMPTY_CREDENTIAL_LIST } from "../lib/credentials";
 import { catalogListsApplications } from "../lib/applications";
+import { accessKeysShown, catalogListsAccessKeys } from "../lib/access-keys";
 import { indexResourceTypes, NO_RESOURCE_TYPES, type ResourceTypes } from "../lib/resource-types";
 import { canViewAdmin, canUseSelfService, hasPolicyScope } from "../lib/capabilities";
 import { useSession } from "../app/session";
@@ -290,11 +294,13 @@ export function writeAuthorities(config: ConfigStatusResult | null | undefined, 
   };
 }
 
-export function useAdminPrincipal(principalId: string, enabled = true) {
+/** `refreshOnMount`: read again on every visit, as a form that starts from it needs. */
+export function useAdminPrincipal(principalId: string, enabled = true, refreshOnMount = false) {
   const { viewer, admin, runQuery } = useQueryAccess();
   return useQuery<PrincipalDetail>({
     queryKey: portalQueryKeys.adminPrincipal(viewer, principalId),
     enabled: admin && enabled && Boolean(principalId),
+    refetchOnMount: refreshOnMount ? "always" : true,
     queryFn: () => runQuery((current) => brokerApi.adminPrincipal(current, principalId))
   });
 }
@@ -494,5 +500,73 @@ export function useAdminApplicationAccess(principalId: string) {
     queryKey: portalQueryKeys.adminApplicationAccess(viewer, principalId),
     enabled: admin && Boolean(principalId),
     queryFn: () => runQuery((current) => brokerApi.adminApplicationAccess(current, principalId))
+  });
+}
+
+/**
+ * Whether the caller's runtime catalog lists the personal access key routes:
+ * it does only while an access key type is configured. The portal reads the
+ * catalog and never probes the routes. `fresh` refetches on every visit (the
+ * Keys pages); the navigation reuses an answer for a minute.
+ */
+export function useAccessKeysOffered(enabled = true, fresh = false) {
+  const { viewer, signedIn, runQuery } = useQueryAccess();
+  return useQuery<boolean>({
+    queryKey: portalQueryKeys.accessKeysOffered(viewer),
+    enabled: signedIn && enabled,
+    staleTime: fresh ? 0 : 60_000,
+    refetchOnMount: fresh ? "always" : true,
+    queryFn: () => runQuery(() => brokerApi.routeCatalog()).then(catalogListsAccessKeys)
+  });
+}
+
+/** The signed-in person's access key options; asked only once the catalog offers the routes. Self-service does not gate it. */
+export function useOwnAccessKeyOptions(offered: boolean, fresh = false) {
+  const { viewer, signedIn, runQuery } = useQueryAccess();
+  return useQuery<AccessKeyOptions>({
+    queryKey: portalQueryKeys.accessKeyOptions(viewer),
+    enabled: signedIn && offered,
+    staleTime: fresh ? 0 : 60_000,
+    refetchOnMount: fresh ? "always" : true,
+    queryFn: () => runQuery((current) => brokerApi.accessKeyOptions(current))
+  });
+}
+
+/** Whether the person's navigation shows Keys: the catalog offers the routes and their options say there is something to show. */
+export function useOwnAccessKeysNav(enabled = true) {
+  const offered = useAccessKeysOffered(enabled);
+  const options = useOwnAccessKeyOptions(enabled && offered.data === true);
+  return enabled && offered.data === true && accessKeysShown(options.data);
+}
+
+/** Every access key the signed-in person owns, revoked and expired ones included. */
+export function useOwnAccessKeys(enabled = true) {
+  const { viewer, signedIn, runQuery } = useQueryAccess();
+  return useQuery<AccessKeyView[]>({
+    queryKey: portalQueryKeys.ownAccessKeys(viewer),
+    enabled: signedIn && enabled,
+    staleTime: 0,
+    queryFn: () => runQuery((current) => brokerApi.accessKeys(current))
+  });
+}
+
+/** The access key types the configuration defines (administrators and auditors). */
+export function useAdminAccessKeyTypes(enabled = true, refreshOnMount = false) {
+  const { viewer, admin, runQuery } = useQueryAccess();
+  return useQuery<AccessKeyType[]>({
+    queryKey: portalQueryKeys.adminAccessKeyTypes(viewer),
+    enabled: admin && enabled,
+    refetchOnMount: refreshOnMount ? "always" : true,
+    queryFn: () => runQuery((current) => brokerApi.adminAccessKeyTypes(current))
+  });
+}
+
+/** One account's access keys, revoked and expired ones included (administrators and auditors). */
+export function useAdminPrincipalAccessKeys(principalId: string, enabled = true) {
+  const { viewer, admin, runQuery } = useQueryAccess();
+  return useQuery<AccessKeyView[]>({
+    queryKey: portalQueryKeys.adminAccessKeys(viewer, principalId),
+    enabled: admin && enabled && Boolean(principalId),
+    queryFn: () => runQuery((current) => brokerApi.adminAccessKeys(current, principalId))
   });
 }

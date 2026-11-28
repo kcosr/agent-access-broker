@@ -9,6 +9,9 @@ export const ROUTE = {
   tokens: "/ui/tokens",
   tokenNew: "/ui/tokens/new",
   principalTokenNew: "/ui/admin/principals/:principalId/tokens/new",
+  keys: "/ui/keys",
+  keyNew: "/ui/keys/new",
+  principalKeyNew: "/ui/admin/principals/:principalId/keys/new",
   credentials: "/ui/credentials",
   activity: "/ui/activity",
   account: "/ui/account",
@@ -24,6 +27,7 @@ export const ROUTE = {
   catalogService: "/ui/admin/catalog/services/:service/:tab?",
   resources: "/ui/admin/catalog/resources",
   resourceGroups: "/ui/admin/catalog/resource-groups",
+  accessKeyTypes: "/ui/admin/catalog/access-key-types",
   audit: "/ui/admin/audit",
   system: "/ui/admin/system"
 } as const;
@@ -62,7 +66,7 @@ function tokenCreationQuery({ services = [], returnTo }: TokenCreationParams) {
   return params.size ? `?${params.toString()}` : "";
 }
 
-export type PrincipalTab = "overview" | "access" | "grants" | "groups" | "tokens" | "credentials" | "limits" | "activity";
+export type PrincipalTab = "overview" | "access" | "grants" | "groups" | "tokens" | "keys" | "credentials" | "limits" | "activity";
 export type GroupTab = "overview" | "members" | "grants" | "microsoft";
 export type ServiceTab = "actions" | "managers" | "limits" | "import";
 export type PrincipalListKind = "users" | "service-accounts" | "groups";
@@ -75,6 +79,10 @@ export const paths = {
   principalTokenNew: (principalId: string, params: TokenCreationParams = {}) => `${ROUTE.principals}/${seg(principalId)}/tokens/new${tokenCreationQuery(params)}`,
   principalTokens: (principalId: string, token?: string) => `${ROUTE.principals}/${seg(principalId)}/tokens${query({ token })}`,
   credentials: (credential?: string) => `${ROUTE.credentials}${query({ credential })}`,
+  accessKeys: (key?: string) => `${ROUTE.keys}${query({ key })}`,
+  accessKeyNew: () => ROUTE.keyNew,
+  principalAccessKeys: (principalId: string, key?: string) => `${ROUTE.principals}/${seg(principalId)}/keys${query({ key })}`,
+  principalAccessKeyNew: (principalId: string) => `${ROUTE.principals}/${seg(principalId)}/keys/new`,
   account: () => ROUTE.account,
   policies: (params: Record<string, string | undefined> = {}) => `${ROUTE.policies}${query(params)}`,
   grant: (grantRef: string) => `${ROUTE.policies}${query({ grant: grantRef })}`,
@@ -94,6 +102,7 @@ export const paths = {
   catalogAction: (service: string, action: string) => `${ROUTE.catalog}/services/${seg(service)}${query({ action })}`,
   resources: (item?: string) => `${ROUTE.resources}${query({ item })}`,
   resourceGroups: (item?: string) => `${ROUTE.resourceGroups}${query({ item })}`,
+  accessKeyTypes: () => ROUTE.accessKeyTypes,
   system: () => ROUTE.system
 };
 

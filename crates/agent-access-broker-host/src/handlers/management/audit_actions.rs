@@ -22,6 +22,9 @@ pub(crate) const OIDC_MEMBERSHIP_RENEWAL_FAILED: &str = "oidc.membership.renewal
 pub(crate) const OAUTH_CONNECTIONS_CALLBACK: &str = "oauth.connections.callback";
 pub(crate) const APPLICATIONS_AUTHORIZE_REFUSED: &str = "applications.authorize.refused";
 pub(crate) const APPLICATIONS_TOKENS_RECONCILED: &str = "applications.tokens.reconciled";
+/// The fill of missing usernames after startup or reload named somebody,
+/// or failed.
+pub(crate) const ACCOUNT_USERNAMES_ASSIGNED: &str = "account_usernames.assigned";
 pub(crate) const APPLICATIONS_TOKEN_ISSUED: &str = "applications.token.issued";
 pub(crate) const APPLICATIONS_TOKEN_REFUSED: &str = "applications.token.refused";
 pub(crate) const APPLICATIONS_TOKEN_REVOKED: &str = "applications.token.revoked";
@@ -152,6 +155,7 @@ const NON_MANAGEMENT_ACTIONS: &[&str] = &[
     APPLICATIONS_TOKEN_ISSUED,
     APPLICATIONS_TOKEN_REFUSED,
     APPLICATIONS_TOKEN_REVOKED,
+    ACCOUNT_USERNAMES_ASSIGNED,
 ];
 
 /// Only these operations currently supply a service or grantRef target.

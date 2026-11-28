@@ -1,3 +1,5 @@
+pub(crate) mod access_keys;
+pub(crate) mod account_usernames;
 pub(crate) mod admin;
 pub(crate) mod application_access;
 pub(crate) mod audit;

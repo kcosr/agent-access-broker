@@ -1041,6 +1041,96 @@ messages with detailed server-side diagnostics, and the Git gateway overrides
 upstream cache directives with `private, no-store`. CLI transports reject redirects
 so configured identity headers remain with the original Broker endpoint.
 
+## Access keys for a resolving service
+
+An [access key](design.md#usernames-and-access-keys) lets a service other
+than the Broker learn from the Broker who a client is. Its security rests
+on the following.
+
+**Two credentials, two audiences.** A Broker token authenticates to the
+Broker; an access key authenticates to a resolving service. The Broker
+refuses an access key as a credential on every path of its own, and a Broker
+token is not an access key. A client that needs both holds both, and the loss of one
+does not expose the other's audience.
+
+**What the resolving service is trusted with.** It holds a trusted-caller
+credential with the resolution capability, which lets it ask whose key a
+value is and nothing else: the capability admits no principal and asserts
+nobody to the Broker. It necessarily sees the raw keys its clients present,
+so it is trusted to protect them. The Broker tells it facts an
+administrator decided (the subject, its local groups, the types the key
+holds); what those facts permit is the resolving service's own policy. The
+Broker stores only a keyed hash of each key and keeps the raw value out of
+logs, audit, errors and debug output.
+
+**Withdrawal is by re-asking.** The Broker evaluates current state at every
+resolution and pushes nothing. Revocation, a disabled owner, a paused
+identity access, a changed username, a withdrawn type and a group change
+are reflected by the next successful resolution. The resolving service owns
+its recheck schedule, handling of unavailable lookups and termination of work
+it already admitted; the Broker does not promise a connection-close deadline.
+The route never refuses a lookup for a stored key on rate, so an unknown-key
+rate limit cannot prevent that recheck. The pool and the caller's share still
+bound concurrent lookups.
+
+**Inactive identity is disclosed to the trusted resolving service.** A stored
+inactive key returns its ID, current usable username or service-account ID
+(or null), and the reason it is inactive. The owner remains informational even
+when the account is disabled or the key is revoked; a renamed owner is reported
+under the current name. Missing, reserved or unconfirmed names yield null.
+This lets the service identify refusals in its own logs and grants no authority.
+Unknown values return only `active: false`; malformed HTTP requests are refused
+with 400. Once the caller's unknown-key rate is spent, unknown keys are refused
+with 429 while stored keys can still be resolved. The route works from a
+presented 256-bit key value and offers no key listing.
+
+**The username is administrator-controlled evidence.** By default it comes
+from the profile email, which only an administrator edits and which is not
+unique. Only listed domains give a name; the first holder keeps it and a
+later account is shown the conflict; reserved names are never given; a name
+on the operator's list of IDs already in use works only after an
+administrator confirms that the account is that person; every change of
+value ends the keys minted before it; and an email never finds or merges
+accounts. A resolving service that attributes usage or applies rules by
+username relies on this administration.
+
+**Off until allowed.** A configured type is on for nobody until an
+administrator allows it to an account or a group. A person creates keys
+only of types they may hold that are open to self-service, and cannot tell
+a type they may not hold from one that does not exist. Removing permission
+stops existing keys.
+
+**A leaked key.** A key is a bearer credential: it works from any client
+that can reach a resolving service while the key and at least one of its
+types remain usable. Its lifetime is chosen from the options common to all
+its types; it can have no expiry only when all of them offer `never`.
+The current type configuration can still end its use from the original
+mint time, without changing the key's own expiry. A key is shown once,
+can be revoked by its owner or an administrator, and shows when it was
+last used. The resolving service records its decisions and refusals.
+
+**Bounded abuse.** The route has its own pool and rates and spends no
+sign-in or request capacity of other routes. No caller entry holds more
+than its share of the pool, so a resolving service that stalls, or a client
+that floods through it, cannot stop another service's rechecks; and a
+request abandoned while its body is being read is counted against the
+caller's rate, so slots cannot be held for free. A request without a valid
+caller credential is bounded like any unauthenticated source; unknown keys,
+malformed requests and failed lookups through a resolving service share that
+caller's rate. A stored key is answered however often it is asked about,
+within the pool and caller share. Resolution identifies a key and decides
+nothing about a request: it writes no audit records for any outcome and
+never depends on audit-store availability. The resolving service logs every
+decision and refusal itself. Issue, revoke, settings and username changes
+remain audited.
+
+Residual risks: the Broker cannot end a session a resolving service already
+admitted, only answer its next question; a compromised resolving service
+can use every key it sees; the Broker retains no resolution history beyond
+a coarse last-used time, so investigation relies on the resolving service's
+logs; and an account in more than 64 local groups has no working key until
+an administrator reduces its memberships.
+
 ## Residual risks
 
 | Residual risk | Mitigation |

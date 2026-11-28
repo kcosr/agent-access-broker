@@ -64,5 +64,12 @@ export const portalQueryKeys = {
   applicationAccess: (viewer: string) => [...root, "applications", viewer, "access"] as const,
   applicationAuthorization: (viewer: string, requestId: string) => [...root, "applications", viewer, "authorization", requestId] as const,
   adminApplicationAccess: (viewer: string, principalId: string) => [...adminRoot(viewer), "application-access", principalId] as const,
+  /** The signed-in person's access keys: whether the catalog offers them, their options and their keys. */
+  accessKeysRoot: (viewer: string) => [...root, "access-keys", viewer] as const,
+  accessKeysOffered: (viewer: string) => [...root, "access-keys", viewer, "offered"] as const,
+  accessKeyOptions: (viewer: string) => [...root, "access-keys", viewer, "options"] as const,
+  ownAccessKeys: (viewer: string) => [...root, "access-keys", viewer, "keys"] as const,
+  adminAccessKeyTypes: (viewer: string) => [...adminRoot(viewer), "access-key-types"] as const,
+  adminAccessKeys: (viewer: string, principalId: string) => [...adminRoot(viewer), "access-keys", principalId] as const,
   // Under the console root so token changes refresh the Activity token names.
 };

@@ -15,10 +15,23 @@ pub struct MicrosoftEnrollmentRecord {
     pub updated_by: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct MicrosoftEnrollmentCreate {
     pub email: String,
+}
+// An object only, also as a member of the principal creation body: an array
+// that holds the email is not an enrollment.
+impl<'de> Deserialize<'de> for MicrosoftEnrollmentCreate {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct Wire {
+            email: String,
+        }
+        let wire: Wire = crate::object_only(deserializer)?;
+        Ok(Self { email: wire.email })
+    }
 }
 
 #[derive(Debug, Clone)]

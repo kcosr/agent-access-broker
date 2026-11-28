@@ -55,7 +55,7 @@ Sections fall into three categories:
 | --- | --- | --- |
 | Mandatory | `identity`, `policy`, `limits` | parse error; an omitted `[limits]` is reported as its missing `upload_spool_dir` |
 | Optional | `execution_context`, `managed_store`, `credential_encryption`, `broker_tokens`, `audit` | feature-specific behavior described below; audit is disabled without `[audit]` |
-| Defaulted | `deployment`, `network`, `credentials`, `imports`, `command_imports`, `oauth`, `applications`, `management`, `browser_auth`, `portal`, `mcp`, `providers`, `gateways`, `attribution` | filled with built-in defaults |
+| Defaulted | `deployment`, `network`, `credentials`, `imports`, `command_imports`, `oauth`, `applications`, `access_key_types`, `usernames`, `management`, `browser_auth`, `portal`, `mcp`, `providers`, `gateways`, `attribution` | filled with built-in defaults |
 
 ### Conditional requirements
 
@@ -85,6 +85,10 @@ These cross-section rules are enforced by validation (not by the parser):
   `[managed_store]`, `[broker_tokens]` with a `broker_tokens` identity source,
   `browser_auth.enabled = true` with `browser_auth.public_origin`, and
   `management.enabled = true`. See [Applications](#applications).
+- Any `[access_key_types.<id>]` entry, and any non-empty `[usernames]` list,
+  requires managed identity authority, `[managed_store]` and
+  `[broker_tokens]`. See [Access key types](#access-key-types) and
+  [Usernames](#usernames).
 
 Validation runs `deployment`, `identity`, `execution_context`, `network`, managed sections,
 `credentials`, `providers`, `gateways`, `policy`,
@@ -431,6 +435,7 @@ members = ["alice"]
 
 - `principals` must be non-empty; every principal must be globally unique across
   all static sources and have at least one `env:`/`file:` token ref.
+- A resolved token must not begin with the access-key prefix `aab_ak_`.
 - Valid only when `identity.authority = "toml"`.
 
 #### `broker_tokens`
@@ -2268,6 +2273,9 @@ auth_requests_per_principal_per_minute = 100
 auth_requests_per_source_per_minute = 300
 max_concurrent_requests = 100
 max_concurrent_requests_per_principal = 10
+max_concurrent_access_key_resolutions = 32     # access key resolution pool
+max_concurrent_access_key_resolutions_per_caller = 24   # most of that pool one caller holds
+access_key_resolutions_per_caller_per_minute = 6000   # unknown keys and malformed requests
 max_http_body_bytes = 536870912           # 512 MiB
 max_download_bytes = 104857600            # 100 MiB
 max_upstream_response_bytes = 536870912   # 512 MiB
@@ -2493,7 +2501,35 @@ downstream HTTP MCP has independent admission. Matched single-service detail
 `GET`/`HEAD /v1/services/{service}` also uses an independent pool, with the same
 configured global/principal caps and separate counters retained through delivery.
 Its assembly is bounded by the smaller of `request_body_timeout_ms` and 15 seconds
-from ingress. These caps are not a universal bound on every HTTP request.
+from ingress. [Access key resolution](http-api.md#access-key-resolution)
+has a pool of its own, capped by `max_concurrent_access_key_resolutions`,
+in which every request to the route runs and which alone bounds a lookup
+for a key the store holds, whatever the key's state.
+`max_concurrent_access_key_resolutions_per_caller` is the most of that pool
+one trusted caller entry may hold at once, and one peer address that
+presents no configured caller's credential; a request beyond it answers 429
+and is not audited. It must not exceed the pool, and must be less than the
+pool when more than one trusted caller has `allow_access_key_resolution`, so
+that no caller can keep the others out. The default leaves a quarter of the
+default pool to the other callers.
+`access_key_resolutions_per_caller_per_minute` is a fixed one-minute window,
+for each trusted caller entry, of the requests the Broker cannot tie to a
+stored key: well-formed keys that no store holds, malformed requests
+(a request abandoned while its body was being read is one) and
+lookups the store could not complete. Beyond it such a request answers 429
+and is not audited; a stored key is never refused by it. No resolution outcome
+writes an audit record; the resolving service records its own decisions and
+refusals. A request with no
+configured caller's credential, and a caller without the capability, is
+counted in a window of this route at `auth_requests_per_source_per_minute`,
+without spending that budget. The route takes no slot or budget from any
+other pool and none of the other limits in this section applies to it. The
+three keys must be non-zero. Size the pool for the resolving services' concurrent
+rechecks plus their concurrent lookups of new keys, the share for the
+busiest caller entry, and the rate for their
+own bound on lookups of new keys: see the
+[administrator guide](administrator-guide.md#size-the-resolution-route).
+These caps are not a universal bound on every HTTP request.
 Anonymous control-plane body reads
 also use a pool capped at `max(1, max_concurrent_requests / 4)` and a per-source
 slot capped by `max_concurrent_requests_per_principal`, released when the body
@@ -2867,7 +2903,14 @@ grammar. A direct caller must use fixed context and cannot enable fingerprint
 forwarding. `allow_forwarded_identity` retains its fingerprint-only meaning.
 A dedicated caller can permit both representations; a request cannot combine them.
 
-Caller credentials must be unique. Direct caller credentials cannot match static
+`allow_access_key_resolution = true` lets a `caller_authorization` caller use
+[`POST /v1/access-keys/resolve`](http-api.md#access-key-resolution). It defaults
+to false, requires managed identity, `[managed_store]` and `[broker_tokens]`,
+is refused on an `authorization_user` caller, and gives the caller no way to
+assert an identity. See [access key resolution](trusted-callers.md#access-key-resolution).
+
+Caller credentials must be unique. No caller credential starts with `aab_ak_`.
+Direct caller credentials cannot match static
 principal credentials or start with `aab_`. Username-capable secrets must contain
 16–8192 visible ASCII bytes excluding commas and whitespace. Secret files hold
 only the raw credential; the attester adds `Bearer `. Secrets are loaded on
@@ -2954,6 +2997,158 @@ application sends it with HTTP Basic authentication. Secrets and registrations
 are loaded at startup and reload. A reload that changes or removes a
 registration applies to the next request; see
 [what a change affects](applications.md#registering-an-application).
+
+## Access key types
+
+An access key is a bearer token for a resolving service rather than for the Broker: it
+says who its holder is and what the administrator allows it to be used for
+there, and no Broker route accepts one as a credential.
+`[access_key_types.<id>]` defines what such a key may carry. The table name is
+the access key type ID, in the execution-context grammar `[a-z][a-z0-9_-]{0,63}`.
+
+Access key types require managed identity authority
+(`identity.authority = "managed"`), `[managed_store]` and `[broker_tokens]`:
+access keys exist only for managed accounts. A configuration that defines
+an access key type under TOML identity authority, or without either table, is
+refused when it is loaded, with a message that names the requirement.
+
+The Broker validates this configuration, stores access keys in the
+[managed store](database.md#access-keys-and-usernames) and applies the
+rules below whenever it evaluates one. A trusted caller with
+`allow_access_key_resolution` asks whose key a value is through
+[`POST /v1/access-keys/resolve`](http-api.md#access-key-resolution). A person
+creates their own access keys from their browser session, and an
+administrator issues them for service accounts, through the
+[management routes](http-api.md#usernames-and-access-keys) and the
+`admin access-keys` commands.
+
+```toml
+[access_key_types.inference]
+display_name = "Model inference"
+description = "Point your tool at https://gateway.example.com/v1."
+lifetime_options = ["1d", "7d", "30d", "never"]
+default_lifetime = "7d"
+self_service = true
+```
+
+| Key | Required | Meaning |
+| --- | --- | --- |
+| `display_name` | yes | The name people see: 1 to 128 bytes, no control characters or surrounding whitespace. |
+| `description` | no | Plain text people see when they create a key of this type, such as where to point their tool: 1 to 1024 bytes, no control characters or surrounding whitespace. It is shown in the types listing and a person's options, never in a resolution answer. |
+| `lifetime_options` | yes | One to 16 lifetime strings, in display order. Each is a positive duration using `s`, `m`, `h` or `d`, at most `3650d`, or `"never"`. Entries must be distinct by effective duration. |
+| `default_lifetime` | yes | The lifetime the portal uses for this type's initial selection, or when a manual selection is no longer offered; it must match an option by effective duration, or be `"never"` when that option is listed. The server never supplies it for an omitted issuance lifetime. |
+| `self_service` | no | Whether a signed-in person who may hold this type may create keys of it for themselves; default `false`. An administrator's issuance does not need it: with `false`, only an administrator hands the type out, to people as well as to service accounts. |
+
+An access key type names no execution contexts. Where a key of a type may
+be used is decided by the service that resolves it, by its own rules; the
+Broker says only who may hold the type and for how long a key carries it.
+Agent tokens' execution contexts are a separate setting.
+
+The configuration defines the types. Who may hold each type is not
+configuration: an administrator sets it on accounts and groups as their
+[access key types](roles.md#access-key-types), and a configured
+access key type is on for nobody until an administrator allows it.
+
+A key names its access key types and a required `lifetime` when it is minted.
+Duration strings use the `[broker_tokens]` TTL syntax (`s`, `m`, `h`, `d`).
+The lifetime must match an option of every chosen type by effective duration;
+`"24h"` therefore matches `"1d"`, and `"never"` matches only `"never"`.
+The key's expiry is its mint time plus that duration, or no expiry for `"never"`.
+Its expiry is immutable.
+
+A type's current maximum is unlimited when its `lifetime_options` include
+`"never"`; otherwise it is the longest option. What each name allows is read
+from the current configuration and the current access key type settings every
+time the key is evaluated:
+
+- an access key type is returned only when its subject's access key type
+  setting allows it and either its maximum is unlimited or the key is
+  younger than that maximum;
+- an access key type removed from the configuration is no longer returned, and a
+  key with no returnable access key type is not active;
+- the type's `validUntil` is the earlier of the key's expiry and its mint time
+  plus the type's current maximum; it is null only when both are unlimited.
+
+Removing `"never"` or the longest option can therefore shorten a type's use by
+existing keys from their original mint time at the next reload, without
+revoking them. Removing a type has the same effect and is possible only once
+no account or group setting names it (below). Withdrawing an account's access
+takes effect at once; adding options never extends a key's own expiry.
+Turning `self_service` off stops people creating new keys of that type and
+leaves existing ones as they are; an
+administrator can still issue the type for a person who may hold it.
+
+Startup and reload refuse a configuration that no longer defines an
+access key type a saved access key type setting names, and say which type
+and which settings. Existing keys, including ones without expiry, do not
+prevent its removal. See
+[access key type retirement](operator-guide.md#access-key-type-retirement). An
+access key type added later is never added to a saved setting.
+
+A resolution answer is at most 16 KiB, and a key carries at most 16 access
+key types. The largest answer these limits allow, 16 types with 64-byte IDs
+for a subject with a 256-byte name and 64 groups with 128-byte IDs, is
+10,755 bytes, so no configuration is refused for the size of its answers.
+
+## Usernames
+
+A person is known at a resolving service by a username stored on their Broker
+account; a service account is known by its principal ID. `[usernames]` holds
+the operator's settings for people's names. Every key is optional and
+defaults to an empty list. A table with any entry has the same requirements
+as [access key types](#access-key-types): managed identity authority,
+`[managed_store]` and `[broker_tokens]`; under TOML identity authority it is
+refused when the configuration is loaded.
+
+```toml
+[usernames]
+email_domains = ["example.com"]
+reserved_names = ["root", "admin"]
+existing_usernames = ["alice", "bob"]
+```
+
+| Key | Meaning |
+| --- | --- |
+| `email_domains` | Distinct lower-case domain names. A person in `from_email` mode whose profile email is in one of them is named by the email's local part. Subdomains are not included. |
+| `reserved_names` | Distinct usernames never given to a person, by derivation or by an administrator, and never usable by a service account. |
+| `existing_usernames` | Distinct usernames that services already use for people. A person's account that holds one cannot use it until an administrator confirms that the account is that person. A service account can never use one. A name cannot be in both lists. |
+
+A username is 1 to 256 bytes of letters, digits and `._@+-`, compared exactly
+and case-sensitively. `anonymous` and any value starting with the Broker secret
+prefix `aab_` are never usernames, whether set by hand, derived from an email
+address, or used as a service-account ID.
+
+Each person's name is decided in one of two modes, which an administrator
+sets on the account. In `from_email`, the default, the name is the local
+part of the profile email, lower-cased, when the email is one address with
+exactly one `@`, its lower-cased domain is listed, the result is a username,
+and the name is neither reserved nor held by another principal. In `manual`
+an administrator sets the name, and it stays until an administrator changes
+it.
+
+The name is stored, never computed when it is used, and the Broker keeps it
+in step: when an account is created, when an administrator changes its
+email or its mode, when the person signs in while holding no name, and
+after startup and every reload for `from_email` accounts that hold none.
+That last step names the accounts that existed before `email_domains` was
+configured and the accounts of a domain added later; see the
+[administrator guide](administrator-guide.md#how-people-get-their-usernames).
+Changing the email of a `from_email` account renames it. Removing a domain
+from `email_domains` takes no name away: it only stops new names being
+derived for that domain. The email is never used to find or merge accounts.
+The first holder keeps a name; a later account that would derive it gets
+none and shows the conflict.
+
+Both lists also apply to service accounts, whose username is their
+principal ID: a service account cannot be created, and a principal cannot
+become one, under an ID on either list, and a service account that already
+has such an ID holds a name it cannot use. No confirmation changes that,
+because a listed existing username identifies a person.
+
+The lists are applied from the current configuration. A name that a later
+configuration reserves, or lists as an existing username without a
+confirmation on record, stops being usable at the next reload and becomes
+usable again when the entry is removed.
 
 ## Delegated upstream OAuth
 

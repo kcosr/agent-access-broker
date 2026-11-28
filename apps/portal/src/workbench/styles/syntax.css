@@ -1,0 +1,31 @@
+/* Syntax colours for tokenizers that emit var(--wb-syntax-...) styles. */
+@layer wb.tokens {
+  :root,
+  [data-theme],
+  [data-wb-style] {
+    /* Rebind aliases wherever theme or style tokens change. */
+    --wb-syntax-foreground: currentColor;
+    --wb-syntax-background: transparent;
+    --wb-syntax-token-comment: var(--wb-fg-2);
+    --wb-syntax-token-constant: var(--wb-warning-text);
+    --wb-syntax-token-string: var(--wb-success-text);
+    --wb-syntax-token-parameter: currentColor;
+    --wb-syntax-token-function: var(--wb-info-text);
+    --wb-syntax-token-string-expression: var(--wb-success-text);
+    --wb-syntax-token-punctuation: var(--wb-fg-2);
+    --wb-syntax-token-link: var(--wb-info-text);
+    --wb-syntax-token-string-section: var(--wb-success-text);
+    --wb-syntax-token-inserted: var(--wb-success-text);
+    --wb-syntax-token-deleted: var(--wb-danger-text);
+    --wb-syntax-token-changed: var(--wb-warning-text);
+  }
+
+  :root,
+  [data-theme="light"] {
+    --wb-syntax-token-keyword: #7443bf;
+  }
+
+  [data-theme="dark"] {
+    --wb-syntax-token-keyword: #b4a0ef;
+  }
+}

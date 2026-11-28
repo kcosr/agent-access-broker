@@ -431,6 +431,8 @@ export type PrincipalRecord = {
   role: PrincipalRole;
   selfServiceEnabled: boolean;
   agentTokenIssuance: PrincipalAgentTokenIssuanceSetting;
+  /** Which access key types the account overrides (principal detail and the access PATCH response). */
+  accessKeyTypes?: PrincipalAccessKeyTypes;
   createdAt: string;
   updatedAt: string;
   disabledAt?: string | null;
@@ -439,6 +441,8 @@ export type PrincipalRecord = {
 
 export type GroupRecord = {
   agentTokenIssuance: GroupAgentTokenIssuanceSetting;
+  /** The access key types the group allows. */
+  accessKeyTypes?: GroupAccessKeyTypes;
   groupId: string;
   displayName?: string | null;
   description?: string | null;
@@ -525,6 +529,12 @@ export type GroupDetail = GroupRecord & {
 
 export type PrincipalDetail = PrincipalRecord & {
   agentTokenIssuancePolicy: AgentTokenIssuancePolicy;
+  /** The server's per-type decision for every configured access key type. */
+  accessKeyTypePolicy?: AccessKeyTypePolicy;
+  /** A person's or service account's username; null for other kinds. */
+  accountUsername?: PrincipalAccountUsername | null;
+  /** Why no access key of the account can work now, when the cause is in the account; null otherwise and for other kinds. */
+  accessKeyProblem?: AccessKeyAccountProblem | null;
   groupMemberships: GroupMembershipProvenance[];
   activePolicyGroupSubjects: string[];
   policyReferenceSections: PolicyReferenceSection[];
@@ -1027,4 +1037,144 @@ export type AuditOptions = {
 export type AuditRequestTimeline = {
   brokerRequestId: string;
   items: AuditRecord[];
+};
+
+// ---------- usernames and access keys
+
+/** A configured access key type: what an access key can give access to. */
+export type AccessKeyType = {
+  id: string;
+  displayName: string;
+  /** Plain text for people, such as where to point their tool; null when the configuration gives none. */
+  description: string | null;
+  /** Configured lifetime strings, in the order people see them. */
+  lifetimeOptions: string[];
+  defaultLifetime: string;
+  /** Whether a person who may hold the type may issue keys of it for themselves. */
+  selfService: boolean;
+};
+
+/** Why a person cannot issue an access key of any type now (options `refusal`): what an issue request of theirs would answer. */
+export type AccessKeyRefusal = "principal_disabled" | "identity_access_paused" | "identity_access_missing" | "owner_kind" | "no_account_username" | "account_username_awaiting_confirmation" | "account_username_reserved" | "group_limit_exceeded";
+
+/**
+ * Why no access key of a person can work, when only an administrator can remove the cause (options `problem`);
+ * null when `refusal` names a disabled account or identity access that is paused or missing, and for a person
+ * with nothing to issue and no key.
+ */
+export type AccessKeyProblem = "no_account_username" | "account_username_awaiting_confirmation" | "account_username_reserved" | "group_limit_exceeded";
+
+/**
+ * Why no access key of an account can work, as administrators read it on the
+ * account's detail (`accessKeyProblem`): the status every key of the account lists.
+ */
+export type AccessKeyAccountProblem = AccessKeyProblem | "principal_disabled" | "identity_access_paused" | "identity_access_missing";
+
+export type AccountUsernameMode = "from_email" | "manual";
+export type AccountUsernameState = "usable" | "awaiting_confirmation" | "reserved" | "conflict" | "none";
+export type AccountUsernameReason = "no_email" | "email_unusable" | "domain_not_listed" | "name_invalid" | "name_reserved" | "name_taken" | "not_set" | "not_yet_assigned" | "id_unusable";
+export type AccountUsernameConflict = { accountUsername: string; heldBy: string };
+
+/** A person's own access key options: what they may hold and issue now. */
+export type AccessKeyOptions = {
+  accountUsername: {
+    name: string | null;
+    state: AccountUsernameState;
+    mode: AccountUsernameMode | null;
+    reason: AccountUsernameReason | null;
+    fromEmail: { accountUsername: string | null; reason: AccountUsernameReason | null } | null;
+  } | null;
+  refusal: AccessKeyRefusal | null;
+  /** The types the person's access key type setting allows; they issue only those with `selfService`. */
+  accessKeyTypes: AccessKeyType[];
+  hasSelfServiceType: boolean;
+  hasKeys: boolean;
+  problem: AccessKeyProblem | null;
+};
+
+/** A stored access key, without its secret. */
+export type AccessKeyRecord = {
+  keyId: string;
+  principalId: string;
+  name: string;
+  origin: "portal" | "administrator" | "application";
+  /** The type IDs the key carries, in request order. */
+  accessKeyTypes: string[];
+  usernameIncarnation: string;
+  createdAt: string;
+  createdBy: string;
+  /** Null means this key has no expiry. */
+  expiresAt: string | null;
+  revokedAt: string | null;
+  revokedBy: string | null;
+  lastUsedAt: string | null;
+};
+
+/** `active`, or why the key does not resolve now. */
+export type AccessKeyStatus = "active" | "revoked" | "expired" | "principal_disabled" | "identity_access_paused" | "identity_access_missing" | "origin_unsupported" | "no_account_username" | "account_username_awaiting_confirmation" | "account_username_reserved" | "username_incarnation_changed" | "group_limit_exceeded" | "no_access_key_type";
+
+/** A listed access key: its record with what it would resolve as now. */
+export type AccessKeyView = AccessKeyRecord & {
+  status: AccessKeyStatus;
+  usableAccessKeyTypes: { name: string; validUntil: string | null }[];
+  /** Every type the key carries, in the key's order; `held` is the resolution's per-type decision. */
+  accessKeyTypeStates: { id: string; displayName: string | null; held: boolean }[];
+  access: "full" | "partial" | "none";
+};
+
+export type AccessKeyIssueBody = { name: string; accessKeyTypes: string[]; lifetime: string };
+export type IssuedAccessKey = { key: string; record: AccessKeyRecord };
+export type RevokedAccessKey = { revoked: true; newlyRevoked: boolean; record: AccessKeyRecord };
+
+/** One allocation of a username. */
+export type AccountUsernameRecord = {
+  principalId: string;
+  accountUsername: string;
+  holderKind: "user" | "service_account";
+  incarnation: string;
+  origin: "derived" | "administrator" | "service_account";
+  assignedAt: string;
+  assignedBy: string;
+  confirmedAt: string | null;
+  confirmedBy: string | null;
+  state: "usable" | "awaiting_confirmation" | "reserved";
+};
+
+/** A person's or service account's username, as administrators see it. */
+export type PrincipalAccountUsername = {
+  principalId: string;
+  holderKind: "user" | "service_account";
+  displayName: string | null;
+  email: string | null;
+  mode: AccountUsernameMode | null;
+  state: AccountUsernameState;
+  reason: AccountUsernameReason | null;
+  name: AccountUsernameRecord | null;
+  conflict: AccountUsernameConflict | null;
+  fromEmail: { accountUsername: string | null; reason: AccountUsernameReason | null; conflict: AccountUsernameConflict | null } | null;
+  liveKeys: number;
+};
+
+/** What a request did to a person's username. */
+export type AccountUsernameChange = {
+  previousMode: AccountUsernameMode;
+  mode: AccountUsernameMode;
+  before: AccountUsernameRecord | null;
+  after: AccountUsernameRecord | null;
+  renamed: boolean;
+  endedKeys: number;
+  reason: AccountUsernameReason | null;
+  conflict: AccountUsernameConflict | null;
+};
+
+export type AccountUsernameSetBody = { mode: "from_email" } | { mode: "manual"; accountUsername?: string | null };
+
+/** An account's access key type setting: types it overrides; the rest follow its groups. */
+export type PrincipalAccessKeyTypes = { allow: string[]; deny: string[] };
+/** A group's access key type setting: the types it allows. A group cannot deny. */
+export type GroupAccessKeyTypes = { allow: string[] };
+
+/** The resolved policy: one row per configured type, as the server decides it. */
+export type AccessKeyTypePolicy = {
+  accessKeyTypes: { accessKeyType: string; allowed: boolean; source: "account" | "groups" | "none"; groupIds: string[] }[];
 };

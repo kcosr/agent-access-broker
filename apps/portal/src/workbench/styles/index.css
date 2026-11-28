@@ -9,11 +9,13 @@
 @import "./tokens.css";
 @import "./base.css";
 @import "./controls.css";
+@import "./navigation-tabs.css";
 @import "./forms.css";
 @import "./shell.css";
 @import "./list.css";
 @import "./table.css";
 @import "./overlays.css";
+@import "./context-panel.css";
 @import "./expandable-textarea.css";
 @import "./states.css";
 @import "./pages.css";
@@ -21,3 +23,5 @@
 @import "./media-frame.css";
 @import "./utilities.css";
 @import "./quiet.css";
+@import "./syntax.css";
+@import "./touch.css";

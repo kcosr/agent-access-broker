@@ -7,10 +7,12 @@ steps, an expected result, and checks for common problems.
 | I want to… | Walkthrough |
 | --- | --- |
 | Sign in, check my permissions, and connect an agent | [User self-service](user.md) |
+| Issue an access key for a tool behind the gateway | [User self-service](user.md#10-issue-and-revoke-an-access-key) |
 | Investigate an allowed, denied, or failed request | [Auditor investigation](auditor.md) |
 | Create accounts and organize group membership | [Administrator: users, groups, and workloads](admin-users-groups.md) |
 | Define a resource boundary and grant service access | [Administrator: resources and grants](admin-grants.md) |
 | Review authority, delegate management, or remove access | [Administrator: maintenance and offboarding](admin-maintenance.md) |
+| Set usernames, choose who may hold access key types, or issue access keys for an account | [Usernames](admin-users-groups.md#set-a-persons-username), [access key types](admin-users-groups.md#choose-who-may-hold-access-key-types) and [an account's access keys](admin-maintenance.md#manage-an-accounts-access-keys) |
 
 ## Before you start
 
@@ -108,9 +110,9 @@ operation ran against an upstream account.
 
 ## About the screenshots
 
-All walkthrough images use light mode and synthetic accounts in the
-[local managed demo](../../demo/README.md). No screenshot contains a raw issued
-token or stored upstream secret.
+All walkthrough images use light mode and synthetic accounts, most of them in
+the [local managed demo](../../demo/README.md). No screenshot contains a raw
+issued token or stored upstream secret.
 
 Orange highlights, arrows, and short callouts identify the control or boundary
 being discussed. The annotated images are separate copies; the original
@@ -124,6 +126,11 @@ fixtures. Credential verification success and failure are simulated at the
 browser response boundary and explicitly identified in their captions; they do
 not contact a live upstream. The demo's Atlassian credential and host cannot be
 used to perform the real CLI example.
+
+The access key, username and access key type screenshots use browser-only
+fixtures: the portal is served with synthetic management responses, identified
+in their captions, rather than the demo Broker. None shows an issued access
+key.
 
 Screenshots show the interface, while the steps describe what to submit in your
 own configured deployment. Existing demo grants can be broader than the new

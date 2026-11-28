@@ -1,6 +1,6 @@
 import { canWriteAdmin } from "../../lib/capabilities";
 // The frame every Catalog page shares: the Catalog sidebar (services,
-// resources, resource groups) and the Import service dialog, which opens from
+// resources, resource groups, access key types) and the Import service dialog, which opens from
 // `?import=1` on any Catalog page (the command palette links there).
 import { useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router";
@@ -9,7 +9,7 @@ import { PortalPage } from "../../app/top-bar";
 import { paths } from "../../app/paths";
 import { useSession } from "../../app/session";
 import { urlParam, useUrlState } from "../../lib/url-state";
-import { useResourceCatalog } from "../../data/queries";
+import { useAdminAccessKeyTypes, useResourceCatalog } from "../../data/queries";
 import { stateNeedsAttention, useCatalogServices, type CatalogIndex } from "./catalog-data";
 import { ImportEditor } from "./import-editor";
 import { useImportActions } from "./import-actions";
@@ -20,7 +20,7 @@ import { errorMessage } from "../../lib/helpers";
 import { brokerApi } from "../../api";
 import "./catalog.css";
 
-export type CatalogSection = { kind: "services"; service?: string } | { kind: "resources" } | { kind: "groups" };
+export type CatalogSection = { kind: "services"; service?: string } | { kind: "resources" } | { kind: "groups" } | { kind: "accessKeyTypes" };
 
 const IMPORT_STATE = { import: urlParam.flag() };
 
@@ -48,6 +48,7 @@ export function CatalogFrame({ section, drawer, children }: { section: CatalogSe
 
 function CatalogSidebar({ index, section, onImport }: { index: CatalogIndex; section: CatalogSection; onImport: () => void }) {
   const resources = useResourceCatalog().data;
+  const keyTypes = useAdminAccessKeyTypes().data;
   const { session } = useSession();
   const current = section.kind === "services" ? section.service ?? "" : null;
   return (
@@ -75,6 +76,11 @@ function CatalogSidebar({ index, section, onImport }: { index: CatalogIndex; sec
         <SidebarItem icon="database" label="Resources" count={resources?.resources.length} current={section.kind === "resources"} href={paths.resources()} />
         <SidebarItem icon="layers" label="Resource groups" count={resources?.resourceGroups.length} current={section.kind === "groups"} href={paths.resourceGroups()} />
       </SidebarSection>
+      {keyTypes?.length || section.kind === "accessKeyTypes" ? (
+        <SidebarSection title="Access keys">
+          <SidebarItem icon="key" label="Access key types" count={keyTypes?.length} current={section.kind === "accessKeyTypes"} href={paths.accessKeyTypes()} />
+        </SidebarSection>
+      ) : null}
     </Sidebar>
   );
 }

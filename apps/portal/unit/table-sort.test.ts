@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { groupRows, sortRows } from "../src/lib/table-sort";
+import { compareValues, groupRows, sortRows } from "../src/lib/table-sort";
 
 type Row = { id: string; name: string; used?: string | null; service: string };
 
@@ -43,5 +43,33 @@ describe("groupRows", () => {
       "jira:token 1",
       "jira:token 10"
     ]);
+  });
+});
+
+
+describe("unbounded numeric sorting", () => {
+  it("returns a finite, antisymmetric comparison for finite and unbounded values", () => {
+    const values = [-Infinity, -Number.MAX_VALUE, 0, Number.MAX_VALUE, Infinity, NaN];
+    for (const dir of [1, -1] as const) {
+      for (const a of values) {
+        expect(compareValues(a, a, dir)).toBe(0);
+        for (const b of values) {
+          const order = compareValues(a, b, dir);
+          expect(Number.isFinite(order)).toBe(true);
+          expect(order === 0 ? 0 : Math.sign(order)).toBe(compareValues(b, a, dir) === 0 ? 0 : -Math.sign(compareValues(b, a, dir)));
+        }
+      }
+    }
+  });
+
+  it("places two Never keys after finite keys ascending and before them descending", () => {
+    const keys = [
+      { name: "never-b", expiry: Infinity }, { name: "later", expiry: 60 },
+      { name: "sooner", expiry: 1 }, { name: "never-a", expiry: Infinity }
+    ];
+    const value = (key: typeof keys[number]) => key.expiry;
+    const tie = (a: typeof keys[number], b: typeof keys[number]) => a.name.localeCompare(b.name);
+    expect(sortRows(keys, { key: "expiry", dir: "asc" }, value, tie).map((key) => key.name)).toEqual(["sooner", "later", "never-a", "never-b"]);
+    expect(sortRows(keys, { key: "expiry", dir: "desc" }, value, tie).map((key) => key.name)).toEqual(["never-a", "never-b", "later", "sooner"]);
   });
 });

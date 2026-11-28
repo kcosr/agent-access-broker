@@ -674,3 +674,80 @@
 .pt-audit-membership { margin-top: 16px; }
 .pt-audit-membership h4 { margin: 0 0 8px; font-size: var(--wb-fs-13); }
 .pt-audit-members { display: grid; gap: 12px; list-style: none; margin: 0; padding: 0; }
+
+/* ---------- access keys */
+/* A key's access chips sit on one line in a list row; the row centres on them. */
+.pt-key-pills {
+  flex-wrap: nowrap;
+  gap: 4px;
+}
+.pt-key-pills--wrap {
+  flex-wrap: wrap;
+}
+.wb-table tr:has(.pt-key-pills) > * {
+  vertical-align: middle;
+}
+/* A type the key's owner may no longer hold: dashed, and marked in words. */
+.pt-key-pill-gone > .wb-icon {
+  width: 12px;
+  height: 12px;
+  color: var(--wb-warning-text);
+}
+.pt-key-pill-flag {
+  color: var(--wb-warning-text);
+}
+/* Why Issue access key is not offered, where the button would be. */
+.pt-key-blocker {
+  flex: 0 1 auto;
+}
+.pt-key-issue {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+/* The catalog includes options and defaults; long column headings may wrap. */
+.pt-key-type-table--catalog thead th {
+  white-space: normal;
+}
+/* Type IDs stay whole in their column. */
+.pt-key-type-table .wb-mono {
+  white-space: nowrap;
+}
+.pt-key-types {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.pt-key-type-line {
+  display: block;
+}
+.pt-key-type-name {
+  display: block;
+  color: var(--wb-fg);
+  font-weight: var(--wb-fw-regular);
+}
+.pt-key-type-cell {
+  font-weight: var(--wb-fw-regular);
+  text-align: left;
+}
+.pt-key-type-table td {
+  vertical-align: top;
+}
+.pt-key-type-result {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+}
+.pt-key-value {
+  margin: 4px 0 2px;
+  color: var(--wb-fg);
+}
+.pt-username-value > p {
+  margin: 4px 0 0;
+}
+.pt-key-setting-title {
+  margin: 0 0 4px;
+  font-size: var(--wb-fs-14);
+  font-weight: var(--wb-fw-semibold);
+}

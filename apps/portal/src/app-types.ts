@@ -1,6 +1,6 @@
 // App-level UI types: grant drafts and the app-wide modal slot.
 import type { ReactNode } from "react";
-import type { AgentTokenOptions, BrokerTokenRecord, PolicyValidationMessage, ResourceSelection, TokenTtlPolicy } from "./types";
+import type { AccessKeyRecord, AgentTokenOptions, BrokerTokenRecord, PolicyValidationMessage, ResourceSelection, TokenTtlPolicy } from "./types";
 import type { Tone } from "./workbench";
 
 export type BadgeTone = Tone;
@@ -46,5 +46,11 @@ export type ModalState =
   | { type: "assignManager"; service?: string }
   | { type: "passwordReveal"; principalId: string; password: string; action: "created" | "reset" | "enabled"; afterClose?: () => void }
   | { type: "reveal"; token: string; record: BrokerTokenRecord; principalId?: string; options?: AgentTokenOptions; viewerPrincipal?: string }
+  /**
+   * A newly issued access key, shown once to the person who issued it, on the
+   * list it was issued to (`destination`, a pathname): leaving that page by
+   * any navigation ends it.
+   */
+  | { type: "accessKeyReveal"; key: string; record: AccessKeyRecord; username: string; ownerName: string; typeLabels: { id: string; label: string }[]; destination: string; viewerPrincipal?: string }
   | ConfirmModal
   | null;

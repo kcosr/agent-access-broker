@@ -103,7 +103,7 @@ export function ManagementTokens({ principal, tokens }: { principal: PrincipalDe
         }
         rowDim={(token) => tokenStatus(token) !== "Active"}
         empty={
-          <EmptyState compact icon="key" title="No management tokens">
+          <EmptyState compact icon="ticket" title="No management tokens">
             A setup token lets the user's CLI manage their own credentials and issue agent tokens; an admin token calls admin APIs.
           </EmptyState>
         }
@@ -125,7 +125,7 @@ export function ManagementTokenDrawer({ record, onClose }: { record: AdminBroker
       label={`Token ${record.name}`}
       kicker={
         <>
-          <Icon name="key" /> Management token <span className="wb-num">{record.tokenId}</span>
+          <Icon name="ticket" /> Management token <span className="wb-num">{record.tokenId}</span>
         </>
       }
       title={record.name}

@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 const mocks = vi.hoisted(() => ({
   create: vi.fn(), patch: vi.fn(), toast: vi.fn(), navigate: vi.fn(), setModal: vi.fn(),
-  admin: vi.fn(), oauthConnections: vi.fn(), agentTokenOptions: vi.fn(), session: vi.fn()
+  admin: vi.fn(), oauthConnections: vi.fn(), agentTokenOptions: vi.fn(), session: vi.fn(), accessKeys: vi.fn()
 }));
 vi.mock("../src/api", () => ({ brokerApi: { adminCreateGroup: mocks.create, adminPatchGroup: mocks.patch } }));
 vi.mock("../src/data/invalidation", () => ({ usePortalInvalidation: () => mocks }));
@@ -52,6 +52,8 @@ test("clearing Microsoft enrollment sends false and refreshes group state", asyn
   await actions().patch("onboarding", { autoEnrollNewMicrosoftUsers: false });
   expect(mocks.patch).toHaveBeenCalledWith({}, "onboarding", { autoEnrollNewMicrosoftUsers: false });
   expect(mocks.admin).toHaveBeenCalledOnce();
+  // A group's access key types decide what its members may hold.
+  expect(mocks.accessKeys).toHaveBeenCalledOnce();
 });
 
 test("failed group creation leaves the form open without successful navigation", async () => {

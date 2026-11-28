@@ -428,7 +428,7 @@ export function AccessDrawer({ model }: { model: AccessListModel }) {
       }
       actions={
         tokenActions.issueBlocker() === null ? (
-          <Button variant="primary" icon="key" onClick={() => tokenActions.openIssuePage([open.service])}>
+          <Button variant="primary" icon="ticket" onClick={() => tokenActions.openIssuePage([open.service])}>
             Issue token for {service?.displayName ?? open.service}
           </Button>
         ) : null

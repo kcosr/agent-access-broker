@@ -98,6 +98,24 @@ impl IngressLimitError {
         }
         self
     }
+
+    /// The refusal of a request beyond its payer's share of the access key
+    /// resolution pool, said for that route.
+    fn access_key_resolution_share(mut self) -> Self {
+        if matches!(
+            self.kind,
+            IngressLimitKind::PrincipalConcurrency | IngressLimitKind::SourceConcurrency
+        ) {
+            self.error = ProviderError::error(
+                ReasonCode::ConcurrencyLimited,
+                format!(
+                    "This request was not answered: {} access key resolution requests from the same caller are in progress, the most one caller may have at once. Retry it when one of them has finished.",
+                    self.limit
+                ),
+            );
+        }
+        self
+    }
 }
 
 /// Concurrency safeguards and the fixed-window authentication budgets.
@@ -189,10 +207,40 @@ impl IngressGuards {
             .map_err(IngressLimitError::service_detail)
     }
 
+    /// One caller entry's share of the access key resolution pool: at most
+    /// `limit` of its requests are in the pool at once. The route's guards
+    /// are its own, so these counts are of this route alone.
+    pub(crate) fn try_access_key_resolution_caller_share(
+        self: &Arc<Self>,
+        caller: &str,
+        limit: u32,
+    ) -> Result<IngressPermit, IngressLimitError> {
+        self.try_principal_concurrency(caller, limit)
+            .map_err(IngressLimitError::access_key_resolution_share)
+    }
+
+    /// The same share for a peer address that presents no configured
+    /// caller's credential.
+    pub(crate) fn try_access_key_resolution_source_share(
+        self: &Arc<Self>,
+        source: &str,
+        limit: u32,
+    ) -> Result<IngressPermit, IngressLimitError> {
+        self.try_source_concurrency(source, limit)
+            .map_err(IngressLimitError::access_key_resolution_share)
+    }
+
     /// The requests holding a global concurrency permit.
     #[cfg(test)]
     pub(crate) fn global_in_flight_requests(&self) -> u32 {
         *self.global_inflight.lock().unwrap()
+    }
+
+    /// Ends every rate window, as the passing of a minute does.
+    #[cfg(test)]
+    pub(crate) fn expire_rate_windows(&self) {
+        self.auth_source_rates.lock().unwrap().clear();
+        self.auth_principal_rates.lock().unwrap().clear();
     }
 
     /// A caller-only approximate observation. Does not create or prune keys.
@@ -312,6 +360,23 @@ impl IngressGuards {
                 .try_with(|charged| *charged.borrow_mut() = Some(source.to_owned()));
         }
         result
+    }
+
+    /// Charges `source` in this instance's own source windows. Unlike
+    /// [`Self::check_auth_source_rate`] it never treats a charge that
+    /// transport admission made in the shared guards as its own: it bounds
+    /// the refused callers of a route whose admission is entirely its own.
+    pub(crate) fn check_own_source_rate(
+        &self,
+        source: &str,
+        limit: u32,
+    ) -> Result<(), IngressLimitError> {
+        check_rate(
+            &mut self.auth_source_rates.lock().unwrap(),
+            source,
+            limit,
+            IngressLimitKind::AuthSourceRate,
+        )
     }
 
     pub(crate) fn check_auth_principal_rate(

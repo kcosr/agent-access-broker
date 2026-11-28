@@ -73,6 +73,19 @@ scheme = "Bearer"
 # refresh_idle_ttl = "90d"
 # Keep the client secret outside workloads; see docs/applications.md.
 
+# Optional access key types and usernames for access keys, which a trusted
+# caller resolves through the Broker and no Broker route accepts.
+# [access_key_types.inference]
+# display_name = "Model inference"
+# description = "Point your tool at https://gateway.example.com/v1."
+# lifetime_options = ["1h", "7d", "30d", "never"] # required; offered choices
+# default_lifetime = "30d"                  # required; one offered choice
+# [usernames]
+# email_domains = ["example.com"]
+# reserved_names = ["root", "admin"]
+# existing_usernames = []
+# See docs/configuration.md#access-key-types.
+
 # Direct clients use this context. Add caller-attested contexts only after
 # configuring named trusted callers; a request header alone cannot attest one.
 [execution_context]

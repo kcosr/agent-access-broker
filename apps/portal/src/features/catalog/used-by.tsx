@@ -10,8 +10,8 @@ import { MetaLine } from "./catalog-ui";
 const KIND: Record<string, { label: string; icon: IconName }> = {
   grant: { label: "Grant", icon: "shield" },
   resource_group: { label: "Resource group", icon: "layers" },
-  token: { label: "Token restriction", icon: "key" },
-  agent_token: { label: "Token restriction", icon: "key" }
+  token: { label: "Token restriction", icon: "ticket" },
+  agent_token: { label: "Token restriction", icon: "ticket" }
 };
 
 function referenceHref(reference: ResourceUsage) {

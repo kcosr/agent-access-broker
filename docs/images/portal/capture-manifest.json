@@ -279,6 +279,76 @@
       "viewport": "1440x1200",
       "description": "Explicit unsubmitted local-account draft with username, read-only token issuance in default and internal contexts, group selection, local password acknowledgement, and self-service",
       "sha256": "f419d8870dbe2f8031edacea2ce4da5a490a03c9b371d00618ad3542bfb418dc"
+    },
+    {
+      "file": "guide/user-access-keys-light.png",
+      "theme": "light",
+      "viewport": "1440x960",
+      "description": "Browser-only fixture: a synthetic person's access keys with full, partial, no-access and expired keys; no Broker",
+      "sha256": "abd8bfccf1a5cff2182113b6fed4e72c84fa98812306be787f821a1c98eb6cc4"
+    },
+    {
+      "file": "guide/user-access-key-issue-light.png",
+      "theme": "light",
+      "viewport": "1440x960",
+      "description": "Browser-only fixture: unsubmitted access key draft with two kinds of access chosen and configured lifetime options; no key issued",
+      "sha256": "1775b0dce920cdde23beb648ba187099c2af9706409216dd4f20be04c7d3d003"
+    },
+    {
+      "file": "guide/user-access-keys-blocked-light.png",
+      "theme": "light",
+      "viewport": "1440x960",
+      "description": "Browser-only fixture: access keys page of a synthetic account without a username",
+      "sha256": "3b2bd94244730a87ddd613ccc91240f72502b2c083354ad334612f2ae9e8f6cb"
+    },
+    {
+      "file": "guide/admin-username-light.png",
+      "theme": "light",
+      "viewport": "1440x960",
+      "description": "Browser-only fixture: Username section of a synthetic person following their email",
+      "sha256": "620f4fe5b8b23575f03f41ec489e9e3c4cdaafb9f8971cf2747718ddab864533"
+    },
+    {
+      "file": "guide/admin-username-email-change-light.png",
+      "theme": "light",
+      "viewport": "1440x960",
+      "description": "Browser-only fixture: unsubmitted email change confirmation for a person whose username follows the email",
+      "sha256": "f700135bd8eb882a2a958fe7a4d30a2443eb265ed67820d2d60a63bd78a8915d"
+    },
+    {
+      "file": "guide/admin-access-key-types-light.png",
+      "theme": "light",
+      "viewport": "1440x960",
+      "description": "Browser-only fixture: an account's access key types with an unsaved Deny and the saved results",
+      "sha256": "8beb1f0506fea10364c0464b3578ba50221cb5c9c6ad73a388c8059c07f4933f"
+    },
+    {
+      "file": "guide/admin-group-access-key-types-light.png",
+      "theme": "light",
+      "viewport": "1440x960",
+      "description": "Browser-only fixture: a synthetic group's token issuance with the access key types it allows",
+      "sha256": "efd9422491d7ecd035aabbe1364d24b5880cb7970e1eff4cc78bcb69de0fbec3"
+    },
+    {
+      "file": "guide/admin-account-keys-light.png",
+      "theme": "light",
+      "viewport": "1440x960",
+      "description": "Browser-only fixture: an administrator's Keys tab for a synthetic person",
+      "sha256": "d05576e72c039ef0954ec183f78b62c1a4ec52369375d4db04d8a3673ab5b300"
+    },
+    {
+      "file": "guide/admin-issue-access-key-light.png",
+      "theme": "light",
+      "viewport": "1440x960",
+      "description": "Browser-only fixture: unsubmitted access key draft with configured lifetime options for a synthetic service account; no key issued",
+      "sha256": "a69fd602b91b9745d153f65070cb32fe74c55c25ac195a320ecccf2b0ac5160d"
+    },
+    {
+      "file": "guide/admin-catalog-access-key-types-light.png",
+      "theme": "light",
+      "viewport": "1440x960",
+      "description": "Browser-only fixture: four synthetic configured access key types with lifetime options and defaults in the catalog",
+      "sha256": "80e161013a2c421c9ac040802ad65f6aedb1225c3fa57630435667b90c4cacbf"
     }
   ]
 }

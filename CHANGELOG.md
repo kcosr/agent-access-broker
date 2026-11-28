@@ -41,6 +41,51 @@ All notable changes to this project are documented in this file.
   upstream route; the independent absolute-URI ceiling still applies.
   ([#122](https://github.com/kcosr/agent-access-broker/pull/122))
 
+- **Access keys and usernames add managed-store migration
+  `040_access_keys`.** Back up first and upgrade Broker and CLI together
+  (the runtime catalog's `requiredFeature` gains `applications` and
+  `access_keys`, which an older CLI does not parse); rollback requires the
+  matching pre-migration database and binary. The migration gives each
+  existing service account its username and changes no other row. The new
+  `[access_key_types.<id>]` table defines a type an access key may carry (a
+  display name, an optional plain `description` people see, required ordered
+  `lifetime_options` and `default_lifetime`, and `self_service`; it names no
+  execution contexts), and
+  `[usernames]` how people are named. With `usernames.email_domains`
+  set, a person's name follows their profile email unless an administrator
+  sets it by hand: the Broker names a person at creation, renames them when
+  an administrator changes their email, names them at a sign-in while they
+  hold no name, and names existing accounts shortly after startup and
+  reload; each change is recorded on its operation's audit record, and the
+  startup and reload fill as `account_usernames.assigned`. A changed name ends the
+  person's access keys. `PATCH /v1/admin/principals/{principal}` now
+  answers `version_conflict` when it began before a reload. A service
+  account can no longer be created under an ID a person holds as a
+  username or that `[usernames]` lists. Static principal tokens, trusted caller
+  credentials and imported identity tokens may no longer start with
+  `aab_ak_`, and a stored identity token with that prefix fails readiness
+  until it is replaced. A local sign-in that began before a reload now
+  answers `version_conflict`. `BrokerConfig` has new
+  `access_key_types` and `usernames` fields, and `HttpRouteSpec` gains the
+  public `browser_session_only: bool` field, serialized as
+  `browserSessionOnly` when true: downstream struct literals must supply it
+  (`false` for a route that also takes a bearer token). Which access key types an account may
+  hold is its `accessKeyTypes`, set per type on accounts
+  (`{"allow":[...],"deny":[...]}`) and managed groups (`{"allow":[...]}`)
+  through the principal access PATCH, group create and update, and
+  `--access-key-types` on the matching CLI commands; principal detail
+  reports the resolved `accessKeyTypePolicy`. No account or group is
+  allowed any type until an administrator allows it, withdrawing a type stops
+  existing tokens of it, and startup and reload refuse a configuration that
+  drops an access key type a saved setting names, saying which type and
+  which settings ([retiring a
+  type](docs/administrator-guide.md#retire-an-access-key-type)). See
+  [access key types](docs/configuration.md#access-key-types),
+  [usernames](docs/configuration.md#usernames),
+  [access key type settings](docs/roles.md#access-key-types) and the
+  [database reference](docs/database.md#access-keys-and-usernames).
+  ([#127](https://github.com/kcosr/agent-access-broker/pull/127))
+
 - **Application access adds managed-store migration `037_application_access`.**
   Back up first and upgrade Broker and CLI together; rollback requires the
   matching pre-migration database and binary. The migration changes no existing
@@ -220,6 +265,84 @@ All notable changes to this project are documented in this file.
   ([#53](https://github.com/kcosr/agent-access-broker/pull/53), [#55](https://github.com/kcosr/agent-access-broker/pull/55))
 
 ### Added
+
+- **Access key resolution.** A trusted caller with the new
+  `allow_access_key_resolution` capability asks whose access key a value is with
+  `POST /v1/access-keys/resolve` and receives the subject, local groups and
+  access key types of an active token. A stored inactive key returns its ID,
+  current usable owner (or null) and reason for the resolving service's logs;
+  unknown keys return only `active: false`, and malformed HTTP requests remain
+  400. The route spends no other route's budget. Every request runs in its own pool
+  (`limits.max_concurrent_access_key_resolutions`), of which one caller holds at most
+  `limits.max_concurrent_access_key_resolutions_per_caller`; its per-caller rate
+  (`limits.access_key_resolutions_per_caller_per_minute`) counts only keys
+  no store holds, malformed requests and failed lookups, and a request
+  refused by the pool or a rate answers 429 without an audit record.
+  Resolution identifies a key and decides nothing about a request: no outcome
+  writes an audit record or depends on audit-store availability. The resolving
+  service logs its decisions and refusals; issue, revoke, settings and username
+  changes stay audited, and coarse last-used updates remain. Operational logging
+  keeps Broker failures at ERROR and ordinary refusals at INFO. Each
+  type in the answer is exactly `{name, validUntil}`.
+  `TrustedCallerConfig` and `LimitsConfig` have new fields, and the SDK
+  `ReasonCode` gains `broker_caller_access_key_resolution_denied`,
+  `broker_account_username_conflict`, `broker_account_username_denied`,
+  `broker_account_username_not_found`, `broker_access_key_denied`,
+  `broker_access_key_not_found` and `broker_access_key_answer_too_large`. See
+  [access key resolution](docs/http-api.md#access-key-resolution).
+  ([#127](https://github.com/kcosr/agent-access-broker/pull/127))
+
+- **Username and access key administration.** Administrators view each
+  account's username, choose whether it follows the email or is set by
+  hand, set or remove it, and confirm a listed name
+  (`/v1/admin/account-usernames`, `/v1/admin/principals/{principal}/account-username`,
+  `agent-access admin usernames`); principal detail reports the name, its
+  mode and its state; they issue access
+  keys for people and service accounts, including types people cannot
+  create themselves, and list and revoke any
+  (`/v1/admin/access-keys`, `agent-access admin access-keys`); and list
+  the configured types (`agent-access admin access-key-types list`). A signed-in
+  person lists, creates and revokes their own access keys at
+  `/v1/access-keys` from a browser session, independently of self-service;
+  the catalog marks those routes `browserSessionOnly` and offers them to a
+  browser session only. Both issuance routes require a `lifetime` offered by
+  every selected type, matched by duration or the literal `never`; a missing
+  lifetime has no server default. Type views expose `lifetimeOptions` and
+  `defaultLifetime`, and the portal offers their intersection, preserving a
+  manual choice while it remains offered. Malformed lifetime strings return
+  `input_invalid`; well-formed choices outside a selected type's list return
+  `lifetime_not_offered`. A key issued
+  with `never` has a null `expiresAt`; its type's `validUntil` is null only
+  when that type also has an unlimited maximum. Changing options can shorten
+  existing type access from the key's mint time without changing its expiry.
+  A username reports what the saved email gives and how many live keys a
+  change of name would end; a change of mode, name or email answers with
+  what it did (`accountUsernameChange`); a listed key names each type it
+  carries and whether it still holds it; and a person's options name the
+  problem only an administrator can remove. No key is issued for an
+  account whose keys could not resolve (disabled, identity access paused,
+  no usable username, more than 64 local groups): both mints refuse with
+  the code the account's keys list as their status.
+  See [usernames and access keys](docs/http-api.md#usernames-and-access-keys)
+  and the [administrator guide](docs/administrator-guide.md#usernames-and-access-keys).
+  ([#127](https://github.com/kcosr/agent-access-broker/pull/127))
+
+- **Portal screens for access keys and usernames.** **My access > Keys** lists
+  a person's access keys with what each gives access to, issues one on its own
+  page and shows it once, and revokes; it appears when the person can issue a
+  type or holds a key, independently of self-service, and otherwise says what
+  an administrator must fix. Administrators set a person's username on
+  **Overview**, choose per access key type whether an account follows its
+  groups, allows or denies it, choose the types a group allows, list the
+  configured types under **Catalog > Access key types**, and list, issue and
+  revoke an account's keys on its **Keys** tab, which says why when no key of
+  the account can work. Expiry sorting treats a key without expiry as latest,
+  and the lifetime hint identifies a selected type that is no longer offered.
+  Refreshing a refused lifetime keeps a still-offered choice and its error;
+  selecting an available replacement clears that lifetime error.
+  **Tokens** now uses a ticket
+  icon. See the [portal guide](docs/portal-guide/user.md#10-issue-and-revoke-an-access-key).
+  ([#127](https://github.com/kcosr/agent-access-broker/pull/127))
 
 - **Action output schemas make result fields discoverable.** Catalog actions
   expose provider `resultSchemas`; OpenAPI types their response envelopes, and
@@ -683,6 +806,33 @@ All notable changes to this project are documented in this file.
   ([#53](https://github.com/kcosr/agent-access-broker/pull/53))
 
 ### Fixed
+
+- Access key revocation rejects a pasted secret before constructing an audit
+  target, including a secret prefixed with `ak_`. Access key and username
+  management, and the principal/group routes that carry these settings, reject
+  the Broker secret namespace `aab_` in identifiers; usernames and access-key
+  issue names cannot start with it. List-query errors no longer echo
+  unrecognized parameter names. Invalid key IDs return the existing 404
+  without the supplied target.
+  ([#127](https://github.com/kcosr/agent-access-broker/pull/127))
+- Trusted-caller and limits configuration accepts objects only, and trusted-caller
+  transport and context modes accept strings only. Portal profile submission
+  ignores unchanged and pending saves, malformed access-key options fail closed,
+  and type labels retain distinct IDs when display names are shared.
+  ([#127](https://github.com/kcosr/agent-access-broker/pull/127))
+- **The portal's one-time secret dialogs keep their secret safe and copyable.**
+  While a newly issued agent token or access key, or a generated password,
+  is shown, the command palette stays closed, so none of its actions can
+  replace the dialog; a session that comes back requiring a password change
+  closes it; and when the browser refuses the copy, the secret is selected
+  with a prompt to copy it by hand.
+  ([#127](https://github.com/kcosr/agent-access-broker/pull/127))
+
+- **The principal access and group request bodies are JSON objects only.**
+  `PATCH /v1/admin/principals/{principal}/access`, `POST /v1/admin/groups`
+  and `PATCH /v1/admin/groups/{group}` no longer read a JSON array as the
+  body's members in order; send the documented object.
+  ([#127](https://github.com/kcosr/agent-access-broker/pull/127))
 
 - **Completed mutations retain their outcome when response formatting fails.**
   Body-bearing native writes provide a nonserialized recovery receipt; failed

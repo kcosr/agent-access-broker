@@ -20,6 +20,8 @@ export function useRuntimeActions() {
       invalidate.admin();
       invalidate.console();
       invalidate.oauthConnections();
+      // Access key types and usernames come from the configuration.
+      invalidate.accessKeys();
       const tokens = applicationTokensNotice(status.applicationTokens);
       const reloaded = `Config reloaded · generation ${status.generation}`;
       if (!tokens) toast(reloaded, { tone: "success" });

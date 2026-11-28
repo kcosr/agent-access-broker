@@ -26,6 +26,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::net::SocketAddr;
 use std::sync::Arc;
+use tracing::Instrument;
+use tracing::instrument::WithSubscriber;
 use url::Url;
 
 #[derive(Debug, Deserialize)]
@@ -274,11 +276,11 @@ pub(crate) async fn auth_local_login(
         operation,
         source: &source,
     };
-    let _source_permit = match acquire_auth_source_guard(&state, response_context).await {
+    let source_permit = match acquire_auth_source_guard(&state, response_context).await {
         Ok(permit) => permit,
         Err(response) => return *response,
     };
-    let _principal_permit = if principal_rate_key_is_safe(&body.principal_id) {
+    let principal_permit = if principal_rate_key_is_safe(&body.principal_id) {
         match acquire_auth_principal_guard(&state, response_context, &body.principal_id, false)
             .await
         {
@@ -367,25 +369,159 @@ pub(crate) async fn auth_local_login(
             .await;
         }
     };
-    let authenticated = match snapshot
-        .managed_store_call(move |store| {
-            let _work = work;
-            store.authenticate_local_password_session(
-                &password_hasher,
-                &token_hasher,
-                LocalPasswordVerifyRequest {
-                    principal_id,
-                    password,
-                    source: login_source,
-                    max_failed_attempts,
-                    lockout_ttl_seconds,
-                },
-                session_ttl_seconds,
-                issuance_environment.as_ref(),
-            )
+    // The owner keeps the request's permits and a drain lease from the store
+    // work to the completion audit, whatever happens to the response waiter:
+    // a first sign-in can allocate a username, and that allocation is
+    // recorded only by this sign-in's audit record.
+    let lease = state.reloadable.application_owners.register();
+    let owner = tokio::spawn(
+        local_login_owner(LocalLoginOwner {
+            state: state.clone(),
+            snapshot: snapshot.clone(),
+            request_id: request_id.clone(),
+            broker_request_id: broker_request_id.clone(),
+            source: source.clone(),
+            claimed_principal: body.principal_id.clone(),
+            return_to: body.return_to,
+            password_hasher,
+            token_hasher,
+            request: LocalPasswordVerifyRequest {
+                principal_id,
+                password,
+                source: login_source,
+                max_failed_attempts,
+                lockout_ttl_seconds,
+            },
+            session_ttl_seconds,
+            issuance_environment,
+            work,
+            _permits: (source_permit, principal_permit),
+            _lease: lease,
         })
-        .await
-    {
+        .in_current_span()
+        .with_current_subscriber(),
+    );
+    match owner.await {
+        Ok(response) => response,
+        Err(_) => {
+            local_login_failure_response(
+                response_context,
+                body.principal_id,
+                StatusCode::SERVICE_UNAVAILABLE,
+                ReasonCode::ManagedStoreUnavailable,
+                "login is unavailable",
+            )
+            .await
+        }
+    }
+}
+
+/// What a local sign-in's owner needs after the request was admitted.
+struct LocalLoginOwner {
+    state: AppState,
+    snapshot: Arc<RuntimeSnapshot>,
+    request_id: String,
+    broker_request_id: String,
+    source: SourceContext,
+    claimed_principal: String,
+    return_to: Option<String>,
+    password_hasher: agent_access_core::LocalPasswordHasher,
+    token_hasher: agent_access_core::BrokerTokenHasher,
+    request: LocalPasswordVerifyRequest,
+    session_ttl_seconds: u64,
+    issuance_environment: Option<agent_access_core::AgentTokenIssuanceEnvironment>,
+    work: tokio::sync::OwnedSemaphorePermit,
+    _permits: (IngressPermit, Option<IngressPermit>),
+    _lease: crate::owner_drain::OwnerLease,
+}
+
+/// Verifies the password, completes the sign-in under the reload fence and
+/// appends its audit record. The password is hashed before the fence; the
+/// transaction that issues the session and derives a first sign-in's
+/// username runs only while the request's snapshot is still the current one, so
+/// it never applies a retired generation's username settings.
+async fn local_login_owner(owner: LocalLoginOwner) -> Response {
+    #[cfg(test)]
+    let barrier = owner
+        .state
+        .reloadable
+        .sign_in_completion_barrier
+        .lock()
+        .unwrap()
+        .clone();
+    let response = local_login_complete(
+        owner,
+        #[cfg(test)]
+        barrier.clone(),
+    )
+    .await;
+    #[cfg(test)]
+    if let Some(barrier) = barrier {
+        barrier.completed.notify_one();
+    }
+    response
+}
+
+async fn local_login_complete(
+    owner: LocalLoginOwner,
+    #[cfg(test)] barrier: Option<Arc<crate::state::McpBlockingBarrier>>,
+) -> Response {
+    let LocalLoginOwner {
+        state,
+        snapshot,
+        request_id,
+        broker_request_id,
+        source,
+        claimed_principal,
+        return_to,
+        password_hasher,
+        token_hasher,
+        request,
+        session_ttl_seconds,
+        issuance_environment,
+        work,
+        _permits,
+        _lease,
+    } = owner;
+    let _work = work;
+    let response_context = AuthResponseContext {
+        snapshot: &snapshot,
+        request_id: &request_id,
+        broker_request_id: &broker_request_id,
+        operation: AUTH_LOCAL_LOGIN,
+        source: &source,
+    };
+    let attempt = snapshot
+        .managed_store_call(move |store| {
+            store.verify_local_password_attempt(&password_hasher, request)
+        })
+        .await;
+    #[cfg(test)]
+    if let Some(barrier) = barrier {
+        tokio::task::spawn_blocking(move || barrier.wait())
+            .await
+            .expect("sign-in barrier");
+    }
+    let authenticated = match attempt {
+        Ok(attempt) => {
+            state
+                .reloadable
+                .token_store_call_from_snapshot(snapshot.clone(), move |runtime| {
+                    let store = runtime.managed_store().ok_or_else(|| {
+                        ManagedStoreError::Unavailable("managed store is unavailable".into())
+                    })?;
+                    store.complete_local_password_session(
+                        &token_hasher,
+                        attempt,
+                        session_ttl_seconds,
+                        issuance_environment.as_ref(),
+                    )
+                })
+                .await
+        }
+        Err(error) => Err(error),
+    };
+    let authenticated = match authenticated {
         Ok(authenticated) => authenticated,
         Err(error) => {
             let (reason_code, message) = match error {
@@ -399,7 +535,7 @@ pub(crate) async fn auth_local_login(
             };
             return local_login_failure_response(
                 response_context,
-                body.principal_id,
+                claimed_principal,
                 StatusCode::from_u16(reason_code.http_status())
                     .unwrap_or(StatusCode::SERVICE_UNAVAILABLE),
                 reason_code,
@@ -418,7 +554,7 @@ pub(crate) async fn auth_local_login(
         issued.record.token_id.clone(),
         issued.record.scopes.clone(),
     );
-    let return_to = sanitize_return_to(snapshot.runtime.config(), body.return_to.as_deref());
+    let return_to = sanitize_return_to(snapshot.runtime.config(), return_to.as_deref());
     let (role, self_service_enabled, policy_management_services) =
         session_management_access(&snapshot, &identity).await;
     let result = browser_session_result(
@@ -439,11 +575,19 @@ pub(crate) async fn auth_local_login(
         },
         authenticated.agent_token_issuance_policy.as_ref(),
     );
-    let mut response = auth_success_response(
+    let mut response = auth_success_response_with(
         response_context,
         Some(identity.principal.clone()),
         &identity,
         result,
+        AuthAuditDetail {
+            // The name this sign-in derived, captured in its transaction.
+            derived_account_username: authenticated
+                .derived_account_username
+                .as_ref()
+                .map(agent_access_core::AccountUsernameRecord::audit_details),
+            ..AuthAuditDetail::default()
+        },
     )
     .await;
     attach_session_cookie_or_revoke(
@@ -1399,7 +1543,7 @@ pub(crate) fn auth_request_ids(
     Ok((request_id, broker_request_id))
 }
 
-fn valid_request_id(value: &str) -> bool {
+pub(crate) fn valid_request_id(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128
         && value
@@ -1672,6 +1816,23 @@ async fn auth_success_response(
     identity: &IdentityContext,
     result: Value,
 ) -> Response {
+    auth_success_response_with(
+        context,
+        principal,
+        identity,
+        result,
+        AuthAuditDetail::default(),
+    )
+    .await
+}
+
+async fn auth_success_response_with(
+    context: AuthResponseContext<'_>,
+    principal: Option<String>,
+    identity: &IdentityContext,
+    result: Value,
+    detail: AuthAuditDetail,
+) -> Response {
     let envelope = auth_success_envelope(
         context.request_id,
         context.broker_request_id,
@@ -1682,12 +1843,13 @@ async fn auth_success_response(
     if is_unaudited_read(context.operation) {
         return auth_response(StatusCode::OK, envelope);
     }
-    auth_audited_response(
+    auth_audited_response_with(
         context.snapshot,
         StatusCode::OK,
         envelope,
         identity,
         context.source,
+        detail,
     )
     .await
 }
@@ -1736,10 +1898,12 @@ async fn local_login_failure_response(
 }
 
 /// Extra `providerAudit.auth` fields for one authentication record.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 struct AuthAuditDetail {
     claimed_principal_invalid: bool,
     phase: Option<&'static str>,
+    /// The username a sign-in derived for the account.
+    derived_account_username: Option<Value>,
 }
 
 async fn auth_error_response_with(
@@ -1861,6 +2025,9 @@ async fn append_auth_audit(
     }
     if let Some(phase) = detail.phase {
         auth_audit["phase"] = json!(phase);
+    }
+    if let Some(name) = detail.derived_account_username {
+        auth_audit["derivedAccountUsername"] = name;
     }
     let record = AuditRecord {
         caller_id: identity.caller_id.clone(),

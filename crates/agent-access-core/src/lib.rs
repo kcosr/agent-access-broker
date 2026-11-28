@@ -22,6 +22,7 @@ use url::Url;
 /// This ceiling does not restrict policy publication or ordinary invocation.
 pub const RESOURCE_ACCESS_MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 
+mod access_key_config;
 mod api;
 mod applications_config;
 mod attribution;
@@ -45,6 +46,7 @@ pub mod microsoft_oidc;
 mod network;
 mod node_identity;
 pub mod oauth;
+mod object_only;
 pub mod output_schema;
 mod resource_policy;
 mod runtime;
@@ -53,6 +55,7 @@ mod state_lock;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 
+pub use access_key_config::*;
 pub use api::*;
 pub use applications_config::*;
 pub use attribution::AttributionConfig;
@@ -76,6 +79,7 @@ pub use network::{
 };
 pub use node_identity::*;
 pub use oauth::*;
+pub use object_only::object_only;
 pub use resource_policy::*;
 pub use runtime::*;
 pub use state_lock::*;
@@ -581,6 +585,13 @@ pub struct BrokerConfig {
     /// application ID.
     #[serde(default)]
     pub applications: ApplicationsConfig,
+    /// `[access_key_types.<id>]`: what an access key may be used for at the
+    /// service that resolves it, keyed by access key type ID.
+    #[serde(default)]
+    pub access_key_types: AccessKeyTypesConfig,
+    /// `[usernames]`: how people are named at that service.
+    #[serde(default)]
+    pub usernames: AccountUsernamesConfig,
     pub managed_store: Option<ManagedStoreConfig>,
     pub credential_encryption: Option<CredentialEncryptionConfig>,
     #[serde(default)]
@@ -732,7 +743,7 @@ pub struct IdentityConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(remote = "Self", deny_unknown_fields)]
 pub struct TrustedCallerConfig {
     pub credential_ref: String,
     #[serde(default)]
@@ -743,10 +754,14 @@ pub struct TrustedCallerConfig {
     pub allowed_execution_contexts: Option<Vec<String>>,
     #[serde(default)]
     pub allow_forwarded_identity: bool,
+    /// Whether the caller may ask whose access key a value is.
+    #[serde(default)]
+    pub allow_access_key_resolution: bool,
 }
 
-#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
+deserialize_object_only!(TrustedCallerConfig);
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum TrustedCallerCredentialTransport {
     #[default]
     CallerAuthorization,
@@ -762,11 +777,36 @@ impl TrustedCallerCredentialTransport {
     }
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrustedCallerContextMode {
     Fixed,
     Asserted,
+}
+
+impl<'de> Deserialize<'de> for TrustedCallerCredentialTransport {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        match String::deserialize(deserializer)?.as_str() {
+            "caller_authorization" => Ok(Self::CallerAuthorization),
+            "authorization_user" => Ok(Self::AuthorizationUser),
+            other => Err(serde::de::Error::unknown_variant(
+                other,
+                &["caller_authorization", "authorization_user"],
+            )),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for TrustedCallerContextMode {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        match String::deserialize(deserializer)?.as_str() {
+            "fixed" => Ok(Self::Fixed),
+            "asserted" => Ok(Self::Asserted),
+            other => Err(serde::de::Error::unknown_variant(
+                other,
+                &["fixed", "asserted"],
+            )),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1252,6 +1292,16 @@ pub struct LimitsConfig {
     pub max_concurrent_requests: u32,
     #[serde(default = "default_max_concurrent_per_principal")]
     pub max_concurrent_requests_per_principal: u32,
+    /// Access key resolutions in flight at once, in a pool of their own.
+    #[serde(default = "default_max_concurrent_access_key_resolutions")]
+    pub max_concurrent_access_key_resolutions: u32,
+    /// The most of that pool one caller entry, or one peer address that
+    /// presents no configured caller's credential, may hold at once.
+    #[serde(default = "default_max_concurrent_access_key_resolutions_per_caller")]
+    pub max_concurrent_access_key_resolutions_per_caller: u32,
+    /// Access key resolutions one trusted caller may make each minute.
+    #[serde(default = "default_access_key_resolutions_per_caller")]
+    pub access_key_resolutions_per_caller_per_minute: u32,
     #[serde(default = "default_max_http_body_bytes")]
     pub max_http_body_bytes: u64,
     #[serde(default = "default_download_max_bytes")]
@@ -1282,6 +1332,11 @@ impl LimitsConfig {
             auth_requests_per_source_per_minute: default_auth_requests_per_source(),
             max_concurrent_requests: default_max_concurrent(),
             max_concurrent_requests_per_principal: default_max_concurrent_per_principal(),
+            max_concurrent_access_key_resolutions: default_max_concurrent_access_key_resolutions(),
+            max_concurrent_access_key_resolutions_per_caller:
+                default_max_concurrent_access_key_resolutions_per_caller(),
+            access_key_resolutions_per_caller_per_minute: default_access_key_resolutions_per_caller(
+            ),
             max_http_body_bytes: default_max_http_body_bytes(),
             max_download_bytes: default_download_max_bytes(),
             max_upstream_response_bytes: default_max_upstream_response_bytes(),
@@ -1307,8 +1362,11 @@ impl<'de> Deserialize<'de> for LimitsConfig {
             where
                 D: Deserializer<'de>,
             {
-                // The inherent function `remote = "Self"` derives, not this trait.
-                LimitsConfig::deserialize(deserializer).map(Self)
+                // Delegate map fields to the remote derive after rejecting sequences.
+                #[derive(Deserialize)]
+                #[serde(transparent)]
+                struct Fields(#[serde(with = "LimitsConfig")] LimitsConfig);
+                object_only::<D, Fields>(deserializer).map(|Fields(limits)| Self(limits))
             }
         }
 
@@ -1344,6 +1402,20 @@ fn default_max_concurrent() -> u32 {
 }
 fn default_max_concurrent_per_principal() -> u32 {
     10
+}
+
+fn default_max_concurrent_access_key_resolutions() -> u32 {
+    32
+}
+
+/// Three quarters of the default pool: a quarter is always left to the
+/// other callers.
+fn default_max_concurrent_access_key_resolutions_per_caller() -> u32 {
+    24
+}
+
+fn default_access_key_resolutions_per_caller() -> u32 {
+    6000
 }
 fn default_max_http_body_bytes() -> u64 {
     ProviderLimits::default().max_http_body_bytes
@@ -1759,6 +1831,22 @@ pub fn validate_broker_config(config: &BrokerConfig) -> Result<(), ConfigError> 
                 ));
             }
         }
+        if caller.allow_access_key_resolution
+            && caller.credential_transport != TrustedCallerCredentialTransport::CallerAuthorization
+        {
+            errors.push(format!(
+                "{label}.allow_access_key_resolution requires credential_transport = \"caller_authorization\""
+            ));
+        }
+        if caller.allow_access_key_resolution
+            && (config.identity.authority != "managed"
+                || config.managed_store.is_none()
+                || config.broker_tokens.is_none())
+        {
+            errors.push(format!(
+                "{label}.allow_access_key_resolution requires identity.authority = \"managed\", [managed_store] and [broker_tokens]: access keys exist only for managed accounts"
+            ));
+        }
         if caller.allow_forwarded_identity
             && (config.identity.authority != "managed"
                 || config.managed_store.is_none()
@@ -1824,6 +1912,7 @@ pub fn validate_broker_config(config: &BrokerConfig) -> Result<(), ConfigError> 
     validate_portal(config, &mut errors);
     mcp_config::validate(config, &mut errors);
     applications_config::validate(config, &mut errors);
+    access_key_config::validate(config, &mut errors);
     // Imported types live in the managed store, and configuration cannot
     // reference them, so offline validation sees the composition's types.
     let effective_types = runtime::EffectiveResourceTypes::composition(config.providers.registry());
@@ -4395,6 +4484,37 @@ fn validate_limits(config: &BrokerConfig, errors: &mut Vec<String>) {
     }
     if limits.max_concurrent_requests_per_principal == 0 {
         errors.push("limits.max_concurrent_requests_per_principal must be non-zero".to_string());
+    }
+    if limits.max_concurrent_access_key_resolutions == 0 {
+        errors.push("limits.max_concurrent_access_key_resolutions must be non-zero".to_string());
+    }
+    // One caller entry's share of the resolution pool. Where two or more
+    // callers resolve, no one of them may be able to hold all of it.
+    let pool = limits.max_concurrent_access_key_resolutions;
+    let share = limits.max_concurrent_access_key_resolutions_per_caller;
+    let resolving_callers = config
+        .identity
+        .trusted_callers
+        .values()
+        .filter(|caller| caller.allow_access_key_resolution)
+        .count();
+    if share == 0 {
+        errors.push(
+            "limits.max_concurrent_access_key_resolutions_per_caller must be non-zero".to_string(),
+        );
+    } else if share > pool && pool != 0 {
+        errors.push(format!(
+            "limits.max_concurrent_access_key_resolutions_per_caller ({share}) must not exceed limits.max_concurrent_access_key_resolutions ({pool})"
+        ));
+    } else if share == pool && resolving_callers > 1 {
+        errors.push(format!(
+            "limits.max_concurrent_access_key_resolutions_per_caller ({share}) must be less than limits.max_concurrent_access_key_resolutions ({pool}) when more than one trusted caller has allow_access_key_resolution: no caller may be able to hold the whole pool"
+        ));
+    }
+    if limits.access_key_resolutions_per_caller_per_minute == 0 {
+        errors.push(
+            "limits.access_key_resolutions_per_caller_per_minute must be non-zero".to_string(),
+        );
     }
     if limits.max_http_body_bytes == 0 {
         errors.push("limits.max_http_body_bytes must be non-zero".to_string());

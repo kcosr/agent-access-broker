@@ -10,18 +10,18 @@ use agent_access_confluence::{
 };
 use agent_access_conformance::ConformanceConfig;
 use agent_access_core::{
-    AggregateInvocationLimitConfig, ApplicationConfig, AttributionConfig, AuditConfig,
-    AuditDurability, BrokerConfig, BrokerTokenTtlOption, BrokerTokensConfig, BrowserAuthConfig,
-    CommandImportConfig, ConnectionConfig, ConnectionOAuthConfig, CredentialConfig,
-    CredentialEncryptionConfig, CredentialEncryptionKeyConfig, CredentialsConfig, DeploymentConfig,
-    ExecutionContextConfig, GatewayConfig, GatewayUpstreamTokenAuth, IdentityConfig,
-    IdentityGroupConfig, IdentitySourceConfig, ImportsConfig, InitialAdminConfig,
-    InvocationLimitConfig, InvocationLimitsConfig, LimitsConfig, LocalPasswordConfig,
-    ManagedStoreConfig, ManagementConfig, McpConfig, MicrosoftOidcConfig, NetworkConfig,
-    OAuthConfig, OidcConfig, OutboundTlsConfig, OutboundTlsTrustMode, PolicyConfig,
-    PolicyGrantConfig, PortalConfig, PrincipalInvocationLimitConfig, ProvidersConfig,
-    ResourceDefinition, ResourceGroupDefinition, ResourceSelection, StaticPrincipalConfig,
-    TrustedCallerConfig, TrustedCallerContextMode,
+    AccessKeyTypeConfig, AccountUsernamesConfig, AggregateInvocationLimitConfig, ApplicationConfig,
+    AttributionConfig, AuditConfig, AuditDurability, BrokerConfig, BrokerTokenTtlOption,
+    BrokerTokensConfig, BrowserAuthConfig, CommandImportConfig, ConnectionConfig,
+    ConnectionOAuthConfig, CredentialConfig, CredentialEncryptionConfig,
+    CredentialEncryptionKeyConfig, CredentialsConfig, DeploymentConfig, ExecutionContextConfig,
+    GatewayConfig, GatewayUpstreamTokenAuth, IdentityConfig, IdentityGroupConfig,
+    IdentitySourceConfig, ImportsConfig, InitialAdminConfig, InvocationLimitConfig,
+    InvocationLimitsConfig, LimitsConfig, LocalPasswordConfig, ManagedStoreConfig,
+    ManagementConfig, McpConfig, MicrosoftOidcConfig, NetworkConfig, OAuthConfig, OidcConfig,
+    OutboundTlsConfig, OutboundTlsTrustMode, PolicyConfig, PolicyGrantConfig, PortalConfig,
+    PrincipalInvocationLimitConfig, ProvidersConfig, ResourceDefinition, ResourceGroupDefinition,
+    ResourceSelection, StaticPrincipalConfig, TrustedCallerConfig, TrustedCallerContextMode,
 };
 use agent_access_fake::{FakeProviderConfig, OAuthStubProviderConfig};
 use agent_access_gitlab::{
@@ -110,6 +110,8 @@ pub(super) fn render_config(config: &BrokerConfig) -> Table {
         command_imports,
         oauth,
         applications,
+        access_key_types,
+        usernames,
         managed_store,
         credential_encryption,
         management,
@@ -140,6 +142,11 @@ pub(super) fn render_config(config: &BrokerConfig) -> Table {
         )
         .put("oauth", oauth_value(oauth))
         .put("applications", keyed(applications, application_value))
+        .put(
+            "access_key_types",
+            keyed(access_key_types, access_key_type_value),
+        )
+        .put("usernames", usernames_value(usernames))
         .opt(
             "managed_store",
             managed_store.as_ref().map(managed_store_value),
@@ -271,6 +278,7 @@ fn trusted_caller_value(caller: &TrustedCallerConfig) -> Value {
         execution_context,
         allowed_execution_contexts,
         allow_forwarded_identity,
+        allow_access_key_resolution,
     } = caller;
     let context_mode = match context_mode {
         TrustedCallerContextMode::Fixed => "fixed",
@@ -287,6 +295,7 @@ fn trusted_caller_value(caller: &TrustedCallerConfig) -> Value {
             allowed_execution_contexts.as_deref().map(strings),
         )
         .put("allow_forwarded_identity", *allow_forwarded_identity)
+        .put("allow_access_key_resolution", *allow_access_key_resolution)
         .value()
 }
 
@@ -313,6 +322,36 @@ fn application_value(application: &ApplicationConfig) -> Value {
         .opt("allowed_services", allowed_services.as_deref().map(strings))
         .put("access_token_ttl", access_token_ttl.as_str())
         .put("refresh_idle_ttl", refresh_idle_ttl.as_str())
+        .value()
+}
+
+fn access_key_type_value(access_key_type: &AccessKeyTypeConfig) -> Value {
+    let AccessKeyTypeConfig {
+        display_name,
+        description,
+        lifetime_options,
+        default_lifetime,
+        self_service,
+    } = access_key_type;
+    Fields::default()
+        .put("display_name", display_name.as_str())
+        .opt("description", description.as_deref())
+        .put("lifetime_options", strings(lifetime_options))
+        .put("default_lifetime", default_lifetime.as_str())
+        .put("self_service", *self_service)
+        .value()
+}
+
+fn usernames_value(usernames: &AccountUsernamesConfig) -> Value {
+    let AccountUsernamesConfig {
+        email_domains,
+        reserved_names,
+        existing_usernames,
+    } = usernames;
+    Fields::default()
+        .put("email_domains", strings(email_domains))
+        .put("reserved_names", strings(reserved_names))
+        .put("existing_usernames", strings(existing_usernames))
         .value()
 }
 
@@ -940,6 +979,9 @@ fn limits_value(limits: &LimitsConfig) -> Value {
         auth_requests_per_source_per_minute,
         max_concurrent_requests,
         max_concurrent_requests_per_principal,
+        max_concurrent_access_key_resolutions,
+        max_concurrent_access_key_resolutions_per_caller,
+        access_key_resolutions_per_caller_per_minute,
         max_http_body_bytes,
         max_download_bytes,
         max_upstream_response_bytes,
@@ -1014,6 +1056,18 @@ fn limits_value(limits: &LimitsConfig) -> Value {
         .int(
             "max_concurrent_requests_per_principal",
             *max_concurrent_requests_per_principal,
+        )
+        .int(
+            "max_concurrent_access_key_resolutions",
+            *max_concurrent_access_key_resolutions,
+        )
+        .int(
+            "max_concurrent_access_key_resolutions_per_caller",
+            *max_concurrent_access_key_resolutions_per_caller,
+        )
+        .int(
+            "access_key_resolutions_per_caller_per_minute",
+            *access_key_resolutions_per_caller_per_minute,
         )
         .int("max_http_body_bytes", *max_http_body_bytes)
         .int("max_download_bytes", *max_download_bytes)

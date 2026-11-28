@@ -480,6 +480,59 @@ restriction: when you approve it again, a read-only access is still
 read-only, and a disabled one still cannot be connected until an
 administrator enables it.
 
+## Access keys
+
+Some services reach you through a gateway of their own instead of through
+the Broker, for example a model endpoint. An **access key** tells such a
+service who you are. It is a separate credential from a Broker token: the
+Broker itself never accepts an access key as a credential, and a Broker token
+does not work where an access key is expected. Whether you have access keys at all, and
+for what, is decided by your administrator.
+
+What you can do, from a signed-in browser session:
+
+- **See what you may create.** Each kind of access has a name and, when
+  your operator wrote one, a description that says what it is for and where
+  to point your tool. Kinds you may not use are not shown. Some kinds are
+  issued by an administrator only.
+- **Create a key.** Choose one or more kinds of access, give the key a name
+  that says where it will run, and choose a lifetime offered by every kind
+  you chose. The operator supplies the choices; **Never expires** is available
+  only when every chosen kind offers it. If the kinds share no lifetime,
+  choose a different combination before issuing. The key is shown once:
+  copy it to where your tool reads it, because it cannot be shown again. A key cannot be changed afterwards; create a replacement
+  instead.
+- **Review your keys.** Each key shows what it gives access to, when it was
+  created, when it expires (**Never** for a key without expiry), when it was
+  last used and whether it works now. Keys an administrator issued for you
+  are listed with yours.
+- **Revoke a key.** Revocation is immediate at the Broker and final; the
+  service that uses the key stops accepting it when it next checks the key
+  with the Broker.
+
+Services know you by the **username** on your account. It normally comes
+from your email address and only an administrator can change it. A key
+works only while your account has a usable username, and a change of your
+username ends the keys you created before it; create new ones afterwards.
+
+A key can stop working without being revoked: when a chosen lifetime ends,
+when the operator shortens how long a kind of access lasts from the key's
+original creation time, when an administrator withdraws a kind of access
+from you (the key keeps working for the other kinds it has), when your username changes, while your account
+is disabled or your identity access is paused, or while your account is in
+too many groups for access keys to work. The list says which.
+
+A key that could not work is not created. When you cannot create a key,
+the reason is shown: your account has no username yet, the username awaits
+an administrator's confirmation or is a reserved name, your identity access
+is paused, or your account is in too many groups for access keys to work.
+Each of these needs an administrator. The keys you already have are kept,
+and work again once the cause is gone.
+
+Access keys are created in the browser only; there is no command for them.
+Treat a key like a password: do not paste it into chats, tickets or source
+code, and revoke it if it may have been exposed.
+
 ## Rotate, pause, and revoke
 
 Use your browser session or `user_manage` client for management:

@@ -4,6 +4,7 @@ import { createContext, useCallback, useContext, useMemo, useState, type ReactNo
 import { useMatch, useNavigate } from "react-router";
 import { CommandPalette, useCommandPaletteHotkey, type PaletteItem, type PaletteSource } from "../workbench";
 import { useResourceTypes } from "../lib/resource-types";
+import { modalHasOneTimeSecret } from "../lib/helpers";
 import {
   useAdminGroups,
   useAdminPrincipals,
@@ -13,7 +14,8 @@ import {
   usePolicyGrants,
   usePolicyStatus,
   useImports,
-  useResourceCatalog
+  useResourceCatalog,
+  useOwnAccessKeysNav
 } from "../data/queries";
 import { useAuthActions } from "../mutations/auth";
 import { useAgentTokenActions } from "../mutations/tokens";
@@ -35,10 +37,13 @@ export function usePalette() {
 
 export function PaletteProvider({ children }: { children: ReactNode }) {
   const { session } = useSession();
+  const { modal } = useModal();
   const [open, setOpen] = useState(false);
   // An application's approval page stays focused: no jumping elsewhere from it.
   const approving = useMatch(ROUTE.authorize) !== null;
-  const usable = session.authenticated && !session.passwordChangeRequired && !approving;
+  // A one-time secret closes only through its own buttons: no palette action
+  // may replace it or navigate from under it.
+  const usable = session.authenticated && !session.passwordChangeRequired && !approving && !modalHasOneTimeSecret(modal);
   useCommandPaletteHotkey(() => setOpen((current) => !current), usable);
   const openPalette = useCallback(() => setOpen(true), []);
   const value = useMemo(() => ({ openPalette }), [openPalette]);
@@ -76,6 +81,7 @@ function usePaletteSources(): PaletteSource[] {
   const policyStatus = usePolicyStatus(policy);
   const resources = useResourceCatalog(admin);
   const imports = useImports(admin);
+  const keys = useOwnAccessKeysNav();
 
   return useMemo(() => {
     const go = (href: string) => () => navigate(href);
@@ -84,7 +90,7 @@ function usePaletteSources(): PaletteSource[] {
         ? [{ id: "create-grant", label: "Create grant", icon: "plus" as const, keywords: ["policy", "new"], onSelect: go(paths.grantNew()) }]
         : []),
       ...(tokenActions.issueBlocker() === null
-        ? [{ id: "issue-token", label: "Issue agent token", icon: "key" as const, keywords: ["token", "new"], onSelect: () => tokenActions.openIssuePage() }]
+        ? [{ id: "issue-token", label: "Issue agent token", icon: "ticket" as const, keywords: ["token", "new"], onSelect: () => tokenActions.openIssuePage() }]
         : []),
       ...(canWriteAdmin(session)
         ? [
@@ -127,9 +133,9 @@ function usePaletteSources(): PaletteSource[] {
       credentials: paletteQueryFeedback("Your credentials", console.query)
     };
     return [
-      { id: "goto", title: "Go to", items: navigationPaletteItems(session, go) },
+      { id: "goto", title: "Go to", items: navigationPaletteItems(session, go, keys) },
       ...entities.map((source) => ({ ...source, ...feedback[source.id] })),
       { id: "actions", title: "Actions", items: actions }
     ];
-  }, [session, navigate, types, setModal, mode, setMode, logout, runtime, admin, policy, console, tokenOptions, tokenActions, principals, groups, catalog, grants, policyStatus, resources, imports]);
+  }, [session, navigate, types, setModal, mode, setMode, logout, runtime, admin, policy, console, tokenOptions, tokenActions, principals, groups, catalog, grants, policyStatus, resources, imports, keys]);
 }

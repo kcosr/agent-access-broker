@@ -30,6 +30,7 @@ async fn openapi_gateway_trusted_fingerprint_reaches_upstream_and_preserves_cont
                     execution_context: None,
                     allowed_execution_contexts: Some(vec!["default".into()]),
                     allow_forwarded_identity: true,
+                    allow_access_key_resolution: false,
                 },
             );
             config
@@ -163,6 +164,7 @@ async fn openapi_gateway_explicit_token_keeps_authenticated_caller_epoch_until_d
                     execution_context: None,
                     allowed_execution_contexts: Some(vec!["default".into()]),
                     allow_forwarded_identity: true,
+                    allow_access_key_resolution: false,
                 },
             );
         },

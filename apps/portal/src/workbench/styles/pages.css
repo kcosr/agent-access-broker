@@ -9,6 +9,29 @@
     border-bottom: 1px solid var(--wb-border);
     scrollbar-width: none;
   }
+  .wb-tabs--compact {
+    gap: 0;
+  }
+  .wb-tabs--compact > .wb-tab {
+    padding: 0 8px;
+    font-size: var(--wb-fs-12);
+  }
+  /* More tabs past an edge (a narrow screen): that edge fades out. */
+  .wb-tabs.is-fade-end {
+    mask-image: linear-gradient(to right, #000 calc(100% - 40px), transparent);
+  }
+  .wb-tabs.is-fade-start {
+    mask-image: linear-gradient(to left, #000 calc(100% - 40px), transparent);
+  }
+  .wb-tabs.is-fade-start.is-fade-end {
+    mask-image: linear-gradient(
+      to right,
+      transparent,
+      #000 40px,
+      #000 calc(100% - 40px),
+      transparent
+    );
+  }
   .wb-tab {
     position: relative;
     display: inline-flex;
@@ -412,6 +435,29 @@
   .wb-copy--wrap .wb-copy-text {
     white-space: pre-wrap;
     overflow-wrap: anywhere;
+  }
+  /* plain: unboxed text in the surrounding colour, one line with an
+     ellipsis (the button copies all of it) or, with wrap, wrapped; the
+     button overhangs the line so the text keeps its line height */
+  .wb-copy--plain {
+    display: inline-flex;
+    gap: 2px;
+    vertical-align: top;
+    border: 0;
+    background: none;
+    color: inherit;
+  }
+  .wb-copy--plain .wb-copy-text {
+    padding: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .wb-copy--plain.wb-copy--wrap .wb-copy-text {
+    overflow: visible;
+  }
+  .wb-copy--plain .wb-copy-actions {
+    margin-block: -4px;
+    padding: 0;
   }
   .wb-copy-status {
     color: var(--wb-fg-2);

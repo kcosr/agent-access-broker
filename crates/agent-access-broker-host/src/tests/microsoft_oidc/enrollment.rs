@@ -669,3 +669,106 @@ async fn provider_reload_invalidates_pending_flow_without_consuming_enrollment()
             .is_empty()
     );
 }
+
+async fn fixture_deriving_account_usernames() -> OidcBrowserFixture {
+    oidc_browser_fixture_custom(
+        false,
+        false,
+        temp_path("microsoft-oidc-account-usernames.audit.jsonl"),
+        |config| config.usernames.email_domains = vec!["example.test".to_string()],
+    )
+    .await
+}
+
+#[tokio::test]
+async fn first_microsoft_sign_in_records_the_account_username_it_derived() {
+    let fixture = fixture_deriving_account_usernames().await;
+    let flow = start_browser_login(&fixture, None).await;
+    let response = finish_browser_login(&fixture, &flow, "account-username-first-microsoft").await;
+    assert!(session_cookie(&response).is_some());
+    let principal = fixture.store.list_principals().unwrap().remove(0);
+    let name = fixture
+        .store
+        .principal_account_username(&principal.principal_id)
+        .unwrap()
+        .name
+        .unwrap();
+    assert_eq!(name.account_username, "ada");
+    let audit = login_success_audit(&fixture, "account-username-first-microsoft");
+    assert_eq!(audit["jitCreated"], true);
+    assert_eq!(
+        audit["derivedAccountUsername"],
+        json!({
+            "accountUsername": "ada",
+            "usernameIncarnation": name.incarnation,
+            "origin": "derived",
+            "state": "usable",
+        })
+    );
+
+    // A later sign-in derives nothing and records nothing about a name.
+    let flow = start_browser_login(&fixture, None).await;
+    let response = finish_browser_login(&fixture, &flow, "account-username-second-microsoft").await;
+    assert!(session_cookie(&response).is_some());
+    let audit = login_success_audit(&fixture, "account-username-second-microsoft");
+    assert!(audit.get("derivedAccountUsername").is_none());
+}
+
+#[tokio::test]
+async fn a_cancelled_microsoft_sign_in_still_audits_the_name_it_allocated() {
+    let fixture = fixture_deriving_account_usernames().await;
+    let flow = start_browser_login(&fixture, None).await;
+    let state = fixture.broker.state();
+    let barrier = Arc::new(crate::state::McpBlockingBarrier::default());
+    *state.sign_in_completion_barrier.lock().unwrap() = Some(barrier.clone());
+    let callback = Url::parse(&flow.callback_uri).unwrap();
+    let request = Request::builder()
+        .method(Method::GET)
+        .uri(format!("{}?{}", callback.path(), callback.query().unwrap()))
+        .extension(ConnectInfo(
+            "127.0.0.1:43411".parse::<SocketAddr>().unwrap(),
+        ))
+        .header(
+            agent_access_provider::REQUEST_ID_HEADER,
+            "account-username-cancelled-microsoft",
+        )
+        .header("Host", "broker.example.test")
+        .header("Cookie", flow.binding_cookie.clone())
+        .body(Body::empty())
+        .unwrap();
+    let app = fixture.app.clone();
+    let waiter = tokio::spawn(async move { app.oneshot(request).await });
+    // The code exchange and token validation are done; the store completion
+    // has not begun.
+    tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        barrier.reached.notified(),
+    )
+    .await
+    .expect("the sign-in owner reaches its store completion");
+    assert!(fixture.store.list_principals().unwrap().is_empty());
+    waiter.abort();
+    assert!(waiter.await.unwrap_err().is_cancelled());
+    barrier.release();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        barrier.completed.notified(),
+    )
+    .await
+    .expect("the sign-in owner finishes without its waiter");
+    *state.sign_in_completion_barrier.lock().unwrap() = None;
+
+    let principal = fixture.store.list_principals().unwrap().remove(0);
+    let name = fixture
+        .store
+        .principal_account_username(&principal.principal_id)
+        .unwrap()
+        .name
+        .unwrap();
+    assert_eq!(name.account_username, "ada");
+    let audit = login_success_audit(&fixture, "account-username-cancelled-microsoft");
+    assert_eq!(
+        audit["derivedAccountUsername"]["usernameIncarnation"],
+        json!(name.incarnation)
+    );
+}

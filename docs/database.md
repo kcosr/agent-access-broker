@@ -64,8 +64,8 @@ The schema catalog starts at `014_resource_policy_baseline` and applies
 `031_oidc_membership_renewal`, `032_imported_source_documents`,
 `033_agent_token_issuance`, `034_agent_token_issuance_contexts`,
 `035_imported_gateway_routes`, `036_microsoft_enrollments`, and
-`037_application_access`, `038_confluence_content_resources`, and
-`039_resource_browser_urls` in order. The
+`037_application_access`, `038_confluence_content_resources`,
+`039_resource_browser_urls`, and `040_access_keys` in order. The
 `schema_migrations` ledger records each identifier,
 immutable SQL checksum, and application timestamp. `schemaChecksum` hashes the
 ordered catalog checksums.
@@ -81,6 +81,16 @@ navigation metadata without changing existing selectors, membership or policy
 revision. Existing rows have no saved URL. Browser links are ordinary resource
 metadata, preserved in catalog export, with the same optimistic version check
 as other resource edits. Their values are excluded from audit snapshots.
+
+Migration `040_access_keys` adds the `account_usernames`, `access_keys`,
+`access_key_type_links`, `principal_access_key_types` and
+`group_access_key_types` tables and the column
+`principals.account_username_mode`. It gives every existing service account its
+username, names no person, gives no account or group any access key
+access, and changes no other row. See
+[Access keys and usernames](#access-keys-and-usernames). Older
+binaries reject the advanced ledger; rollback requires a matched
+pre-migration backup.
 
 A new empty database can be initialized, and the supported resource-policy
 baseline can be upgraded with `auto_migrate`. Databases predating that baseline
@@ -108,6 +118,11 @@ erDiagram
     PRINCIPALS ||--o{ APPLICATION_ACCESS : approves
     APPLICATION_ACCESS ||--o{ APPLICATION_AUTHORIZATION_CODES : issues
     APPLICATION_ACCESS ||--o{ BROKER_TOKENS : mints
+    PRINCIPALS ||--o| ACCOUNT_USERNAMES : holds
+    PRINCIPALS ||--o{ ACCESS_KEYS : owns
+    ACCESS_KEYS ||--|{ ACCESS_KEY_TYPE_LINKS : carries
+    PRINCIPALS ||--o{ PRINCIPAL_ACCESS_KEY_TYPES : decides
+    GROUPS ||--o{ GROUP_ACCESS_KEY_TYPES : allows
     PRINCIPAL_LOGIN_METHODS ||--o| OIDC_MEMBERSHIP_REFRESH_STATE : refreshes
     PRINCIPAL_LOGIN_METHODS ||--o{ EXTERNAL_PRINCIPAL_GROUPS : receives
     EXTERNAL_GROUP_BINDINGS ||--o{ EXTERNAL_PRINCIPAL_GROUPS : contributes
@@ -132,7 +147,7 @@ erDiagram
 | Table | Purpose | Important fields |
 | --- | --- | --- |
 | `schema_migrations` | Append-only catalog migration ledger. | `version`, per-migration `checksum`, `applied_at` |
-| `principals` | Managed identities that can own tokens, rights, and credentials. `kind = service_account` is noninteractive and agent-token-only. | `principal_id`, `kind`, `role`, `self_service_enabled`, `agent_token_issuance`, `status`, `display_name`, `email`, `external_subject`, `microsoft_group_enrollment_processed`, timestamps |
+| `principals` | Managed identities that can own tokens, rights, and credentials. `kind = service_account` is noninteractive and agent-token-only. | `principal_id`, `kind`, `role`, `self_service_enabled`, `agent_token_issuance`, `status`, `display_name`, `email`, `external_subject`, `microsoft_group_enrollment_processed`, `account_username_mode`, timestamps |
 | `principal_agent_token_issuance_contexts` | Explicit issuance contexts paired with the principal's mode; cascades on principal deletion. | `principal_id`, `execution_context` (composite primary key) |
 | `group_agent_token_issuance_contexts` | Explicit issuance contexts paired with the group's mode; cascades on group deletion. | `group_id`, `execution_context` (composite primary key) |
 | `groups` | First-class managed groups used as policy subjects. | `group_id`, `display_name`, `description`, `status`, `auto_enroll_new_microsoft_users`, `agent_token_issuance`, timestamps, actor metadata |
@@ -146,6 +161,11 @@ erDiagram
 | `application_access` | One person's approval of one registered application; cascades on principal deletion. | `access_id`, unique (`principal_id`, `application_id`), `enabled`, `read_only`, `version`, nullable unique `refresh_token_hash`, `connected_at`, `last_used_at`, update metadata |
 | `application_authorization_requests` | Pending browser authorization requests: one use, 10 minutes, at most 1,000. | `request_sequence`, unique `request_hash`, `application_id`, `encrypted_payload`, `encryption_nonce`, `expires_at`, `consumed_at` |
 | `application_authorization_codes` | One-use authorization codes bound to client, redirect URI and PKCE challenge; cascade with their access. | `code_hash`, `access_id`, `application_id`, `redirect_uri`, `code_challenge`, `expires_at`, `consumed_at` |
+| `account_usernames` | The username of a person or service account; one row per allocation, cascading on principal deletion. | primary key `account_username`, unique `principal_id`, `holder_kind`, unique `incarnation`, `origin`, `assigned_at`, `assigned_by`, `confirmed_at`, `confirmed_by` |
+| `access_keys` | HMAC-hashed access keys, apart from `broker_tokens`; cascade on principal deletion. | `key_id`, unique `key_hash`, `principal_id`, `name`, `origin`, `username_incarnation`, `created_at`, `created_by`, `expires_at`, `revoked_at`, `revoked_by`, `last_used_at` |
+| `access_key_type_links` | The access key type names an access key carries, in order; cascade with their token. | `key_id`, `access_key_type`, `access_key_type_order` (composite primary key on the first two) |
+| `principal_access_key_types` | An account's own decision on one access key type; no row means the account follows its groups. Cascades on principal deletion. | `principal_id`, `access_key_type` (composite primary key), `decision` (`allow` or `deny`) |
+| `group_access_key_types` | One access key type a group allows its members; cascades on group deletion. | `group_id`, `access_key_type` (composite primary key) |
 | `local_password_failures` | Failed local-password verifications and lockouts per principal and client source. | `principal_id`, `source`, `failed_attempts`, `last_failed_at`, `locked_until` |
 | `browser_sessions` | Browser cookie sessions backed by `user_manage` broker tokens. | `token_id`, `principal_id`, `login_method`, `login_method_id`, `auth_time` |
 | `resources` | Typed selector entries shared by grants and tokens. | `resource_id`, `resource_type`, `selector_kind`, `selector_value`, `display_name`, `browser_url`, `allowed_execution_contexts_json`, `enabled`, `version`, actor metadata |
@@ -276,7 +296,9 @@ Microsoft login. Hard deletion is accepted only after disable.
 ## Broker Tokens
 
 Broker tokens are generated by the broker as opaque `aab_`-prefixed values and
-returned only when issued. The raw token is not stored. The database stores an
+returned only when issued. Values that start with `aab_ak_` are
+[access keys](#access-keys-and-usernames), which are not broker tokens
+and are never stored here. The raw token is not stored. The database stores an
 HMAC-SHA-256 hash of the token using `broker_tokens.hash_key_ref`, encoded as
 base64url without padding.
 
@@ -433,6 +455,123 @@ references under either identity authority, and every group's references under
 managed identity. Under TOML identity, dormant group rows retain structural
 validation but cannot block retirement. See [context retirement and recovery](operator-guide.md#issuance-context-retirement-and-recovery)
 for default-registry staging and switching back to managed identity.
+
+## Access Keys and Usernames
+
+An access key is a bearer token for a resolving service, not for the Broker. Its value
+is `aab_ak_` followed by 43 characters of `[A-Za-z0-9_-]` (32 random bytes,
+base64url without padding). It shares the `aab_` prefix with broker tokens
+but is a different kind of token: it is stored in `access_keys`, never in
+`broker_tokens`, and every Broker token path looks only in `broker_tokens`,
+so an access key presented as a Broker credential is refused as an unknown token.
+The prefix is reserved everywhere else too: a static principal token, a
+trusted caller credential and an imported identity token may not start with
+it.
+A trusted caller resolves an access key through
+[`POST /v1/access-keys/resolve`](http-api.md#access-key-resolution). Keys are
+issued, listed and revoked through the
+[management routes](http-api.md#usernames-and-access-keys).
+
+### Usernames
+
+`account_usernames` holds the ID a subject is known by to the services that
+resolve its access keys. The primary key
+`account_username` holds people's names and service-account principal IDs together,
+so a person's name can never equal a service account's ID, in either order of
+creation. A name is 1 to 256 bytes of letters, digits and `._@+-`, compared
+exactly, and never `anonymous`.
+
+- A service account's row is its principal ID. Triggers create it with the
+  account, on every path that creates one or changes a principal's kind to
+  `service_account`, and remove it when the kind changes away. Creating a
+  service account whose ID a person holds as a name is refused, and so is
+  one whose ID is on either of the operator's
+  [`usernames`](configuration.md#usernames) lists.
+- A person's row is written by derivation from their email or by an
+  administrator; `origin` records which. Names the operator lists in
+  [`usernames.reserved_names`](configuration.md#usernames) are refused
+  when a name is allocated.
+- Each row is one allocation with its own random `incarnation`. Changing a
+  name deletes the row and inserts another; taking it away deletes the row.
+  The allocation columns are immutable, so an incarnation never returns.
+- `confirmed_at` and `confirmed_by` record an administrator's confirmation of
+  a name listed in `usernames.existing_usernames`. Confirmation does not
+  change the incarnation.
+
+Whether a held name is usable is evaluated against the current configuration,
+not stored: a person's name is unusable while the operator reserves it, or
+while it is a listed existing username without a confirmation. A service
+account's name is unusable while it is on either list; it cannot be
+confirmed.
+
+`principals.account_username_mode` holds how a person's name is decided:
+`from_email` (the default, and the value every existing account starts
+with) or `manual`. The name itself is stored in `account_usernames`, never
+computed when it is read, and is written in the transaction that changes
+an input: the creation of a person; an administrator's change of the
+person's email or mode; a successful sign-in, local or Microsoft, of a
+`from_email` person who holds no name; and the fill after startup and
+reload, which walks the `from_email` people who hold none in bounded
+batches, one transaction each. Why a person holds no name is not stored: it
+is evaluated from the current email, mode and configuration when the
+account is read. The profile email only names the account it is stored
+on; no lookup by email finds or merges accounts.
+
+### Access keys
+
+`access_keys` stores a keyed HMAC-SHA-256 of the raw key, computed as
+`broker_tokens` computes a Broker token's, under `broker_tokens.hash_key_ref`.
+The raw key is returned once when the key is minted and is not stored.
+The expiry constraint is `CHECK (expires_at IS NULL OR expires_at > created_at)`;
+the immutability trigger compares expiry with `IS NOT` so neither a finite
+expiry nor NULL can be replaced.
+
+| Field | Meaning |
+| --- | --- |
+| `key_id` | `ak_` followed by 32 hexadecimal characters; safe to show and log. |
+| `principal_id` | The owner: a person for `portal` and `application`, a person or a service account for `administrator`. A trigger refuses any other pairing. |
+| `name` | The label its creator chose, 1 to 128 bytes. |
+| `origin` | `portal` (the owner created it), `administrator` (an administrator, recorded in `created_by`, issued it for the owner) or `application`. No operation issues or resolves `application`. |
+| `username_incarnation` | The owner's username incarnation at mint. |
+| `created_at`, `expires_at` | Mint time and immutable expiry. `expires_at` is nullable: NULL means never; a timestamp must be later than `created_at`. |
+| `revoked_at`, `revoked_by` | Set together, once. A trigger refuses any later change. |
+| `last_used_at` | Written when a key resolves as active, at most once every five minutes per key. A failed write does not change the answer. |
+
+`access_key_type_links` lists the [access key type](configuration.md#access-key-types)
+names a key carries, 1 to 16 of them. Only the names are stored. At evaluation,
+a type's maximum is unlimited when its current `lifetime_options` include
+`"never"`, or the longest listed duration otherwise. Who may hold the type
+comes from the current account and group settings. A finite maximum is
+counted from `created_at`; changing the list does not change `expires_at`.
+Resolution reports the earlier of those two finite limits as `validUntil`,
+or null when neither limit is finite.
+
+`principal_access_key_types` and `group_access_key_types` hold the
+[access key types](roles.md#access-key-types) an administrator sets:
+one row for each access key type an account allows or denies and for each
+access key type a group allows. The primary key keeps an account from allowing
+and denying the same access key type. Rows name access key type IDs only, and every
+ID must be defined by the configuration at startup and at reload. Migration
+`040` creates both tables empty.
+
+A key is active only while all of these hold: it is not revoked or expired;
+its owner is enabled; a person's
+[identity access](#managed-identity-access-and-bindings) is not paused; the
+owner holds a usable username whose incarnation is
+the one the key records; the owner holds at most 64 groups by active local
+membership; and at least one carried access key type is configured and
+either has an unlimited maximum or is within its finite maximum counted
+from `created_at`. That type must be allowed by the owner's access key type
+setting: not denied by the account, and allowed by the
+account or by an active group it belongs to by local membership. Membership
+that comes only from Microsoft group evidence is not considered. A key
+whose owner's name was changed or taken away, or whose owner lost access to
+its types, therefore stops being active without its row changing.
+
+Key rows are not pruned. Disabling a principal or pausing a person's
+identity access does not revoke access keys: they are inactive meanwhile
+and active again afterwards. A person whose identity-access row is missing
+never has an active key.
 
 ## Admin Roles And Browser Login State
 
@@ -838,6 +977,10 @@ The managed store is stateful rather than append-only:
 - principals are disabled and re-enabled in place;
 - `agent_invoke` broker tokens are paused and resumed by nullable timestamps,
   while broker tokens and rights are permanently revoked by timestamps;
+- access keys are permanently revoked by timestamps; expired and revoked
+  access keys are not pruned;
+- a username is replaced or deleted when an administrator changes or
+  releases it, and a service account's is created and removed with its kind;
 - expired tokens, paused tokens, revoked tokens, expired rights, disabled
   principals, and expired credentials are not automatically pruned, except
   that tokens an [application](#application-access) minted are deleted once
@@ -1103,7 +1246,8 @@ lookup plus AES-256-GCM ciphertext, random 96-bit nonce, key ID, positive revisi
 and update timestamp. Ciphertext authentication binds the identity-token domain,
 principal and key ID; it cannot be substituted across principals or upstream
 credential rows. Hashes use plain SHA-256, independently of the HMAC hashing used
-for issued Broker access tokens. Imported values are 32–4096 RFC 9110 token bytes;
+for issued Broker access tokens. Imported values are 32–4096 RFC 9110 token bytes
+that do not start with the access-key prefix `aab_ak_`;
 no whitespace or newline is stripped. Generation uses random UUID v4 strings.
 
 Every set, generation, removal and settings change advances the inventory

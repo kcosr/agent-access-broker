@@ -1,0 +1,21 @@
+{
+  "active": true,
+  "subject": {
+    "kind": "user",
+    "id": "alice"
+  },
+  "usernameIncarnation": "n1-7b0c2f",
+  "groups": [
+    "platform"
+  ],
+  "types": [
+    {
+      "name": "inference",
+      "validUntil": "2026-12-01T02:00:00Z"
+    }
+  ],
+  "origin": "device",
+  "application": null,
+  "keyId": "ak_01HZXK3Q8",
+  "expiresAt": "2026-12-01T02:00:00Z"
+}

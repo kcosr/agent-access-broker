@@ -257,6 +257,78 @@ export function Meter({
   );
 }
 
+type CircularMeterBase = {
+  /** Null is an unknown value, distinct from zero. */
+  value: number | null;
+  max?: number | undefined;
+  /** Accessible text for a known value; defaults to the bounded percentage. */
+  valueText?: string | undefined;
+  tone?: Tone | undefined;
+  className?: string | undefined;
+};
+
+export type CircularMeterProps = CircularMeterBase &
+  (
+    | { decorative: true; "aria-label"?: never }
+    | { decorative?: false | undefined; "aria-label": string }
+  );
+
+/** Compact quota dial. An enclosing labelled control can make it decorative. */
+export function CircularMeter({
+  value,
+  max = 100,
+  valueText,
+  tone,
+  className,
+  decorative = false,
+  "aria-label": ariaLabel,
+}: CircularMeterProps) {
+  const known =
+    value !== null && Number.isFinite(value) && Number.isFinite(max) && max > 0;
+  const bounded = known ? Math.max(0, Math.min(value, max)) : undefined;
+  const percent = bounded === undefined ? undefined : (bounded / max) * 100;
+  const text = known
+    ? (valueText ?? `${Math.round(percent!)}%`)
+    : "Value unknown";
+  return (
+    <svg
+      className={cx(
+        "wb-circular-meter",
+        !known && "is-unknown",
+        toneClass(tone),
+        className,
+      )}
+      viewBox="0 0 24 24"
+      width={24}
+      height={24}
+      focusable="false"
+      role={decorative ? undefined : known ? "meter" : "img"}
+      aria-hidden={decorative || undefined}
+      aria-label={
+        decorative ? undefined : known ? ariaLabel : `${ariaLabel}: ${text}`
+      }
+      aria-valuemin={!decorative && known ? 0 : undefined}
+      aria-valuemax={!decorative && known ? max : undefined}
+      aria-valuenow={decorative ? undefined : bounded}
+      aria-valuetext={!decorative && known ? text : undefined}
+    >
+      <circle className="wb-circular-meter-track" cx={12} cy={12} r={9.5} />
+      {percent !== undefined && percent > 0 && (
+        <circle
+          className="wb-circular-meter-value"
+          cx={12}
+          cy={12}
+          r={9.5}
+          pathLength={100}
+          strokeDasharray={`${percent} 100`}
+          transform="rotate(-90 12 12)"
+        />
+      )}
+      <circle className="wb-circular-meter-dot" cx={12} cy={12} r={3.5} />
+    </svg>
+  );
+}
+
 const TONE_ICON: Record<Tone, IconName> = {
   info: "info",
   success: "circle-check",

@@ -1,6 +1,6 @@
 use super::*;
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PrincipalRole {
     #[default]
@@ -8,6 +8,16 @@ pub enum PrincipalRole {
     Auditor,
     ServicePolicyManager,
     Admin,
+}
+// A string only. The derived form of an enum also reads an object with the
+// variant as its one key, so `{"admin": null}` would be a role.
+impl<'de> Deserialize<'de> for PrincipalRole {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        const ROLES: &[&str] = &["user", "auditor", "service_policy_manager", "admin"];
+        let text = String::deserialize(deserializer)?;
+        text.parse()
+            .map_err(|_| serde::de::Error::unknown_variant(&text, ROLES))
+    }
 }
 impl PrincipalRole {
     pub fn as_str(self) -> &'static str {
@@ -108,6 +118,11 @@ pub struct PrincipalAccessChange {
     pub previous_role: PrincipalRole,
     pub previous_self_service_enabled: bool,
     pub previous_agent_token_issuance: PrincipalAgentTokenIssuanceSetting,
+    /// The account's access key type setting before and after, read in the
+    /// transaction; equal when the change did not alter it. `None` from the
+    /// entry point that takes no access key types.
+    #[serde(skip)]
+    pub access_key_types: Option<AccessKeyTypesChange<PrincipalAccessKeyTypes>>,
     pub removed_services: Vec<String>,
     pub revoked_admin_token_ids: Vec<String>,
 }
@@ -251,6 +266,28 @@ impl ManagedStore {
         request: PrincipalAccessPatchRequest,
         registry: &ConfiguredExecutionContexts,
     ) -> Result<PrincipalAccessChange, ManagedStoreError> {
+        self.patch_principal_access_inner(request, None, false, registry)
+    }
+
+    /// Changes an account's access settings in one transaction, replacing
+    /// its access key type setting when one is given. A setting equal to the
+    /// stored one writes nothing.
+    pub fn patch_principal_access_with_access_key_types(
+        &self,
+        request: PrincipalAccessPatchRequest,
+        access_key_types: Option<AccessKeyTypesWrite<'_, PrincipalAccessKeyTypes>>,
+        registry: &ConfiguredExecutionContexts,
+    ) -> Result<PrincipalAccessChange, ManagedStoreError> {
+        self.patch_principal_access_inner(request, access_key_types, true, registry)
+    }
+
+    fn patch_principal_access_inner(
+        &self,
+        request: PrincipalAccessPatchRequest,
+        access_key_types: Option<AccessKeyTypesWrite<'_, PrincipalAccessKeyTypes>>,
+        report_access_key_types: bool,
+        registry: &ConfiguredExecutionContexts,
+    ) -> Result<PrincipalAccessChange, ManagedStoreError> {
         let mut request = request;
         request.agent_token_issuance = request
             .agent_token_issuance
@@ -262,8 +299,12 @@ impl ManagedStore {
         if request.role.is_none()
             && request.self_service_enabled.is_none()
             && request.agent_token_issuance.is_none()
+            && access_key_types.is_none()
         {
             return Err(input_invalid("at least one access setting is required"));
+        }
+        if let Some(write) = &access_key_types {
+            write.setting.validate(write.configured)?;
         }
         let mut conn = self.connection.lock().unwrap();
         let tx = conn
@@ -322,11 +363,28 @@ impl ManagedStore {
                 &agent_token_issuance.allowed_execution_contexts,
             )?;
         }
+        let access_key_types = access_key_types::write_principal_setting(
+            &tx,
+            &request.principal_id,
+            access_key_types,
+            report_access_key_types,
+        )?;
+        if access_key_types
+            .as_ref()
+            .is_some_and(|change| change.previous != change.current)
+        {
+            tx.execute(
+                "UPDATE principals SET updated_at = ?2 WHERE principal_id = ?1",
+                params![request.principal_id, now],
+            )
+            .map_err(sql_unavailable)?;
+        }
         let result = PrincipalAccessChange {
             principal: principal_by_id(&tx, &request.principal_id)?,
             previous_role: principal.role,
             previous_self_service_enabled: principal.self_service_enabled,
             previous_agent_token_issuance: principal.agent_token_issuance,
+            access_key_types,
             removed_services,
             revoked_admin_token_ids,
         };
