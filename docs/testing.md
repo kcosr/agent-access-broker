@@ -424,6 +424,7 @@ schema and integrity checks, and workspace crates retain debug assertions.
 
 ```bash
 cargo fmt --check
+cargo audit --deny warnings
 cargo nextest run --locked --workspace
 cargo test --locked --workspace --doc --no-fail-fast
 cargo build --locked
@@ -446,6 +447,14 @@ python3 crates/agent-access/tests/fixtures/command-imports/ticketing.test.py
 node scripts/check-doc-links.mjs
 node scripts/check-changelog.mjs
 ```
+
+Install the tested advisory tool with
+`cargo install --locked --version 0.22.2 cargo-audit`. The audit refreshes the
+RustSec advisory database, checks the committed lockfile including yanked
+crates, and fails on warnings. It needs network access. Dated exceptions and
+their review conditions live in [`.cargo/audit.toml`](../.cargo/audit.toml).
+GitHub Actions runs the audit on pushes, pull requests and weekly, and
+[release qualification](release-readiness.md#qualify-the-candidate) requires it.
 
 Nextest does not run doctests, so the separate `cargo test --doc` command is
 required. Plain Cargo remains supported and covers both test binaries and

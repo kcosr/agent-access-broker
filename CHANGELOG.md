@@ -684,6 +684,12 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- Updated bundled SQLite, MCP, QUIC, URL and filesystem dependencies for
+  published security advisories. Release qualification requires an online
+  dependency audit; the same audit runs on pushes, pull requests and weekly.
+  Dated exceptions remain for RSA verification through OpenID Connect and
+  the supported Chrono API. See [release readiness](docs/release-readiness.md).
+
 - **Completed mutations retain their outcome when response formatting fails.**
   Body-bearing native writes provide a nonserialized recovery receipt; failed
   selection or result-size enforcement returns `mutationStatus: "applied"` and

@@ -848,7 +848,7 @@ mod migration_tests {
         let writer = Connection::open(&path).unwrap();
         // Isolate migration admission from the separate journal-mode transition.
         writer.execute_batch("PRAGMA journal_mode = WAL").unwrap();
-        let waiter = Connection::open(&path).unwrap();
+        let mut waiter = Connection::open(&path).unwrap();
         let (seed_entered, seed_ready) = channel();
         // These release senders stay in the test: unwinding drops them and
         // releases any worker still waiting at a gate.

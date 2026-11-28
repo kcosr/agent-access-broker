@@ -130,7 +130,7 @@ pub(super) fn open_audit_database(
     let conn = Connection::open_with_flags(path, audit_open_flags())
         .map_err(|error| format!("failed to open audit database {label}: {error}"))?;
     #[cfg(test)]
-    super::tests::trace_if_requested(path, &conn);
+    let conn = super::tests::trace_if_requested(path, conn);
     conn.execute_batch("PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;")
         .map_err(|error| format!("failed to initialize audit database connection: {error}"))?;
     if mode == AuditOpenMode::Startup {
