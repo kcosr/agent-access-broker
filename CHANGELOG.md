@@ -84,6 +84,7 @@ All notable changes to this project are documented in this file.
   [usernames](docs/configuration.md#usernames),
   [access key type settings](docs/roles.md#access-key-types) and the
   [database reference](docs/database.md#access-keys-and-usernames).
+  ([#127](https://github.com/kcosr/agent-access-broker/pull/127))
 
 - **Application access adds managed-store migration `037_application_access`.**
   Back up first and upgrade Broker and CLI together; rollback requires the
@@ -289,6 +290,7 @@ All notable changes to this project are documented in this file.
   `broker_account_username_not_found`, `broker_access_key_denied`,
   `broker_access_key_not_found` and `broker_access_key_answer_too_large`. See
   [access key resolution](docs/http-api.md#access-key-resolution).
+  ([#127](https://github.com/kcosr/agent-access-broker/pull/127))
 
 - **Username and access key administration.** Administrators view each
   account's username, choose whether it follows the email or is set by
@@ -323,6 +325,7 @@ All notable changes to this project are documented in this file.
   the code the account's keys list as their status.
   See [usernames and access keys](docs/http-api.md#usernames-and-access-keys)
   and the [administrator guide](docs/administrator-guide.md#usernames-and-access-keys).
+  ([#127](https://github.com/kcosr/agent-access-broker/pull/127))
 
 - **Portal screens for access keys and usernames.** **My access > Keys** lists
   a person's access keys with what each gives access to, issues one on its own
@@ -339,6 +342,7 @@ All notable changes to this project are documented in this file.
   selecting an available replacement clears that lifetime error.
   **Tokens** now uses a ticket
   icon. See the [portal guide](docs/portal-guide/user.md#10-issue-and-revoke-an-access-key).
+  ([#127](https://github.com/kcosr/agent-access-broker/pull/127))
 
 - **Action output schemas make result fields discoverable.** Catalog actions
   expose provider `resultSchemas`; OpenAPI types their response envelopes, and
@@ -810,21 +814,25 @@ All notable changes to this project are documented in this file.
   issue names cannot start with it. List-query errors no longer echo
   unrecognized parameter names. Invalid key IDs return the existing 404
   without the supplied target.
+  ([#127](https://github.com/kcosr/agent-access-broker/pull/127))
 - Trusted-caller and limits configuration accepts objects only, and trusted-caller
   transport and context modes accept strings only. Portal profile submission
   ignores unchanged and pending saves, malformed access-key options fail closed,
   and type labels retain distinct IDs when display names are shared.
+  ([#127](https://github.com/kcosr/agent-access-broker/pull/127))
 - **The portal's one-time secret dialogs keep their secret safe and copyable.**
   While a newly issued agent token or access key, or a generated password,
   is shown, the command palette stays closed, so none of its actions can
   replace the dialog; a session that comes back requiring a password change
   closes it; and when the browser refuses the copy, the secret is selected
   with a prompt to copy it by hand.
+  ([#127](https://github.com/kcosr/agent-access-broker/pull/127))
 
 - **The principal access and group request bodies are JSON objects only.**
   `PATCH /v1/admin/principals/{principal}/access`, `POST /v1/admin/groups`
   and `PATCH /v1/admin/groups/{group}` no longer read a JSON array as the
   body's members in order; send the documented object.
+  ([#127](https://github.com/kcosr/agent-access-broker/pull/127))
 
 - **Completed mutations retain their outcome when response formatting fails.**
   Body-bearing native writes provide a nonserialized recovery receipt; failed
