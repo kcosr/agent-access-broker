@@ -559,6 +559,7 @@ All notable changes to this project are documented in this file.
   an error while the process keeps running. A stdio frame
   of exactly 16 MiB, excluding its newline, is dropped without a reply and the
   process keeps serving subsequent frames.
+  ([#128](https://github.com/kcosr/agent-access-broker/pull/128))
 
 - CLI JSON responses, receipts and structured errors now use compact JSON with
   a trailing newline on stdout, stderr and in local files, including stdio MCP
@@ -700,6 +701,7 @@ All notable changes to this project are documented in this file.
   Chrono API fail the audit after their review dates. Rust notices include the
   current SQLite blessing and rmcp's packaged license. See
   [release readiness](docs/release-readiness.md).
+  ([#128](https://github.com/kcosr/agent-access-broker/pull/128))
 
 - **Completed mutations retain their outcome when response formatting fails.**
   Body-bearing native writes provide a nonserialized recovery receipt; failed
