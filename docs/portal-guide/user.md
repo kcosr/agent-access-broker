@@ -415,6 +415,72 @@ does not lift an administrator's restriction: the confirmation says so when
 there is one, and approving again gives the same read-only level, or is
 refused while an administrator has your access disabled.
 
+## 10. Issue and revoke an access key
+
+An access key is for a tool that reaches services through the gateway your
+organization runs in front of them, such as hosted models or web search. The
+Broker itself does not accept access keys. Services behind the gateway know
+you by your **username**, which is set on your account.
+
+**Keys** appears in **My access** when you can issue at least one kind of
+access, or when you hold an access key. It does not depend on self-service.
+An administrator decides which kinds of access you may choose.
+
+1. Open **My access > Keys**. The list shows each key's name, what it gives
+   access to, when it was created, when it expires (**Never** when it has no
+   expiry), when it was last used and its status.
+
+![Access keys list with full, partial, no-access and expired keys](../images/portal/guide/user-access-keys-light.png)
+
+*Browser-only fixture with synthetic keys. A type the key can no longer use is
+marked **no longer available**; **Partial access** and **No access left** come
+from the Broker.*
+
+2. Choose **Issue access key**. Under **This key gives access to**, check each
+   kind of access the key needs. Nothing is chosen for you, also when only one
+   kind is offered. Each choice shows its description, when the operator gives
+   one, and its configured lifetime choices.
+3. Enter a **Name** that says where the key runs, such as `laptop-models`, and
+   choose a **Lifetime**. Only options shared by every checked kind are offered,
+   in the first checked kind's order. When you change the access selection,
+   a lifetime you chose manually is kept if every checked kind still offers
+   it. Otherwise, the page preselects the shortest default shared by all of
+   them, or the shortest common option, treating **Never expires** as unlimited
+   when choosing the default. That choice
+   appears only when every kind offers it.
+   If there is no common lifetime, the page explains why issuing is disabled.
+4. Check **Username** and the **Summary**, then choose **Issue access key**.
+
+![Issue access key page with two kinds of access chosen](../images/portal/guide/user-access-key-issue-light.png)
+
+*Unsubmitted draft from a browser-only fixture with two kinds of access
+selected. No key has been issued.*
+
+5. **Access key created** shows the key once. Choose **Copy access key**, store
+   the key where your tool reads it, then choose **Done**. The key cannot be
+   shown again; if you lose it, revoke it and issue another.
+
+Expected result: the new key is listed as active. To retire a key, choose its
+trash icon, or open it and choose **Revoke**, then confirm **Revoke access
+key**. The Broker marks it revoked immediately; the service using it stops
+accepting it when it next checks with the Broker. Revocation cannot be undone.
+An access key cannot be changed after it is issued; issue a replacement to
+change what it gives access to or how long it lasts. A key an administrator
+issued for you is listed too, and you can revoke it.
+
+When something only an administrator can fix prevents issuing, such as a
+missing username or being in too many groups, **Keys** shows the reason where
+the button would be and offers no **Issue access key**.
+
+![Access keys page with the reason issuing is unavailable](../images/portal/guide/user-access-keys-blocked-light.png)
+
+*Browser-only fixture of an account without a username.*
+
+A key stops working when it expires, when it is revoked, when your username
+changes, or when you may no longer hold any kind of access it carries. If you
+may no longer hold one of its kinds of access, it keeps working for the rest
+and shows **Partial access**.
+
 ## Troubleshooting
 
 | What you see | What to check |
@@ -431,6 +497,9 @@ refused while an administrator has your access disabled.
 | `execution_context_denied` | Use the approved ingress and a token/grant covering its context. Selecting a context does not attest it. |
 | `broker_token_class_denied` during management | Use a browser session or a separate `user_manage` setup token. |
 | `broker_token_paused`, expiry, or revocation | Resume a trusted paused token, or issue and install a replacement. |
+| No **Keys** in **My access** | You can issue no kind of access and hold no access key. Ask an administrator which access key types you may hold. |
+| **Keys** shows a reason instead of **Issue access key** | The reason names what an administrator must fix, such as setting or confirming your username. |
+| A key shows **Partial access**, **No access left** or **Username changed** | An administrator changed which kinds of access you may hold, or your username changed. Issue a replacement once the right access is in place. |
 | No Activity view | Ask whether the deployment uses queryable SQLite audit and whether self-service is enabled. |
 | Failed verification in the local demo | Example hosts and fake credentials do not connect to live Jira, Confluence, or GitLab. Use a configured integration for live verification. |
 

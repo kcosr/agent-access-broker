@@ -118,6 +118,90 @@ Disabling issuance keeps token lists, inspection, previews, pause, resume and
 revocation available under their existing permissions. Other personal management
 is unaffected. See [token creation](end-user-guide.md#issue-a-token-for-the-agent).
 
+## Access key types
+
+`accessKeyTypes` is an administrator-owned object that decides, separately
+for each configured [access key type](configuration.md#access-key-types), whether an
+account may hold access keys of that type. It does not change role,
+self-service, agent-token issuance or invocation grants. A configured
+access key type is on for nobody until an administrator allows it.
+
+| Owner | Object | Meaning |
+| --- | --- | --- |
+| Account | `{"allow":[...],"deny":[...]}` | A type in `deny` is refused and a type in `allow` is permitted, whatever the account's groups allow. A type in neither list follows the groups. A type cannot be in both lists. |
+| Managed group | `{"allow":[...]}` | The types the group lets its members hold. A group cannot deny a type. |
+
+New accounts have both lists empty and new groups allow nothing. For each
+account and each type the Broker decides in this order:
+
+1. the account's `deny` names the type: no;
+2. the account's `allow` names the type: yes;
+3. otherwise yes when at least one active managed group, which the account
+   belongs to by current local membership, allows the type.
+
+Membership that comes only from Microsoft group evidence does not count, and
+a disabled group allows nothing while it is disabled. Access key types require
+managed identity authority, so the groups are always managed groups.
+
+The setting applies to people and to service accounts alike, and is read
+every time a key is evaluated as well as when one is created. Withdrawing a
+type stops the account's existing keys of that type without revoking them:
+a key with no permitted type left is not active, and the same key works
+again when the type is restored, subject to its own expiry, if any, the
+type's current maximum and revocation. The [type configuration](configuration.md#access-key-types)
+defines the offered lifetimes and whether a key can have no expiry. An
+administrator who issues a key for a person or a service account needs
+that account's access to allow every requested type. The access key type's
+`self_service` key is a separate question: whether a person may create a
+key of a type they may hold. It does not apply to an administrator's
+issuance, so a type with `self_service = false` is one that only an
+administrator hands out, to people as well as to service accounts.
+
+A person's own access key routes (`/v1/access-keys`) take a signed-in
+browser session with the CSRF header, never a bearer token, and are not
+gated by the account's self-service flag, by agent-token issuance or by any
+service grant: this setting, the access key type's `self_service` and a usable
+[username](configuration.md#usernames) decide. Administrators issue for
+people and service accounts, administer usernames and list and revoke any
+access key; auditors read; the service policy manager role gives no access to
+those administrative routes. See
+[the routes](http-api.md#usernames-and-access-keys).
+
+```bash
+agent-access admin groups create platform --access-key-types --access-key-type-allow inference --access-key-type-allow packages
+agent-access admin principals groups add alice platform
+agent-access admin principals access set alice --access-key-types --access-key-type-deny packages
+agent-access admin principals access set build-agent --access-key-types --access-key-type-allow inference
+agent-access admin principals access set alice --access-key-types
+```
+
+`--access-key-types` replaces the whole setting with the
+`--access-key-type-allow` and, for an account, `--access-key-type-deny`
+access key types given with it. Alone it empties the lists: an account then
+follows its groups for every type, and a group allows nothing. In this
+example Alice first holds `inference` through `platform` and is denied
+`packages`; the last command lets her follow the group for both.
+
+Each list names configured access key types, each once, at most 256, and is saved
+in lexical order. A supplied object replaces the whole setting; omission
+leaves it unchanged. API and CLI writes are last-writer-wins without a
+version precondition, so reread the current object before replacing it. An
+access key type added to the configuration later is never added to a saved
+setting, and the Broker refuses to start or reload while a saved setting
+names an access key type the configuration does not define, naming the type
+and the settings; see
+[retiring an access key type](administrator-guide.md#retire-an-access-key-type).
+
+Principal detail reports the configured `accessKeyTypes` and the resolved
+`accessKeyTypePolicy`: one row for every configured access key type, in ID
+order, with `accessKeyType`, `allowed`, `source` and `groupIds`. `source` is
+`account` when the account's own list decides, `groups` when the account
+follows its groups and at least one allows the type, and `none` when it
+follows them and none does. `groupIds` lists the allowing groups, sorted, for
+`groups` and is empty otherwise. Every group route reports the group's
+`accessKeyTypes`. Audit completion records the setting before and after
+each change.
+
 ## Assign service policy managers
 
 Set the account's role to `service_policy_manager`, then assign one or more
@@ -149,7 +233,8 @@ agent-access admin principals access set reviewer --self-service-enabled false
 
 The corresponding endpoint is
 `PATCH /v1/admin/principals/{principal}/access`. Its JSON body accepts `role`,
-`selfServiceEnabled`, and/or `agentTokenIssuance`. Any one field satisfies the
+`selfServiceEnabled`, `agentTokenIssuance`, and/or
+[`accessKeyTypes`](#access-key-types). Any one field satisfies the
 minimum, including issuance alone. At least one field is required; null and unknown
 fields are rejected. Omitted fields stay unchanged. Principal and browser
 session responses always expose singular `role` and `selfServiceEnabled`.

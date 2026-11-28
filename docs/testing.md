@@ -65,6 +65,202 @@ catalog/OpenAPI/send projections, typed and generic invocations, HTTP and stdio
 MCP, omission and size denial, and audit omission of field values. These tests
 do not contact Jira.
 
+Username and access-key tests run against the managed store alone
+(`managed_store::account_usernames::tests`, `managed_store::access_keys::tests`).
+They cover migration `040_access_keys` from the previous schema; the two
+modes of a person's name: a name derived at account creation, renamed by an
+email change, kept or derived by a change of mode, and set or taken away by
+hand; a sign-in, local or Microsoft, naming a person who follows their email
+and holds no name
+(`managed_store::tests::microsoft_sign_in_names_a_person_at_creation_and_whenever_they_hold_no_name`);
+the fill of missing names, including a population larger than one batch in
+which nobody can be named, walked in bounded steps; the first holder keeping
+a name under concurrent creation and across a second connection, collisions
+between a person's name and a service-account ID in either order, reserved
+and listed names, confirmation of one account, and incarnation changes. Token
+tests cover the secret's shape and stored hash, portal and administrator
+mints with every refusal, listing and revocation, the active and inactive
+resolution answers, access key type lifetime and eligibility under changed
+configuration, the five-minute last-used interval with a refused write, and
+that no broker-token path accepts an access key, including the identity
+sources (`runtime::access_keys::tests`). They also cover a person's paused identity access, both
+reservation lists against service accounts, and refusal of the access-key
+prefix by the identity-token inventory, static principal tokens and trusted
+caller credentials. Times are passed to the resolution under test; nothing
+sleeps. Host `tests::account_usernames` drives the
+production router and checks the audit facts of a name derived at principal
+creation, by an email change and at a local sign-in, that a sign-in whose
+waiter is cancelled at a barrier before its store completion still commits
+and audits, and that a sign-in held across a reload is refused instead of
+deriving under the retired settings. `tests::microsoft_oidc::enrollment` checks the same audit fact and
+cancellation for Microsoft sign-in. Host `tests::access_key_resolve` drives `POST /v1/access-keys/resolve` through the
+production router from the vendored shared fixtures in
+`tests/fixtures/access-key-resolution/` (a byte-identical copy of the set a
+resolving service uses; `index.json` names what each side must do with each file): every
+request the index says answers 400 does, and every 200 the Broker emits
+satisfies one of the three forms: active, bare inactive, or stored-key inactive
+with its key ID, owner and reason. It also covers a
+caller without the capability, the refused headers, inactive state reasons,
+the route's own pool and per-caller rate beside saturated shared capacity
+and a small sign-in budget, a stalled and an oversized body, and a
+failing audit store, which changes no resolution answer. The rate cases spend a
+caller's rate with keys no store holds and show, across three rate windows,
+that stored keys in every state are still answered many times over, that
+unknown keys, malformed requests, invalid request IDs and failed lookups
+share the rate, and that a request refused by the rate or turned away by
+the pool leaves no audit record. Further cases hold a lookup at a barrier
+inside its blocking task, cancel its request and check that the pool's slot
+stays taken until the lookup returns and that an unknown key is counted by
+the lookup itself; stall one caller's request bodies up to its share of the
+pool and show that its next request is turned away unread and unaudited
+while a second resolving caller is served, and that a peer address without
+a credential has the same share; abandon a request while its body is being
+read and show that it spent one of the caller's rate, while a body read to
+its end or its deadline is counted once; refuse callers with no credential, an unknown credential and
+no capability while the shared pool is full, and show that their refusals are
+bounded by the route's own windows at the unauthenticated number and leave
+the sign-in budget unspent;
+refuse a forbidden header only inside the pool and the caller's rate; refuse
+every body that is not an object with one `key` member, an array included,
+without a lookup; and
+answer 503 with no part of an answer that exceeds a
+lowered size limit. Active and inactive answers, unknown keys, malformed
+requests, caller refusals, limits and failed lookups leave no audit records.
+A trigger that rejects every audit insert proves that active, stored-key
+inactive and unknown-key answers, malformed input and caller refusals do not
+depend on audit availability. A store test checks that a key no store holds is one
+search of the hash's index and changes nothing. `tests::the_largest_resolution_answer_the_limits_admit_fits`
+in core checks, against an answer written out independently, that the
+largest answer the limits admit is inside the limit and both permitted
+null-expiry forms are smaller, so no configuration needs refusing for answer
+size.
+
+Access key types are covered in core by
+`managed_store::access_key_types::tests`: each access key type decided alone
+by the account's deny, the account's allow, or an active group held by local
+membership; disabled groups and Microsoft group evidence contributing
+nothing; the complete-object and configured-access-key-type rules; and startup
+refusing a saved reference to an access key type that is not configured. Host `tests::access_key_types` drives the production router:
+the access PATCH and group create and update, the configured and resolved
+values on principal detail and every group route (checked against the
+catalog's group schema), refused shapes writing nothing, the audit record of
+every change, a token that stops resolving when its owner's access is
+withdrawn and resumes when it is restored, a reload refused while a saved
+setting names a removed access key type, and a write admitted before a reload
+refused instead of saving a reference to a retired access key type. CLI unit
+tests (`access_key_types_tests`) check the flags and the complete
+payloads.
+
+Objects are read from maps only. Core `object_only::tests` shows a derived
+struct reading a positional sequence and the same struct refusing it at the
+root, as a member, as an element and as a TOML table, with its own member
+rules unchanged. `tests::access_key_type_and_account_username_tables_are_never_read_from_arrays`
+covers the two configuration tables, the access tests cover both settings
+from text and from a value tree, and host
+`tests::access_key_types::a_positional_array_is_never_read_as_a_setting_or_as_the_body_that_carries_it`
+sends the positional forms, nested and at the root, to the principal access
+PATCH and to group create and update and checks that nothing changed. The
+resolution request has its own cases in `tests::access_key_resolve`.
+`tests::access_key_types_and_account_usernames_validate_their_settings_and_prerequisites`
+and `tests::access_key_resolution_capability_and_limits_validate` check that an
+access key type, a username setting and the resolution capability are each
+refused under TOML identity authority with the message that says why.
+
+The management routes for usernames and access keys are covered by host
+`tests::access_key_management`, through the production router, with every
+successful result checked against the result schema the catalog publishes
+for its operation. The cases cover an administrator viewing a person's
+name, setting its mode, setting it by hand and taking it away, with each
+typed refusal and audit target; an email change renaming a person and
+ending their tokens, with the conflict shown when the new name is held; the
+fill after a reload naming existing accounts two at a time through its
+audit records, a failed fill audited without stopping the Broker, and a
+removed domain taking no name away; confirmation of one account; a person's
+own tokens from a browser session (options, the
+CSRF header, a bearer token refused, each mint refusal, listing status,
+revocation, access withdrawn and restored, and a rename that ends tokens);
+a request for the mode a person already follows after their domain is
+delisted, which keeps the name, its incarnation and the person's token; the
+fill resuming after an imported service change publishes between two of its
+batches; a mode given as an object or anything but one of the two strings,
+refused with nothing changed;
+an administrator issuing for a service account only where its access allows,
+and listing and revoking any token; an administrator issuing for a person a
+type people cannot create themselves, with the administrator as audit actor
+and the person as owner, the token in the person's own list and revoked by
+them, each refusal, and the three facts a person's options carry; a mint whose success record cannot be
+written, which withholds the secret; a cancelled mint still committed and
+audited by its owner; shutdown waiting for a cancelled mint's owner, whose
+token and only audit record are both written before the audit store closes,
+and a cancelled name change staying in the shutdown drain until it is
+audited; a mint held across a reload, refused; and what the
+catalog lists for an administrator, an auditor and a person, with the
+personal routes offered only while an access key type is configured; and every
+route that reads a body refusing the positional array form without changing
+anything. In core,
+`managed_store::account_usernames::tests` covers the fill and its per-request
+limit, `managed_store::access_keys::tests` the token listing and a
+person's options, and
+`managed_store::tests::directory_evidence_membership_is_neither_returned_nor_counted_for_access_key_types`
+that a group held only by Microsoft group evidence is neither returned by a
+resolution nor counted for access. `crates/agent-access/tests/access_key_admin.rs`
+runs the real `agent-access` binary against an isolated Broker: existing
+accounts named after startup, confirmation, a name set by hand and taken
+away, the two modes, a rename by an email change, the access flags, a
+service account's token from issue through resolution to revocation, and a
+token issued for a person.
+
+Further access key and username cases: in core,
+`managed_store::account_usernames::tests::two_connections_racing_for_one_name_give_it_to_exactly_one_holder`
+opens two stores on one database file, each with its own connection, and
+starts them together, people against people and a person against a service
+account's ID, at creation and by hand;
+`managed_store::access_keys::tests` covers each type a listed key carries
+and whether the key still holds it, the account-level problem that is the
+status of every key of an account, a person's own request being refused
+alike for an unconfigured type and for one they may not hold, the session
+conditions of a portal mint, a key of the application origin, the cost of a key no
+store holds, and that neither way of issuing gives a key to an account
+whose keys could not resolve, for each such state of a person and of a
+service account, with the code the account's keys list and before any
+type is judged; and `runtime::tests::access_key_credential_tests` covers the
+refusal, at startup and at reload, of a configuration without a type that
+saved settings name. Host `tests::access_key_management` adds the email
+edits that keep or end a person's keys, the mode switch and the reuse of a
+released username; that a mint's advertised sensitive pointer is where its
+response carries the key; both issue routes refusing an account whose keys
+could not resolve, with the code principal detail and the person's options
+report, while the keys already held stay as they are; and the shutdown
+drain of a cancelled access key type change. Host `tests::access_key_types` starts a stopped Broker on a
+configuration without a type that settings name, through the production
+startup. Host `tests::access_key_resolve` also resolves an administrator's
+key for a person as the shared administrator-user answer, refuses every
+configured identity carrier and every method but `POST`, and judges an
+invalid request ID inside the route's admission.
+
+The portal's `unit/access-keys.test.ts` covers when a person sees access
+keys, how listed keys, the issue form, usernames and access key type
+settings are presented from the server's members, the lifetime hint when a
+selected type is no longer offered, and the navigation and routes.
+`tests/access-keys.spec.ts` drives the pages against mocked Broker
+contracts: a person's keys, failing closed when what decides issuing cannot
+be read, issuing for oneself, an administrator's Keys tab, each reason the
+account detail gives why no key of an account can work, one account seen
+from both sides, usernames and the type settings; configured lifetime
+intersections and preselection, preserving a valid manual choice, blocking
+issuance without a common option, Never labels, expiry sorting in both
+directions with two Never keys, hints for unavailable selected types, and
+refreshed lifetime refusals preserving a still-offered choice or clearing the
+error when preselection replaces it. `unit/table-sort.test.ts` checks total
+numeric comparisons for unbounded values and places missing values last. `tests/access-keys-live.spec.ts`
+starts a real Broker: a person issues, lists and revokes a key, an
+administrator's per-type setting changes what the person may issue, an
+administrator issues for a person and for a service account, an email
+change reports what happened to the username and the keys, and an account
+without a username shows that reason until a name is set. Personal and
+administrator forms also issue non-expiring keys that the real Broker lists
+as active with null expiry.
+
 OpenAPI anonymous-import tests exercise both Swagger and OpenAPI through real
 Broker/CLI, HTTP MCP and stdio MCP fixtures: credential-free setup, grant denials,
 service-only execution, source-security quarantine and offline restart. Adapter

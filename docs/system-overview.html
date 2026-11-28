@@ -374,6 +374,7 @@
           <li><a href="#architecture"><span class="n">02</span>Architecture at a glance</a></li>
           <li><a href="#surfaces"><span class="n">03</span>How agents connect</a></li>
           <li><a href="#imports"><span class="n">03a</span>Importing services</a></li>
+          <li><a href="#access-keys"><span class="n">03b</span>Access keys for other services</a></li>
         </ol>
       </div>
       <div>
@@ -382,6 +383,7 @@
           <li><a href="#contexts"><span class="n">04</span>Execution contexts</a></li>
           <li><a href="#managed"><span class="n">05</span>Managed identity path</a></li>
           <li><a href="#unmanaged"><span class="n">06</span>Unmanaged clients and tokens</a></li>
+          <li><a href="#usernames"><span class="n">06a</span>Usernames and access keys</a></li>
         </ol>
       </div>
       <div>
@@ -715,6 +717,51 @@
       </table>
       <div class="callout warm"><b>Access boundaries.</b> MCP and OpenAPI imports grant whole operations; upstream permissions supply their data restrictions. Commands may declare resource scopes enforced by the Broker or by the command itself. Generated HTTP gateways forward bounded raw bodies without body-field or response-schema validation.</div>
       <p>Approved commands run as the Broker user without a sandbox and must be trusted with its state and keys. See <a href="imported-services.md">import administration</a>, <a href="http-gateway-setup.md">HTTP gateways</a> and <a href="command-imports.md#trust-model">command trust</a> for details.</p>
+      <h3 id="access-keys">Access keys for other services</h3>
+      <p>A client presents an <b>access key</b> to another service, the resolving service, which asks the Broker whose key it is. It is a trusted caller with the <code>allow_access_key_resolution</code> capability, calls <code>POST /v1/access-keys/resolve</code> and applies its own rules to the answer. The Broker never accepts an access key as a credential on its own routes, and a Broker token is not an access key.</p>
+      <figure class="figure-block">
+        <svg viewBox="0 0 1040 118" role="img" aria-labelledby="access-key-flow-title">
+          <title id="access-key-flow-title">Access key flow: a key is issued, a client presents it to a resolving service, the Broker resolves it for that trusted caller, and the resolving service applies its own rules</title>
+          <defs><marker id="access-key-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,1 L9,5 L0,9 z" class="d-head"/></marker></defs>
+          <rect class="d-node" x="0" y="18" width="220" height="80" rx="6"/>
+          <text class="d-title" x="14" y="42">Key is issued</text>
+          <text class="d-small" x="14" y="64">Portal or administrator</text>
+          <text class="d-small" x="14" y="82">Types the account may hold</text>
+          <path class="d-edge" d="M220 58 H268" marker-end="url(#access-key-arrow)"/>
+          <rect class="d-node" x="270" y="18" width="220" height="80" rx="6"/>
+          <text class="d-title" x="284" y="42">Client presents the key</text>
+          <text class="d-small" x="284" y="64">To a resolving service</text>
+          <text class="d-small" x="284" y="82">Not a Broker credential</text>
+          <path class="d-edge" d="M490 58 H538" marker-end="url(#access-key-arrow)"/>
+          <rect class="d-stage" x="540" y="18" width="220" height="80" rx="6"/>
+          <text class="d-title" x="554" y="42">Broker resolves the key</text>
+          <text class="d-small" x="554" y="64">Asked by the trusted caller</text>
+          <text class="d-small" x="554" y="82">Active facts, or not active</text>
+          <path class="d-edge" d="M760 58 H808" marker-end="url(#access-key-arrow)"/>
+          <rect class="d-node" x="810" y="18" width="230" height="80" rx="6"/>
+          <text class="d-title" x="824" y="42">Resolving service decides</text>
+          <text class="d-small" x="824" y="64">Applies its own rules</text>
+          <text class="d-small" x="824" y="82">Then serves the request</text>
+        </svg>
+        <figcaption><b>Access key flow.</b> Resolution identifies the key from current state; what the answer permits is the resolving service's own policy.</figcaption>
+      </figure>
+      <div class="cols2" style="margin-top:24px">
+        <div>
+          <h4>Answers</h4>
+          <ul class="list">
+            <li><b>Active.</b> The subject (a person's username or a service account's ID), its local groups, the access key types the key may use now, how it was issued, its key ID and expiry, if any.</li>
+            <li><b>Not active.</b> A stored key answers with its key ID, current owner or null, and the reason. An unknown key answers only <code>active: false</code>.</li>
+          </ul>
+        </div>
+        <div>
+          <h4>Boundaries</h4>
+          <ul class="list">
+            <li><b>Identification only.</b> The capability admits no principal and asserts nobody to the Broker. Resolution decides nothing about a request.</li>
+            <li><b>Current state.</b> The Broker pushes nothing. Revocation, a disabled owner, paused identity access, a changed username, a withdrawn type or a group change are reflected at the next resolution.</li>
+          </ul>
+        </div>
+      </div>
+      <p>See <a href="http-api.md#access-key-resolution">access key resolution</a>, <a href="trusted-callers.md#access-key-resolution">the caller capability</a> and the <a href="security-model.md#access-keys-for-a-resolving-service">security model</a> for details.</p>
     </div>
   </section>
 
@@ -961,6 +1008,7 @@
               <tr><td>admin</td><td>Administration within the account's current role</td></tr>
             </tbody>
           </table>
+          <p style="font-size:13px;color:var(--ink-3);margin-top:10px">Access keys (<a href="#usernames">§06a</a>) are not a token class: no Broker route accepts them as a credential.</p>
         </div>
         <div>
           <h3>Token properties</h3>
@@ -970,6 +1018,27 @@
             <li><b>Storage.</b> Broker stores a keyed hash; the raw token is shown once.</li>
             <li><b>Policy updates.</b> Existing tokens remain subject to current grants. Their own restrictions are fixed at issuance.</li>
             <li><b>Connected applications.</b> An operator-registered application can obtain short-lived <code>agent_invoke</code> tokens for a person who approved it in the portal, without the person issuing or holding a token. Administrators can make that access read-only, disable it or remove it.</li>
+          </ul>
+        </div>
+      </div>
+
+      <h3 id="usernames" style="margin-top:44px">Usernames and access keys</h3>
+      <p>Access keys identify people and service accounts to a resolving service (<a href="#access-keys">§03b</a>) and exist only for Broker-managed accounts (managed identity authority with the managed store). A person creates keys for themselves from a signed-in portal session; an administrator issues them for people and service accounts. Only the resolution route takes one.</p>
+      <div class="cols2" style="margin-top:20px">
+        <div>
+          <h4>Usernames</h4>
+          <ul class="list">
+            <li><b>Stored and unique.</b> A person is known at a resolving service by the username stored on their account, a service account by its principal ID. Both share one namespace, and the first holder keeps a name.</li>
+            <li><b>From email or set by hand.</b> By default the name is the profile email's local part when its domain is listed in configuration; an administrator can set it by hand instead. Reserved names are never given; names services already use need an administrator's confirmation.</li>
+            <li><b>Incarnation.</b> Every allocation of a name has an incarnation. A key resolves only under the one it was issued under, so a change of name ends the owner's earlier keys.</li>
+          </ul>
+        </div>
+        <div>
+          <h4>Access key types and keys</h4>
+          <ul class="list">
+            <li><b>Types.</b> Configuration defines each type: a display name, ordered lifetime choices, a default choice and whether people may create keys of it themselves. A type names no execution contexts; the resolving service decides where it works.</li>
+            <li><b>Who may hold a type.</b> Administrators decide per type on accounts and groups: the account's deny refuses, its allow permits, otherwise an active managed group the account belongs to locally must allow it. A configured type is on for nobody until allowed.</li>
+            <li><b>Keys.</b> An <code>aab_ak_…</code> key carries one or more types, is shown once, is stored as a keyed hash and uses a lifetime offered by every selected type. It has no expiry only when all selected types offer that choice; revocation is final. A withdrawn type stops counting for existing keys, and paused identity access pauses them, without revocation.</li>
           </ul>
         </div>
       </div>
@@ -1401,12 +1470,14 @@
             <tr><td>Optional shared service cap</td><td>All principals using a service</td></tr>
             <tr><td>Authentication protection</td><td>User/source lockouts and per-source traffic limits</td></tr>
             <tr><td>Concurrency</td><td>Per-principal and Broker-wide request slots</td></tr>
+            <tr><td>Access key resolution</td><td>Its own pool, each caller's share of it, and a per-caller rate for unknown keys</td></tr>
           </tbody>
         </table>
         <ul class="list" style="margin-top:16px">
           <li><b>Invocation limits.</b> Personal and shared service caps apply together. Changing tokens or clients does not reset the principal's allowance.</li>
           <li><b>Admission.</b> Excess requests wait within configured limits or are rejected before execution. Upstream throttling is reported separately.</li>
           <li><b>Scope.</b> Counters are local to one Broker process, not distributed quotas. See <a href="configuration.md#service-invocation-limits">invocation limits</a> for configuration and queuing behavior.</li>
+          <li><b>Access key resolution.</b> <code>POST /v1/access-keys/resolve</code> takes no capacity or authentication budget from other routes. A stored key is never refused on rate, so a resolving service's rechecks are bounded only by the pool and the caller's share of it. Unknown keys, malformed requests and failed lookups count against the caller's rate; a full pool, a spent share or a spent rate answers 429. See <a href="administrator-guide.md#size-the-resolution-route">sizing the route</a>.</li>
         </ul>
       </div>
       <div>
@@ -1415,6 +1486,7 @@
           <li><b>Records.</b> Invocation outcomes and management changes include identity, action and policy context. Streams and credentialed gateways also record their start. Routine successful management reads are not audited.</li>
           <li><b>Storage.</b> Audit can use searchable SQLite or rotated JSONL. Retention and durability are configured; local records are not tamper-evident against host administrators.</li>
           <li><b>Failures.</b> Audit readiness checks and required preflights fail closed. A final audit failure can occur after an upstream change; it does not make retrying safe.</li>
+          <li><b>Access keys.</b> Resolution writes no audit record for any outcome and never depends on the audit store; the resolving service logs its own decisions and refusals. Issuing and revoking keys, access key type settings and username changes are audited.</li>
           <li><b>Visibility.</b> Administrators and auditors see all records, service managers see their services, and self-service users see their own activity. Agent tokens cannot read audit.</li>
           <li><b>Sensitive data.</b> Credentials are excluded, but selected query and title inputs may contain confidential text. Audit readers can see those values.</li>
         </ul>
@@ -1442,6 +1514,10 @@
         <dt>Imported service</dt><dd>A reviewed MCP, OpenAPI or command integration.</dd>
         <dt>Managed identity</dt><dd>A trusted assertion mapped to a human account for invocation.</dd>
         <dt>agent_invoke token</dt><dd>A user-issued Broker credential for agent discovery and invocation.</dd>
+        <dt>Access key</dt><dd>An <code>aab_ak_…</code> credential a client presents to a resolving service; it never authenticates to the Broker.</dd>
+        <dt>Access key type</dt><dd>A configured kind of access a key carries; administrators decide who may hold each type.</dd>
+        <dt>Resolving service</dt><dd>Another service, a trusted caller, that asks the Broker whose access key a value is.</dd>
+        <dt>Account username</dt><dd>The stored, unique name a person is known by at a resolving service; separate from HTTP MCP username bindings.</dd>
         <dt>Resource / resource group</dt><dd>An eligible upstream target, or a collection of catalog entries.</dd>
         <dt>Grant</dt><dd>Policy authorizing subjects, actions, contexts and supported resource scopes for one service.</dd>
         <dt>Credential mode</dt><dd><code>per_user</code> selects the caller's upstream credential; <code>service</code> selects a shared credential.</dd>

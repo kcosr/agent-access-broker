@@ -177,6 +177,85 @@ Administrators can issue either token type for the target's granted contexts fro
 its Tokens tab under separate administrative authority; service accounts always
 use that path.
 
+## Set a person's username
+
+Services behind the gateway know a person by the **username** stored on their
+account, and an access key works only while it is usable. The **Username**
+section of a person's **Overview** appears while an access key type is
+configured. Its badge reads **Working**, **Awaiting confirmation**,
+**Reserved**, **Conflict** or **None**, as the Broker reports it.
+
+1. Open **Admin > Principals > the person > Overview** and find **Username**.
+2. **From email**, the default, shows the username the Broker gives for the
+   saved email, and why it gives none when it does not. The page never works
+   out a name for an email that has not been saved.
+3. To choose a name instead, select **Set by hand**, type it, and choose
+   **Save username**. Leave the field empty to take the name away.
+4. Read the confirmation: the change may change the username, and if it does,
+   the person's access keys stop working and their usage starts under the new
+   username. Choose **Save username** to continue.
+
+![Username section of a person following their email](../images/portal/guide/admin-username-light.png)
+
+*Browser-only fixture. **History** shows when and how the name was set, its
+confirmation and the person's live access keys.*
+
+Saving an email for a person whose username follows it, while they hold a
+username or access keys, asks first in the same way, naming the current
+username and the number of access keys that would stop.
+
+![Confirmation before saving a changed email](../images/portal/guide/admin-username-email-change-light.png)
+
+*Unsubmitted email change from a browser-only fixture.*
+
+Expected result: after either change, the section you saved in (**Username**
+for the name, **Profile** for the email) reports what the Broker did: the old
+and new username, or that it stayed, and how many access keys ended. A name on the operator's list of existing usernames shows **Awaiting
+confirmation** until you choose **Confirm**, after checking that the account is
+that person; equal spelling is not proof. **Conflict** names the account that
+already holds the name the email gives; it keeps the name, and this account has
+none until you set one by hand. A service account's username is its principal
+ID.
+
+## Choose who may hold access key types
+
+Access key types are defined in the Broker's configuration and listed,
+read-only, under **Admin > Catalog > Access key types**. Who may hold each type
+is set on groups and accounts. A new type is on for nobody until an
+administrator allows it.
+
+1. On a group's **Overview > Token issuance**, check each type under **Access
+   key types this group allows** and choose **Save token issuance**. A group
+   allows a type or says nothing about it; it cannot deny one. Only local
+   membership counts, not membership that comes only from a Microsoft group
+   mapping.
+
+![Group access key types with two types allowed](../images/portal/guide/admin-group-access-key-types-light.png)
+
+*Browser-only fixture of the `ml-team` group.*
+
+2. On a person's **Overview > Account access**, choose **Inherit from groups**,
+   **Allow** or **Deny** for each type in **Access key types**, then choose
+   **Save access** and confirm. A service account has its own **Access key
+   types** section with its own **Save access**.
+
+![Access key types setting with two types allowed on the account, one inherited from its groups and one unsaved Deny](../images/portal/guide/admin-access-key-types-light.png)
+
+*Browser-only fixture with an unsaved Deny. **Result** shows the saved
+setting's outcome from the Broker and its source; an edited row applies after
+saving.*
+
+Expected result: **Result** shows **Allowed** from a named group or set on the
+account, **Denied** set on the account, or **Not allowed** when none of the
+account's groups allows the type. Removing permission stops the account's
+existing keys giving that access; they keep working for their other access.
+
+A type removed from the configuration while an unsaved edit still names it
+stays in the form, marked **No longer configured**; after a reload made
+elsewhere, it appears when a save is refused. The section cannot be saved
+until you remove it: choose **Remove** on an account's row, or untick it on a
+group.
+
 ## Automatically add new Microsoft users
 
 Open a group's **Overview** and enable **Automatically add new Microsoft users**.

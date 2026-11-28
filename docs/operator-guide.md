@@ -1682,6 +1682,28 @@ newer ledger; rollback requires the matching pre-migration database,
 configuration, keys and binary. See
 [application access storage](database.md#application-access).
 
+Migration `040_access_keys` adds the tables for
+[access keys and usernames](database.md#access-keys-and-usernames) and
+the column `principals.account_username_mode`, in which every existing person
+starts on `from_email`. The migration gives each existing service account
+its username, which is its principal ID, and names no person itself.
+Nothing is derived until `[usernames].email_domains` is configured. Once
+it is, the Broker names the existing people whose email is in a listed
+domain shortly after it starts or reloads, in batches beside serving, and
+writes a `account_usernames.assigned` audit record for each batch that named
+somebody; a failed fill is logged as `account_username_fill_failed`, audited, and
+tried again at the next reload or startup. Names on
+`[usernames].existing_usernames` are allocated but usable only after an
+administrator confirms each account (see the
+[administrator guide](administrator-guide.md#how-people-get-their-usernames)).
+Once a person holds a username, a service account cannot be created under
+that ID. It also adds
+the tables for [access key types](roles.md#access-key-types), empty: no
+account or group may hold any access key type until an administrator allows
+it. Back up before startup with `auto_migrate = true`. Older binaries reject
+the newer ledger; rollback requires the matching pre-migration database,
+configuration, keys and binary.
+
 Accepted HTTP gateway response declarations containing `*/*` or `type/*` require
 a Broker with [response media range support](http-gateway-setup.md#response-media-declarations),
 without another database migration. Older binaries cannot load any retained
@@ -2014,6 +2036,38 @@ reload preserves the runtime, registry and aggregate invocation limiter state.
 Changing issuance policy alone leaves existing tokens usable; removing a context
 from configuration can invalidate existing tokens that name it. Plan replacements
 before registry removal.
+
+### Access key type retirement
+
+Before removing an `[access_key_types.<id>]` table, have an administrator take
+the ID out of every account's and every group's
+[access key types](roles.md#access-key-types), `allow` and `deny`
+lists alike, through the ordinary account and group controls; the
+administrator guide gives the
+[procedure](administrator-guide.md#retire-an-access-key-type). Do not edit
+database rows or rely on startup to trim them. Startup and candidate reload
+check every account's saved references, including disabled accounts, and
+every group's, including disabled groups, against the candidate's
+access key types. This is the rule that saved agent-token issuance policies
+follow for a context removed from the registry.
+
+The refusal is the configuration's. For each type it names the ID, the
+number of account settings and of group settings that still name it, with
+up to ten principal IDs and ten group IDs, and the number of unexpired,
+unrevoked access keys that carry it, including keys without expiry. A reload answers 503
+`config_admission_failed` with that text and preserves the running
+generation. Startup prints it and exits with status 3, the status of an
+invalid configuration, without serving. Offline `config validate` does not
+open the managed store, so it cannot detect these references and passes on
+the same file.
+
+Access keys never block a retirement. Removing an access key type stops the
+keys that carry only that access key type at the reload, without revoking
+them. Restoring the same ID later makes them
+usable again, subject to each key's own expiry, if any, and the type's
+current maximum, for accounts that are allowed it then: no saved setting
+names the restored ID, so it is on for nobody until an
+administrator allows it again.
 
 ### Read-only token backfill and collision recovery
 
@@ -2640,9 +2694,12 @@ loaded with their client secrets at startup and reload.
 - Shutdown waits, within `--shutdown-timeout-ms`, for token requests,
   revocations and a reload's reconciliation that are still completing, so
   that their audit records are written before the audit store closes, also
-  when their caller has disconnected. One that does not finish in time is
-  logged as `application_owner_shutdown_unfinalized`: its store change may
-  have committed without its audit record.
+  when their caller has disconnected. The same wait covers a completing
+  sign-in, an access key being created, and an administrator's change to a
+  username, an access key, identity access or application access. One
+  that does not finish in time is logged as
+  `application_owner_shutdown_unfinalized`: its store change may have
+  committed without its audit record.
 - Removing a redirect URI invalidates the pending approval requests and
   unexchanged codes issued for it.
 - A reload fences token requests: one admitted under the previous generation

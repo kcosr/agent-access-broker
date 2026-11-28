@@ -147,6 +147,57 @@ upstream revocation or rotation when needed. See
 [classless static credential rights](../administrator-guide.md#grant-personal-credential-rights)
 and the [end-user guide](../end-user-guide.md#rotate-pause-and-revoke).
 
+## Manage an account's access keys
+
+1. Open **Admin > Principals > the account > Keys**. The tab, beside
+   **Tokens**, lists the account's access keys with what each gives access to,
+   its status and who issued it. Filter by **Current**, **Expired**,
+   **Revoked** or **All**.
+2. To issue one, choose **Issue access key**. The page offers the types the
+   account is allowed, including types people cannot issue themselves, and
+   names the types it is not allowed with a link to its setting. Nothing is
+   chosen for you. Choose the access and a **Name**. **Lifetime** offers only
+   choices shared by every selected type, in the first selected type's order.
+   A lifetime you chose manually is kept while every selected type still
+   offers it. Otherwise, it preselects the shortest selected-type default
+   that all selected types offer, or the shortest common option, treating
+   **Never expires** as unlimited when choosing the default. That choice appears only when all selected types
+   offer it. No common lifetime disables issuing with an explanation.
+   Choose **Issue access key**. Copy the key from **Access key created** and pass
+   it on yourself: it is shown once.
+3. To retire a key, choose its trash icon or open it and choose **Revoke**,
+   then confirm **Revoke access key**.
+
+![Keys tab of a person with keys they issued and one an administrator issued](../images/portal/guide/admin-account-keys-light.png)
+
+*Browser-only fixture with synthetic keys.*
+
+![Issue access key for a service account with one type chosen](../images/portal/guide/admin-issue-access-key-light.png)
+
+*Unsubmitted draft from a browser-only fixture. The key belongs to the
+service account, which services know by its ID.*
+
+While no key of the account can work, because the account is disabled, its
+identity access is paused or missing, it has no usable username or it is in
+too many groups, the tab says why and what to fix, and offers no **Issue access key**;
+its keys are still listed and can be revoked. **Issue access key** is also
+unavailable, with the reason, while the account is allowed no type, and while
+the account or the configured types cannot be read; a form already started
+keeps its draft until **Retry** succeeds. Fix the username, identity access or
+the account's access key types on its **Overview**, or its groups on
+**Groups**, first. A key issued for a
+person appears in their own **My access > Keys** list, and they can revoke it.
+Auditors can see the tab but cannot issue or revoke.
+
+A key without expiry shows **Never** in its expiry field. The configured types,
+with their ordered lifetime choices, default and whether people can
+issue them themselves, are listed under **Admin > Catalog > Access key types**.
+They change only through the configuration and a reload on **System**.
+
+![Configured access key types in the catalog](../images/portal/guide/admin-catalog-access-key-types-light.png)
+
+*Browser-only fixture of four configured types.*
+
 ## Review application access
 
 A person approves a registered [application](../applications.md) in their own

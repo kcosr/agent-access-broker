@@ -1388,7 +1388,8 @@ Omitting the whole field on creation gives an account
 is create-only: an existing principal returns HTTP 409 and remains unchanged.
 Internal onboarding upserts preserve existing pairs. Change account settings
 through `PATCH /v1/admin/principals/{principal}/access`, whose optional fields are
-`role`, `selfServiceEnabled`, and `agentTokenIssuance`. Any one suffices. Omitted
+`role`, `selfServiceEnabled`, `agentTokenIssuance`, and `accessKeyTypes`
+(below). Any one suffices. Omitted
 fields stay unchanged; presence replaces the complete pair atomically, with no
 nested partial PATCH. API/CLI replacement is last-writer-wins, without a version
 precondition. Personal account-profile updates cannot change issuance policy.
@@ -1426,6 +1427,53 @@ identity group reads report `{"mode":"disabled","allowedExecutionContexts":[]}`
 and group writes remain refused. Managed group settings are dormant under TOML
 identity; explicit account overrides remain available under either identity or
 policy authority. See [resolution and membership](roles.md#agent-token-issuance).
+
+`accessKeyTypes` decides, for each configured
+[access key type](configuration.md#access-key-types), whether the account may hold
+access keys of that type. The access PATCH accepts the account's complete
+object and managed group POST/PATCH accepts the group's:
+
+```json
+{"accessKeyTypes":{"allow":["inference"],"deny":["packages"]}}
+{"accessKeyTypes":{"allow":["inference","packages"]}}
+```
+
+An account's object requires both `allow` and `deny`; a group's has only
+`allow`, because a group cannot deny. Each list holds at most 256 configured
+access key type IDs, each once, and an account's lists share no ID. Unknown
+members, nulls, wrong types, a repeated ID, an ID in both lists and an
+access key type the configuration does not define are rejected, and nothing is
+written. The setting and the body that carries it are JSON objects: an array
+of the same values in order is rejected too. Presence replaces the whole object, omission leaves it unchanged, a
+group created without it allows nothing, and replacement is last-writer-wins
+without a version precondition. Lists serialize in lexical order; writing an
+equal setting is a no-op. The change takes effect for existing access keys
+at their next evaluation.
+
+The access PATCH response and principal detail include the configured
+`accessKeyTypes`; group list, detail and mutation responses include the
+group's, and TOML-owned groups report `{"allow":[]}`. Principal detail also
+includes the resolved `accessKeyTypePolicy`, one row for every configured
+access key type in ID order:
+
+```json
+{
+  "accessKeyTypes": [
+    {"accessKeyType":"batch","allowed":false,"source":"none","groupIds":[]},
+    {"accessKeyType":"inference","allowed":true,"source":"groups","groupIds":["platform"]},
+    {"accessKeyType":"packages","allowed":false,"source":"account","groupIds":[]}
+  ]
+}
+```
+
+`source` is `account` when the account's `allow` or `deny` names the type,
+`groups` when it names neither and at least one active managed group the
+account belongs to by local membership allows it, and `none` when it names
+neither and no such group does. `groupIds` lists the allowing groups, sorted,
+only for `groups`. The audit completion of the access PATCH records
+`previousAccessKeyTypes` and `accessKeyTypes`; a group mutation that
+changes the setting records `accessKeyTypes` with `previous` and
+`current`. See [access key types](roles.md#access-key-types).
 
 `PUT /v1/admin/principals/{principal}/login-methods/local-password` resets an
 existing active local password. It accepts
@@ -1598,7 +1646,12 @@ renewal record:
 `PATCH /v1/admin/principals/{principal}` accepts any non-empty subset of
 `displayName`, `email`, and `status`. `displayName` or `email` set to `null`
 clears the value; `status` is `active` or `disabled`. Principal id, kind, and
-external subject are not patchable through this route.
+external subject are not patchable through this route. A changed `email`
+renames a person whose [username](#usernames) follows it, in the same
+transaction: the response's `accountUsernameChange` is `{before, after,
+endedKeys}` when the name changed and null otherwise. The change writes a
+success audit record and answers 409 `version_conflict` when it began under
+a configuration a reload has since replaced.
 
 Administrative changes require either an explicitly permitted classless static
 TOML admin identity or an active human account with role `admin`, using an `admin`
@@ -1746,9 +1799,11 @@ from the effective-only management views.
 Managed group writes require `identity.authority = "managed"` and a managed
 store. `POST /v1/admin/groups` accepts `groupId`, `displayName`, and
 `description`, plus optional boolean `autoEnrollNewMicrosoftUsers` (default
-`false`); duplicate group IDs return `version_conflict`. `PATCH
+`false`), `agentTokenIssuance` and `accessKeyTypes`; duplicate group IDs
+return `version_conflict`. `PATCH
 /v1/admin/groups/{group}` accepts any non-empty subset of `displayName`,
-`description`, `status`, and boolean `autoEnrollNewMicrosoftUsers`;
+`description`, `status`, boolean `autoEnrollNewMicrosoftUsers`,
+`agentTokenIssuance` and `accessKeyTypes`;
 `displayName` or `description` set to `null` clears the value, and `status` is
 `active` or `disabled`. Group records expose `autoEnrollNewMicrosoftUsers` in
 list, detail, and mutation responses; TOML-owned groups report `false`.
@@ -3074,8 +3129,8 @@ These operations are not audited when they succeed:
 
 | Area | Operations |
 | --- | --- |
-| Self-service | `auth.session` (with a valid session or no session cookie), `tokens.list`, `tokens.inspect`, `tokens.options`, `tokens.effective_access`, `applications.authorizations.inspect`, `applications.access.list`, `credentials.list`, `credentials.inspect`, `credentials.targets`, `credentials.input_schema`, `oauth.connections.list`, `audit.options`, `audit.events.list`, `audit.requests.inspect` |
-| Administration and status | `config.status`, `admin.store.status`, `admin.principals.list`, `admin.principals.inspect`, `admin.principals.services`, `admin.principals.login_methods.list`, `admin.principals.service_limits.list`, `admin.principals.identity_token.inspect` (metadata only), `admin.principals.identity_access.inspect`, `admin.principals.identity_bindings.list`, `admin.principals.application_access.list`, `admin.principals.oauth_connections.list`, `admin.groups.list`, `admin.groups.inspect`, `admin.groups.members.list`, `admin.groups.external_group_bindings.list`, `admin.rights.list`, `admin.tokens.list`, `admin.tokens.inspect`, `admin.tokens.list_principal_agent`, `admin.tokens.inspect_principal_agent`, `admin.tokens.options_principal_agent`, `admin.tokens.effective_access_principal_agent`, `admin.credentials.list`, `admin.credentials.list_principal`, `admin.credentials.inspect`, `admin.credentials.targets`, `admin.credentials.input_schema` |
+| Self-service | `auth.session` (with a valid session or no session cookie), `tokens.list`, `tokens.inspect`, `tokens.options`, `tokens.effective_access`, `applications.authorizations.inspect`, `applications.access.list`, `access_keys.list`, `access_keys.options`, `credentials.list`, `credentials.inspect`, `credentials.targets`, `credentials.input_schema`, `oauth.connections.list`, `audit.options`, `audit.events.list`, `audit.requests.inspect` |
+| Administration and status | `config.status`, `admin.store.status`, `admin.principals.list`, `admin.principals.inspect`, `admin.principals.services`, `admin.principals.login_methods.list`, `admin.principals.service_limits.list`, `admin.principals.identity_token.inspect` (metadata only), `admin.principals.identity_access.inspect`, `admin.principals.identity_bindings.list`, `admin.principals.application_access.list`, `admin.principals.account_username.inspect`, `admin.account_usernames.list`, `admin.access_keys.list`, `admin.access_key_types.list`, `admin.principals.oauth_connections.list`, `admin.groups.list`, `admin.groups.inspect`, `admin.groups.members.list`, `admin.groups.external_group_bindings.list`, `admin.rights.list`, `admin.tokens.list`, `admin.tokens.inspect`, `admin.tokens.list_principal_agent`, `admin.tokens.inspect_principal_agent`, `admin.tokens.options_principal_agent`, `admin.tokens.effective_access_principal_agent`, `admin.credentials.list`, `admin.credentials.list_principal`, `admin.credentials.inspect`, `admin.credentials.targets`, `admin.credentials.input_schema` |
 | Imports | `admin.imports.list`, `admin.imports.inspect`, `admin.imports.preview` (saved previews only; discovery remains a write operation) |
 | Policy | `admin.policy.status`, `admin.policy.catalog`, `admin.policy.grants.list`, `admin.policy.grants.inspect`, `admin.policy.service_managers.list`, `admin.policy.resources.list`, `admin.policy.resources.get`, `admin.policy.resources.used_by`, `admin.policy.resource_groups.list`, `admin.policy.resource_groups.get`, `admin.policy.resource_groups.used_by`, `admin.audit.options`, `admin.audit.events.list`, `admin.audit.requests.inspect`, and the POST dry runs `admin.policy.effective_access` and `admin.policy.grants.validate` (a `valid: false` result is a successful response) |
 
@@ -3311,9 +3366,9 @@ reason code in the sanitized portal error URL.
 | --- | --- |
 | 400 | `identity_assertion_invalid`, `identity_assertion_unsupported`, `request_id_missing`, `request_id_invalid`, `input_invalid`, `oidc_flow_invalid`, `oidc_flow_expired`, `invalid_draft_handle`, `policy_authority_unavailable`, `policy_validation_failed`, `body_malformed`, `gateway_host_invalid`, `gateway_query_denied`, `gateway_header_denied`, `gateway_request_body_denied`, `git_service_denied`, `git_pkt_line_malformed`, `config_parse_failed`, `config_validation_failed` |
 | 401 | `caller_authentication_required`, `caller_authentication_invalid`, `identity_required`, `identity_invalid`, `broker_token_not_found`, `broker_token_expired`, `broker_token_revoked`, `broker_token_paused`, `gateway_auth_required`, `gateway_auth_invalid`, `local_login_failed`, `local_login_locked`, `oidc_provider_denied`, `oidc_identity_invalid`, `oidc_sign_in_required` |
-| 404 | `identity_binding_not_found`, `application_authorization_invalid`, `application_access_not_found`, `principal_not_found`, `group_not_found`, `external_group_binding_not_found`, `policy_grant_not_found`, `resource_not_found`, `resource_group_not_found`, `credential_not_found`, `gateway_host_unmatched`, `gateway_rule_not_found`, `audit_query_unavailable`, `audit_request_not_found` |
-| 403 | `application_access_denied`, `caller_user_assertion_denied`, `identity_assertion_denied`, `caller_identity_forwarding_denied`, `execution_context_required`, `execution_context_invalid`, `execution_context_denied`, `service_action_denied`, `webhook_destination_denied`, `principal_required`, `principal_disabled`, `broker_token_class_denied`, `management_denied`, `csrf_invalid`, `password_change_required`, `self_service_disabled`, `token_issuance_denied`, `oidc_group_claims_incomplete`, `oidc_admission_denied`, `right_missing`, `scope_unresolved`, `gateway_scope_unresolved`, `locator_invalid`, `lookup_failed`, `credential_not_provisioned`, `credential_invalid`, `credential_expired`, `git_ref_denied`, `git_capability_denied` |
-| 409 | `identity_binding_conflict`, `identity_version_conflict`, `resource_in_use`, `local_password_not_enabled`, `local_password_already_enabled`, `version_conflict`, `mutation_verification_failed`, `broker_token_state_conflict`, `oidc_login_method_conflict`, `external_group_binding_conflict`, `verification_mismatch`, `reload_in_progress` |
+| 404 | `identity_binding_not_found`, `application_authorization_invalid`, `application_access_not_found`, `broker_account_username_not_found`, `broker_access_key_not_found`, `principal_not_found`, `group_not_found`, `external_group_binding_not_found`, `policy_grant_not_found`, `resource_not_found`, `resource_group_not_found`, `credential_not_found`, `gateway_host_unmatched`, `gateway_rule_not_found`, `audit_query_unavailable`, `audit_request_not_found` |
+| 403 | `application_access_denied`, `broker_caller_access_key_resolution_denied`, `broker_account_username_denied`, `broker_access_key_denied`, `caller_user_assertion_denied`, `identity_assertion_denied`, `caller_identity_forwarding_denied`, `execution_context_required`, `execution_context_invalid`, `execution_context_denied`, `service_action_denied`, `webhook_destination_denied`, `principal_required`, `principal_disabled`, `broker_token_class_denied`, `management_denied`, `csrf_invalid`, `password_change_required`, `self_service_disabled`, `token_issuance_denied`, `oidc_group_claims_incomplete`, `oidc_admission_denied`, `right_missing`, `scope_unresolved`, `gateway_scope_unresolved`, `locator_invalid`, `lookup_failed`, `credential_not_provisioned`, `credential_invalid`, `credential_expired`, `git_ref_denied`, `git_capability_denied` |
+| 409 | `identity_binding_conflict`, `broker_account_username_conflict`, `identity_version_conflict`, `resource_in_use`, `local_password_not_enabled`, `local_password_already_enabled`, `version_conflict`, `mutation_verification_failed`, `broker_token_state_conflict`, `oidc_login_method_conflict`, `external_group_binding_conflict`, `verification_mismatch`, `reload_in_progress` |
 | 405 | `gateway_method_denied` |
 | 408 | `operation_cancelled` |
 | 413 | `body_size_denied`, `attachment_size_denied`, `attachment_integrity_mismatch`, `gateway_request_cap_exceeded`, `git_prefix_cap_exceeded` |
@@ -3323,7 +3378,7 @@ reason code in the sanitized portal error URL.
 | 500 | `operation_failed`, `broker_provider_contract_failed` |
 | 502 | `upstream_connection_failed`, `upstream_protocol_failed`, `gateway_response_cap_exceeded`, `gateway_upstream_denied` |
 | 504 | `upstream_timeout`, `operation_timeout` |
-| 503 | `identity_unavailable`, `cursor_signing_unavailable`, `oidc_unavailable`, `oidc_client_rejected`, `credential_encrypt_failed`, `credential_decrypt_failed`, `managed_store_unavailable`, `managed_store_migration_required`, `encryption_key_missing`, `encryption_key_invalid`, `audit_unavailable`, `audit_query_timeout`, `config_read_failed`, `config_admission_failed` |
+| 503 | `identity_unavailable`, `cursor_signing_unavailable`, `oidc_unavailable`, `oidc_client_rejected`, `credential_encrypt_failed`, `credential_decrypt_failed`, `managed_store_unavailable`, `broker_access_key_answer_too_large`, `managed_store_migration_required`, `encryption_key_missing`, `encryption_key_invalid`, `audit_unavailable`, `audit_query_timeout`, `config_read_failed`, `config_admission_failed` |
 
 `broker_provider_contract_failed` (`decision = error`) means a provider
 reported an outcome its contract does not allow: a standard reason, decision,
@@ -4157,6 +4212,592 @@ refresh-token revocation follows the same rule. `version` advances only for
 Enabled and Read-only changes, never for connecting or disconnecting. The
 personal removal's audit target carries `after: null` when the access was
 deleted and its kept settings otherwise.
+
+## Access key resolution
+
+An [access key](configuration.md#access-key-types) is presented to a resolving
+service, never to the Broker. That service asks the Broker whose key it is:
+
+```
+POST /v1/access-keys/resolve
+X-Agent-Access-Caller-Authorization: Bearer <caller secret>
+Content-Type: application/json
+
+{"key":"aab_ak_..."}
+```
+
+The caller is a [trusted caller](trusted-callers.md#access-key-resolution) with
+`allow_access_key_resolution = true`, presenting its `caller_authorization`
+credential. The request names nobody else: every header under which the
+configuration accepts or asserts an identity is refused with 400. Those are
+the header of each configured [identity source](configuration.md#identity),
+`Authorization`, `Cookie`, `X-AW-Identity-Token-SHA256`,
+`X-Agent-Access-User` and `X-Agent-Access-Context`. The body is at most 4,096
+bytes, a JSON object with exactly the member `key`, given once, whose value
+is the string `aab_ak_` followed by 43 characters of `[A-Za-z0-9_-]`. Any
+other JSON value, an array included, is refused. `X-Agent-Access-Request-Id`
+is optional; when present it is one valid request ID. The route is not in the
+runtime catalog, OpenAPI projection or generic send schema.
+
+An active key answers 200 with its facts, at most 16 KiB:
+
+```json
+{"active":true,
+ "subject":{"kind":"user","id":"alice"},
+ "usernameIncarnation":"7b0c2f...",
+ "groups":["platform"],
+ "types":[{"name":"inference","validUntil":"2026-11-27T02:00:00Z"}],
+ "origin":"portal",
+ "application":null,
+ "keyId":"ak_...",
+ "expiresAt":"2026-11-27T02:00:00Z"}
+```
+
+| Member | Meaning |
+| --- | --- |
+| `subject.kind`, `subject.id` | `user` with the person's username, or `service_account` with the account's principal ID. |
+| `usernameIncarnation` | 1 to 64 characters of letters, digits, `_` and `-`; a new value whenever the subject's name is allocated again. |
+| `groups` | At most 64 groups the subject holds by active local membership. Membership that comes only from Microsoft group evidence is not returned. |
+| `types` | 1 to 16 entries the key may currently use, each exactly `{name, validUntil}`. `name` is the access key type ID, distinct within the list. `validUntil` is the earlier of the key's expiry and its mint time plus the type's current maximum, as an RFC 3339 UTC string; it is null only when the key has no expiry and that maximum is unlimited. A finite `expiresAt` requires every `validUntil` to be finite and no later. The answer carries no contexts: the resolving service decides where a type works. |
+| `origin` | `portal` or `administrator`: how the key was issued. |
+| `application` | Always `null`. |
+| `keyId` | `ak_` followed by 1 to 60 letters, digits, `_` or `-`; newly issued IDs use 32 hexadecimal characters. |
+| `expiresAt` | Always present: an RFC 3339 UTC string, or null when the key has no expiry. |
+
+A key with `expiresAt: null` can still have a finite `validUntil` for a type,
+for example after that type's configuration removes its `never` option.
+Both members are present even when their value is null.
+
+A well-formed key that is not stored answers exactly `200 {"active":false}`.
+The core resolver uses that same bare form for malformed values; this HTTP
+endpoint rejects malformed key strings with 400 before resolution, as it does
+the other malformed requests described above.
+
+A stored key that is not active answers 200 with exactly these members:
+
+```json
+{"active":false,
+ "keyId":"ak_0123456789abcdef0123456789abcdef",
+ "owner":{"kind":"user","id":"alice"},
+ "reason":"revoked"}
+```
+
+`keyId` has the same form as in an active answer. `owner` is the owner's
+**current usable** username (`kind: "user"`) or service-account ID
+(`kind: "service_account"`), or JSON null if the owner has no usable name.
+A missing, reserved or unconfirmed username yields null. A renamed owner is
+reported under the new name, not the name held when the key was issued. A
+usable name is still reported when the key is revoked or expired, the account
+is disabled, or identity access is paused or missing.
+
+`reason` is one of:
+
+| Reason | Meaning |
+| --- | --- |
+| `revoked` | The key was revoked. |
+| `expired` | The key has a finite expiry, and it has passed. |
+| `principal_disabled` | The owner is not an enabled account. |
+| `identity_access_paused` | The person's identity access is paused. |
+| `identity_access_missing` | The person's identity-access record is missing. |
+| `origin_unsupported` | The key has an origin this build does not resolve. |
+| `no_account_username` | The owner has no username. |
+| `account_username_awaiting_confirmation` | The username needs administrator confirmation. |
+| `account_username_reserved` | The current configuration reserves the username. |
+| `username_incarnation_changed` | The name was changed or allocated again after the key was issued. |
+| `group_limit_exceeded` | The owner holds more than 64 active local groups. |
+| `no_access_key_type` | No carried type remains configured, within its lifetime and allowed by the owner's [access key types](roles.md#access-key-types). |
+
+These informational members identify the inactive key for the trusted resolving
+service's logs. They grant no authority. Unknown and malformed values never
+include a key ID, owner or reason in their core inactive form.
+
+Resolution identifies a key; it decides nothing about a request. The route
+writes no audit records for any outcome, including inactive answers, caller
+and input refusals, limits and failed lookups. An unavailable audit store does
+not change an answer. The resolving service logs every decision and refusal
+itself. Ordinary operational logging remains; an active answer records the
+key's last use at most once every five minutes. Issue, revoke, settings and
+username changes retain their existing audits.
+
+| Status | Reason codes | When |
+| --- | --- | --- |
+| 400 | `body_malformed`, `input_invalid`, `request_id_invalid`, `identity_assertion_invalid` | A body that is not the object above, larger than 4,096 bytes or not received in time; a value that is not an access key; a refused header; a request ID that is not one valid value |
+| 401 | `caller_authentication_required`, `caller_authentication_invalid` | No caller credential, or one that is not a configured `caller_authorization` credential |
+| 403 | `broker_caller_access_key_resolution_denied` | The caller lacks `allow_access_key_resolution` |
+| 429 | `concurrency_limited`, `rate_limited` | The route's pool is full or the caller holds its share of it, or the rate that counts this request is spent |
+| 503 | `managed_store_unavailable`, `encryption_key_missing`, `broker_access_key_answer_too_large` | The Broker cannot answer |
+
+Errors use the Broker response envelope with `service: "broker"` and
+`action: "access_keys.resolve"`, `caller.authenticate` for a refused caller,
+or `request.admit` for a 429.
+A caller treats every answer other than 200 as "unavailable", never as
+inactive. Every response carries `Cache-Control: no-store`.
+
+Admission is the route's own, for every request to it. The caller's
+credential is checked before any of the body is read. No request to the
+route, refused or not, spends the per-source or per-principal
+authentication budgets, takes shared, anonymous-body or per-principal
+concurrency, or waits for a Microsoft membership renewal. Only `POST` is a
+resolution: any other method on the path answers a bare 405 with
+`Allow: POST` before anything is checked, taken or recorded, whatever the
+request carries.
+
+Every request runs in a pool of
+`limits.max_concurrent_access_key_resolutions`, taken as soon as the
+credential has been checked and before anything is read or judged. The
+lookup of a request whose client has gone keeps its slot until it returns.
+The body must arrive within the smaller of `limits.request_body_timeout_ms`
+and 5 seconds of the start of its read.
+
+**No caller holds the whole pool.** One caller entry holds at most
+`limits.max_concurrent_access_key_resolutions_per_caller` of the pool's
+slots at once, from the credential check until its request, or the lookup
+of a request that has gone, has finished. A peer address that presents no
+configured caller's credential has the same share. A request beyond its
+share answers 429 `concurrency_limited` at once, its body unread. A caller
+that stalls its request bodies therefore keeps its share for the body
+deadline and no more, and the rest of the pool serves the other callers.
+
+**A lookup for a stored key is bounded by the pool alone.** Whatever the
+key's state (active, revoked, expired, an owner that is disabled or has no
+usable name), no rate ever refuses it, so a resolving service's rechecks of
+the keys it has admitted cannot fail on rate, in any window and however many
+services share one caller entry.
+
+**The rate counts what the Broker cannot tie to a stored key.** Each caller
+entry has `limits.access_key_resolutions_per_caller_per_minute` such requests
+a minute, in a fixed window of this route:
+
+- a well-formed key that no store holds;
+- a malformed request: a refused header, an invalid request ID, a body that
+  is not the object above, too large or late, or a value that is not an
+  access key;
+- a request whose client goes away while its body is being read: it is
+  counted as a malformed request, though nobody is answered and nothing is
+  audited, so slots cannot be held with bodies that are never sent at no
+  cost in rate;
+- a lookup the store could not complete, for which no key can be told from
+  another.
+
+Within the rate each of these is answered as the table says. Beyond the
+rate the answer is 429 `rate_limited`. Neither outcome writes an audit record.
+A key no store
+holds costs the store one keyed hash and one indexed read whether or not it
+is refused, and never a write; the count is made by the lookup itself, so a
+client that goes away is still counted.
+
+**A refused caller has a small bound of its own.** A request with no
+configured caller's credential is counted against its peer address, and a
+caller that lacks only the capability against its caller entry, in windows
+of this route at `limits.auth_requests_per_source_per_minute` a minute, the
+number an unauthenticated source has elsewhere, without spending that
+budget. Within it the refusal is 401 or 403; beyond it the answer is 429.
+
+A limit refusal is logged as `request_limited`; other failures are logged as
+`access_key_resolution_failed` with request IDs, action, reason code and HTTP
+status, without the presented key. Broker failures log at ERROR and ordinary
+refusals at INFO. A request the pool or a share turns away
+is not read or judged and counts against no rate. No outcome writes an audit
+record.
+
+The trusted caller can distinguish a stored inactive key from an unknown key
+by the answer's informational members. If its rate is spent, a stored key is
+still answered and an unknown key is refused with 429. The route resolves a
+presented 256-bit key value; it provides no key-listing operation.
+
+An answer never exceeds 16 KiB and no part of a larger one is given. The
+largest answer the [limits](configuration.md#access-key-types) allow is
+10,755 bytes, so 503 `broker_access_key_answer_too_large` is not expected in
+operation.
+
+## Usernames and access keys
+
+A person is known at a resolving service by a [username](configuration.md#usernames)
+stored on their Broker account, and an
+[access key](configuration.md#access-key-types) says at that service who its holder
+is and what it may be used for. These routes administer names, issue and
+revoke access keys and list the configured access key types; who may hold each
+access key type is set with the [access key types](roles.md#access-key-types)
+of accounts and groups. They use the
+management envelope with `Cache-Control: no-store`, and the catalog and
+OpenAPI projection list them with their request and result schemas. A
+successful read writes no audit record. A change writes a preflight record
+before it runs and a success record whose target carries what its transaction
+did; the owner of the change finishes both when the client disconnects, and a
+change that began under a configuration a reload has since replaced answers
+409 `version_conflict` and changes nothing. Cookie-authenticated writes need
+the CSRF header. Every body, and every entry of a list in a body, is a JSON
+object: an array of the same values in order answers 400 `input_invalid`. No
+route here makes the Broker accept an access key as a credential: the only
+route that takes one as input is [resolution](#access-key-resolution).
+
+### Usernames
+
+Administrators and auditors read; administrators change.
+
+| Method | Route | Operation | Body / result |
+| --- | --- | --- | --- |
+| GET | `/v1/admin/account-usernames` | `admin.account_usernames.list` | `{accountUsernames: [...]}`: every person and service account |
+| GET | `/v1/admin/principals/{principal}/account-username` | `admin.principals.account_username.inspect` | The principal's username |
+| PUT | `/v1/admin/principals/{principal}/account-username` | `admin.principals.account_username.set` | `{"mode":"from_email"}` or `{"mode":"manual","accountUsername":"a.smith"}`; the username with `accountUsernameChange` |
+| POST | `/v1/admin/principals/{principal}/account-username/confirm` | `admin.principals.account_username.confirm` | `{"accountUsername":"alice"}`; the username |
+
+`GET /v1/admin/principals/{principal}` reports the same object as the
+detail's `accountUsername` member, null for a principal that is neither a person
+nor a service account. The detail's `accessKeyProblem` says why no access
+key of the account can resolve now when the cause is in the account, as the
+`status` every key of the account lists. It is one of the following, the
+first that a resolution finds, or null when nothing in the account stands
+in the way:
+
+| `accessKeyProblem` | The account |
+| --- | --- |
+| `principal_disabled` | is disabled |
+| `identity_access_paused` | is a person whose identity access is paused |
+| `identity_access_missing` | is a person with no identity access record, which only a damaged store has; no key of theirs resolves |
+| `no_account_username` | holds no username |
+| `account_username_awaiting_confirmation` | holds a username that awaits an administrator's confirmation |
+| `account_username_reserved` | holds a username, or for a service account an ID, that the operator reserved |
+| `group_limit_exceeded` | is in more than 64 local groups |
+
+While it is not null no key is issued for the account: a
+[mint](#access-key-administration) is refused with the same code. A principal's username is:
+
+```json
+{"principalId":"usr-1","holderKind":"user",
+ "displayName":"Alice Example","email":"alice@example.com",
+ "mode":"from_email","state":"usable","reason":null,
+ "name":{"principalId":"usr-1","accountUsername":"alice","holderKind":"user",
+         "incarnation":"7b0c2f...","origin":"derived","state":"usable",
+         "assignedAt":"2026-11-27T02:00:00Z","assignedBy":"admin",
+         "confirmedAt":null,"confirmedBy":null},
+ "conflict":null,
+ "fromEmail":{"accountUsername":"alice","reason":null,"conflict":null},
+ "liveKeys":3}
+```
+
+| Member | Meaning |
+| --- | --- |
+| `holderKind` | `user` or `service_account`. A service account's name is its principal ID; its `mode` is null and no route here changes it. |
+| `mode` | How a person's name is decided. `from_email`, the default: the lower-cased local part of the profile email, while the email's domain is [listed](configuration.md#usernames); the name follows the email. `manual`: an administrator sets it, and it stays until an administrator changes it. |
+| `state` | `usable`; `awaiting_confirmation`, a held name on the operator's list that no administrator has confirmed; `reserved`, a held name the operator reserved; `conflict`, no name because another principal holds the one the email derives; or `none`. Only a usable name mints or resolves access keys. |
+| `reason` | Why no name is held, null while one is: `no_email`, `email_unusable`, `domain_not_listed`, `name_invalid`, `name_reserved`, `name_taken` (the `conflict` state), `not_set` (manual mode with no value), `not_yet_assigned` (the email derives a free name, allocated at the person's next sign-in or the next startup or reload) or `id_unusable` (a service account whose principal ID is not a valid name). |
+| `name` | The allocation the principal holds, or null. `origin` says where it came from: `derived` from the email, `administrator` when set by hand, `service_account`. `incarnation` is new for every allocation. |
+| `conflict` | In the `conflict` state: `{accountUsername, heldBy}`, the name the email derives and the principal that holds it. Null otherwise. |
+| `fromEmail` | What `from_email` gives a person for the email saved on the account now, whatever their mode: `{accountUsername, reason, conflict}`. `accountUsername` is the name, which a person in `from_email` mode holds or is about to be given and a person in `manual` mode would hold on switching; or null with `reason`: `no_email`, `email_unusable`, `domain_not_listed`, `name_invalid`, `name_reserved` or `name_taken`, the last with `conflict` `{accountUsername, heldBy}`. Null for a service account. Only the saved email is evaluated: no route previews another. |
+| `liveKeys` | The account's unrevoked access keys minted under the name held, with a future expiry or no expiry: the keys that stop resolving when the name changes or is released, which a change then reports as `endedKeys`. |
+
+The name is stored, and the Broker keeps it in step itself, in the audited
+transaction that changes an input:
+
+- **Account creation** names a person whose email derives a free name.
+- **A change of the profile email**
+  (`PATCH /v1/admin/principals/{principal}`) renames a person in
+  `from_email` mode: the old name is released and the name the new email
+  derives is allocated, or none when it derives none. An email that derives
+  the name already held changes nothing, and a person in `manual` mode
+  keeps their name. The response carries
+  [`accountUsernameChange`](#what-a-change-did) whenever the request changed
+  a person's email, also when the name stayed, and null otherwise. The
+  change's success audit record carries `accountUsername` when the name or
+  the mode was written.
+- **A change of mode** (`PUT .../account-username`). `{"mode":"from_email"}`
+  for a person in `manual` mode derives at once: the person holds what
+  their email derives, or nothing. For a person already in `from_email`
+  mode it takes no name away, because neither the email nor the mode
+  changes: a name stays even when the email would no longer derive it, and
+  only a missing name is filled in. `{"mode":"manual"}` keeps the name held
+  now as the one set by hand; with `"accountUsername":"a.smith"` the person holds
+  that name, and with `"accountUsername":null` none. `accountUsername` is accepted with
+  `manual` only, and `mode` is one of the two strings.
+- **A sign-in** names a person in `from_email` mode who holds no name; the
+  sign-in's audit record carries `derivedAccountUsername`.
+- **Startup and every reload** fill in the names of people in `from_email`
+  mode who hold none: the accounts that existed when the feature was first
+  configured, and those whose domain a reload added. The fill runs beside
+  serving, in batches that each examine at most 200 accounts in one
+  transaction; a later reload stops it and starts its own, and a change
+  to an imported service made meanwhile does not interrupt it. Each batch that
+  names somebody writes one `account_usernames.assigned` audit record of the
+  system's, with `providerAudit.accountUsernames`
+  `{trigger, examined, assigned: [{principal, derivedAccountUsername}]}`. A fill
+  that fails is recorded with decision `error` and
+  `{trigger, reason: "fill_failed"}` and tried again at the next reload or
+  startup. The fill only fills in missing names: removing a domain from the
+  list takes no name away.
+
+A name that stays the same keeps its allocation; any other change is a new
+incarnation, or none, under which the person's earlier access keys no
+longer resolve (`endedKeys` counts those that were live). The first holder
+keeps a name: one another principal holds is never moved, a later account
+whose email derives it gets none and shows the `conflict`, and an
+administrator who sets it by hand is refused until it is changed at its
+holder. Email is never used to find or merge accounts.
+
+#### What a change did
+
+The two requests that can change or release a person's name answer with the
+same member, `accountUsernameChange`: `PUT .../account-username`, beside the
+members of the username, and `PATCH /v1/admin/principals/{principal}` when
+it changed a person's email.
+
+```json
+{"previousMode":"from_email","mode":"from_email",
+ "before":{"accountUsername":"alice","incarnation":"7b0c2f...", "...":"..."},
+ "after":{"accountUsername":"alice.example","incarnation":"91d4e0...", "...":"..."},
+ "renamed":true,"endedKeys":3,"reason":null,"conflict":null}
+```
+
+| Member | Meaning |
+| --- | --- |
+| `previousMode`, `mode` | How the name was decided before the request and is decided after it. |
+| `before`, `after` | The allocation held before and after, each the `name` object of a username or null. |
+| `renamed` | True when the name held is another allocation or none: another name, the same name allocated again, or no name. False when the name and its incarnation stayed, as when only the mode changed, an email derives the same name, or a person in `manual` mode had their email changed. |
+| `endedKeys` | The unrevoked access keys of the previous name with a future expiry or no expiry, which no longer resolve: what `liveKeys` counted before the request. Zero unless `renamed`. |
+| `reason`, `conflict` | Why the person holds no name after the request, as in the username; null while they hold one. |
+
+`confirm` records that the account is the person already known by the name
+it holds, which matters only for a name on the operator's
+[`existing_usernames`](configuration.md#usernames) list. It names the
+name, so that it cannot confirm one allocated since the administrator
+looked, and it keeps the incarnation.
+
+| Status | Reason code | `details.refusal` |
+| --- | --- | --- |
+| 400 | `input_invalid` | `name_invalid`: not 1 to 256 letters, digits and `._@+-`, or `anonymous`. Also a malformed body, without `details`. |
+| 403 | `broker_account_username_denied` | `not_human`: the principal is not a person. `name_reserved`: the operator reserved the name. `confirmation_not_required`: the name is not on the operator's list. |
+| 404 | `broker_account_username_not_found` | `no_name`: the principal holds no name to confirm. |
+| 404 | `principal_not_found` | Unknown principal. |
+| 409 | `broker_account_username_conflict` | `name_taken`: another person holds the name or it is a service account's ID. `name_changed`: the principal no longer holds the name the confirmation named. |
+
+The success audit target of a set or a confirmation is
+`{principal, previousMode, mode, before, after, endedKeys}`, with each of
+`before` and `after` either null or
+`{accountUsername, usernameIncarnation, origin, state}`.
+
+### A person's own access keys
+
+A signed-in browser session only: a bearer token, the person's own
+`user_manage` token included, answers 403 `broker_access_key_denied` with
+`details.refusal: "session_required"`. A mint checks again, in its own
+transaction, that the session is signed in now: not revoked, paused or
+expired, its sign-in method still active, and no password change pending. The routes are **not** gated by
+self-service for the account or by any service grant; what a person may
+create is decided by their
+[access key types](roles.md#access-key-types), each access key type's
+`selfService` and their username. The catalog lists them with
+`account_management` access and `browserSessionOnly: true` while an access
+key type is configured, and offers them to a browser session only; the
+OpenAPI projection names the browser session as their security.
+
+| Method | Route | Operation | Body / result |
+| --- | --- | --- | --- |
+| GET | `/v1/access-keys/options` | `access_keys.options` | `{accountUsername, refusal, accessKeyTypes, hasSelfServiceType, hasKeys, problem}` |
+| GET | `/v1/access-keys` | `access_keys.list` | `{keys: [...]}` |
+| POST | `/v1/access-keys` | `access_keys.issue` | `{"name":"laptop","accessKeyTypes":["inference"],"lifetime":"1d"}`; `{key, record}` |
+| DELETE | `/v1/access-keys/{key_id}` | `access_keys.revoke` | `{revoked: true, newlyRevoked, record}` |
+
+`options` is what the person may hold and create now: `accountUsername` is the
+person's own name and where it stands, `{name, state, mode, reason,
+fromEmail}` with the members of [a principal's username](#usernames), so
+that the reason can be shown where a key would be created. `fromEmail`
+is `{accountUsername, reason}`: what their saved email gives, or why it
+gives none. Who holds a name the person lacks is not shown. `refusal` is
+null, or why they can create no
+key of any type: the `details.refusal` a mint of theirs would answer
+whatever it asked for, because their account is in a state in which no key
+of it resolves and none is issued (`principal_disabled`,
+`identity_access_paused`, `identity_access_missing`, `no_account_username`,
+`account_username_awaiting_confirmation`, `account_username_reserved` or
+`group_limit_exceeded`), or `owner_kind` for an account that is not a
+person's. `accessKeyTypes` lists the
+types their access key type setting allows, in ID order, each
+`{id, displayName, description, lifetimeOptions, defaultLifetime, selfService}`,
+where `description` is the configured plain text or null. `lifetimeOptions`
+contains the configured duration strings or `"never"`, in configured order;
+`defaultLifetime` is the configured preselection. These choices and defaults
+are returned even for a type whose `selfService` is false.
+The person may create a key only of the types whose `selfService` is true;
+the others are theirs to hold, and only an administrator
+[issues them](#access-key-administration). Why a type is allowed, and the
+groups that allow it, are not shown here.
+
+Three members say whether there is anything to show the person.
+`hasSelfServiceType` is true when at least one listed type is one they may
+create. `hasKeys` is true when they own any access key, whoever issued
+it and whatever its state. `problem` is null, or why no access key of
+theirs can work now when only an administrator can remove the cause. It
+carries exactly these codes: `no_account_username`,
+`account_username_awaiting_confirmation` or `account_username_reserved`,
+which an administrator sets or confirms, or `group_limit_exceeded`, more
+than 64 local groups. The value is the `status`
+every key of theirs lists. It is null for a person who can create no key
+and owns none (`hasSelfServiceType` and `hasKeys` both false), whatever
+their name and groups: nothing of theirs is stopped. It is also null when
+`refusal` is `principal_disabled`, `identity_access_paused` or
+`identity_access_missing`, which a
+resolution finds before a name or a group count, so `problem`, or `refusal`
+when `problem` is null, is always the first reason a resolution of their
+keys would find. Whenever `problem` is not null, `refusal` carries the same
+code: a key that could not work is not issued.
+
+A key carries 1 to 16 distinct access key type IDs, a name of 1 to 128 bytes,
+and a required `lifetime` string. The lifetime is a positive duration using
+`s`, `m`, `h` or `d`, at most `3650d`, or `"never"`. It must match an option
+in every chosen type's `lifetimeOptions` by effective duration (`"24h"`
+matches `"1d"`); `"never"` matches only `"never"`. The server does not apply a
+default when `lifetime` is absent. Invalid duration syntax, zero and a duration
+over `3650d` are malformed input: request-body validation returns 400
+`input_invalid`, with a message that does not include the supplied value,
+just as for other malformed members. After request validation, the mint
+checks account standing, then the requested types, then whether the
+well-formed lifetime is offered. Nothing is trimmed: one access key type
+that the person may not hold or that is not self-service refuses the request.
+A well-formed lifetime not offered by every chosen type is refused as
+`lifetime_not_offered`, with `details.accessKeyType` naming the first such
+type in request order.
+
+The portal offers only the lifetimes common to every chosen type, in the
+first chosen type's order. It preserves a manual lifetime choice while every
+selected type still offers it. Otherwise, it preselects the shortest
+chosen-type default that all chosen types offer, or the shortest common
+option when none of those defaults is common. For this preselection,
+`"never"` is longer than any finite duration; the displayed options keep their configured order.
+No common option means issuance is unavailable.
+
+The response's `key` is the access key, `aab_ak_` followed by 43 characters, returned
+once; only its keyed hash is stored. `record` is
+`{keyId, principalId, name, origin, accessKeyTypes, usernameIncarnation,
+createdAt, createdBy, expiresAt, revokedAt, revokedBy, lastUsedAt}`.
+`expiresAt` is always present: an RFC 3339 UTC string for mint time plus the
+chosen duration, or null for `"never"`; it never changes after minting. `origin`
+is `portal` for a key the person created and `administrator` for one an
+administrator issued for them, with that administrator in `createdBy`; both
+are the person's own to list and revoke. The
+mint and its success audit record belong to one owner: a record that cannot
+be written answers 503 `audit_unavailable` without the secret and leaves the
+committed key, which the person can revoke; the request is not retried.
+
+A listed key is its record with `status`, `usableAccessKeyTypes`,
+`accessKeyTypeStates` and `access`. `status`
+is `active`, or why the key does not resolve now: `revoked`, `expired`,
+`principal_disabled`, `identity_access_paused`, `identity_access_missing`,
+`no_account_username`,
+`account_username_awaiting_confirmation`, `account_username_reserved`,
+`username_incarnation_changed`, `group_limit_exceeded` or `no_access_key_type`: the
+reason a [resolution](#access-key-resolution) would record. A key whose
+types were all removed, outlived or withdrawn from its owner's access is
+`no_access_key_type`, and is active again when one is restored.
+`usableAccessKeyTypes` lists, for an active key, each access key type it may use
+now as `{name, validUntil}`, with the same nullable `validUntil` rules as a
+[resolution answer](#access-key-resolution). Listing records no use. A revoked
+key is listed only with `includeRevoked=true`, and an expired key that
+was never revoked only with `includeExpired=true`.
+
+`accessKeyTypeStates` lists every type the key carries, in the key's order,
+as `{id, displayName, held}`. `displayName` is the type's configured name,
+or null when the configuration no longer defines the type. `held` is the
+decision a resolution makes for each type: the type is configured, the
+owner's access key types allow it, and its current maximum has not ended it
+before the key's own expiry, if any. A type whose options include `"never"`
+has an unlimited maximum; otherwise its maximum is the longest option,
+counted from the key's mint time. It is false for a type that was
+removed, withdrawn from the owner or cut shorter than the key's age, and it
+says nothing about the key itself: the types of a key that expired or was
+revoked are still held, and `status` says why the key does not resolve.
+`access` sums the key up: `full` when it is active with every type it
+carries, `partial` when it is active with only some of them, and `none`
+when it is not active.
+
+Revocation takes a key ID, never the secret. A key ID is `ak_` followed by
+1 to 60 characters of `[A-Za-z0-9_-]`; the part after `ak_` must not start
+with `aab_`. An invalid key ID returns 404 without echoing the supplied
+target or recording it in audit. Access key and username management, and
+the principal/group create, inspect and update routes carrying these settings,
+reject identifiers beginning with the Broker secret prefix `aab_` before
+constructing audit targets. Access-key issue names must not start with that
+prefix either. Manual and confirmation usernames in that namespace are
+refused with `input_invalid` and `details.refusal: name_invalid`.
+
+Revocation is final. Revoking a revoked key changes nothing and answers
+`newlyRevoked: false`. A key that is unknown or another principal's answers
+404 `broker_access_key_not_found`.
+
+No key is issued that could not work. Before any requested type is judged,
+a mint requires an account whose keys resolve: enabled, for a person with
+identity access that is neither paused nor missing, with a usable username
+and in at most 64 local groups. These are the states a
+[resolution](#access-key-resolution) answers inactive for whatever the key,
+found in the same order and refused with the same codes that `problem`,
+`accessKeyProblem` and a key's `status` report. Because they come first, a
+person in such a state learns nothing from the refusal about a type they
+may not hold. Keys issued earlier are not touched: they list the reason
+and resolve again once it is gone.
+
+A refused mint answers 403 `broker_access_key_denied` with
+`details.refusal`, and `details.accessKeyType` where one applies:
+
+| `details.refusal` | Meaning |
+| --- | --- |
+| `session_required` | The request did not come with a live browser session of the person. |
+| `principal_disabled` | The owner's account is disabled. |
+| `identity_access_paused`, `identity_access_missing` | The owner is a person whose identity access is paused, or has no record. |
+| `no_account_username`, `account_username_awaiting_confirmation`, `account_username_reserved` | The owner has no usable username; an administrator sets or confirms one. |
+| `group_limit_exceeded` | The owner is in more than 64 local groups, so no key of theirs resolves; an administrator reduces the memberships. |
+| `owner_kind` | The owner is neither a person nor a service account, or a person's own route was used for another kind of account. |
+| `access_key_type_not_eligible` | The access key type in `details.accessKeyType` is not one the owner may hold. On a person's own request this is also the answer for a type that is not configured: a type they may not hold cannot be told from one that does not exist. |
+| `access_key_type_not_self_service` | The person may hold the type in `details.accessKeyType`, and people do not create it themselves; their options list it with `selfService: false`. |
+| `access_key_type_unknown` | An administrator's request named a type that is not configured. |
+| `lifetime_not_offered` | The well-formed lifetime is not an option of every chosen type. `details.accessKeyType` names the first chosen type, in request order, that does not offer it. |
+
+The success audit target of a mint is `{keyId, principal, origin,
+accessKeyTypes, usernameIncarnation, expiresAt, name}`; of a revocation the same
+without `name`, with `newlyRevoked`. The key itself is in no record.
+
+### Access key administration
+
+Administrators and auditors read; administrators change.
+
+| Method | Route | Operation | Body / result |
+| --- | --- | --- | --- |
+| GET | `/v1/admin/access-key-types` | `admin.access_key_types.list` | `{accessKeyTypes: [...]}` |
+| GET | `/v1/admin/access-keys` | `admin.access_keys.list` | `{keys: [...]}` |
+| POST | `/v1/admin/principals/{principal}/access-keys` | `admin.principals.access_keys.issue` | The body of a person's mint; `{key, record}` |
+| DELETE | `/v1/admin/access-keys/{key_id}` | `admin.access_keys.revoke` | `{revoked: true, newlyRevoked, record}` |
+
+An access key type is `{id, displayName, description, lifetimeOptions,
+defaultLifetime, selfService}` as the configuration in force defines it.
+The lifetime options retain their configured strings and order, and the
+default is the configured preselection. The list is read-only: access key
+types are defined in the
+[configuration](configuration.md#access-key-types), and who may hold each is the
+[access key type setting](roles.md#access-key-types) of accounts and groups.
+
+An administrator issues a key for a person or for a service account, under
+the administrator's own authority: no session of the owner is involved, and
+`selfService` does not apply, so a type with `self_service = false` is one
+that only an administrator hands out, to people as well as to service
+accounts. The key belongs to the owner. It resolves as that person or
+service account and stops working by the same rules as any other key of
+theirs; a person finds it in their own list, with `origin: "administrator"`
+and the administrator in `createdBy`, and can revoke it. The audit record's
+actor is the administrator and its target the owner.
+
+The owner's account must be one whose keys resolve, as for a person's own
+mint and with the same refusals (`principal_disabled`,
+`identity_access_paused`, `identity_access_missing`, `no_account_username`,
+`account_username_awaiting_confirmation`, `account_username_reserved`,
+`group_limit_exceeded`): the code is the one principal detail reports as
+`accessKeyProblem`. The owner's own access key types must allow every
+access key type (`access_key_type_not_eligible` otherwise), and the required
+lifetime must be offered by every chosen type, exactly as for a person's
+mint. Nothing is trimmed, and the refusals are those of a person's mint
+apart from `session_required` and `access_key_type_not_self_service`. A `system`
+principal owns no access key: the route answers `owner_kind`.
+
+The list takes `principal`, `includeRevoked` and `includeExpired` and shows
+every account's keys as a person's list shows theirs. An administrator
+revokes any key.
 
 ## Administrator identity tokens
 
